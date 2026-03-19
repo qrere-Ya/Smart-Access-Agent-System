@@ -277,7 +277,7 @@ python main_system.py
 ---
 
 ## 🔗 參考資料、網頁 (References)
-* **主要參考** [Face Recognition in Python](https://github.com/xxrjun/face-recognition?tab=readme-ov-file#face-recognition-in-python)
+* **主要參考：** [Face Recognition in Python](https://github.com/xxrjun/face-recognition?tab=readme-ov-file#face-recognition-in-python)
 * **RetinaFace：** [Single-stage Dense Face Localisation in the Wild](https://arxiv.org/pdf/1905.00641.pdf)
 * **ArcFace：** [InsightFace ONNX Models](https://github.com/onnx/models/tree/master/vision/body_analysis/arcface)
 * **YOLOv8：** [Ultralytics Official Repository](https://github.com/ultralytics/ultralytics)
