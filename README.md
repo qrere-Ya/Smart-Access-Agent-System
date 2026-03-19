@@ -100,7 +100,7 @@ My_Smart_Access_System/
 python -m venv venv
 
 # Windows 啟動虛擬環境：
-source venv/Scripts/activate
+venv/Scripts/activate
 
 # Mac / Linux 啟動虛擬環境：
 source venv/bin/activate
@@ -128,12 +128,6 @@ pip install retinaface --no-deps
 
 驗證 GPU 是否可被偵測到：
 
-```python
-import onnxruntime as ort
-print(ort.get_available_providers())
-# 應看到：['CUDAExecutionProvider', 'CPUExecutionProvider']
-```
-
 ---
 
 #### 無獨立顯卡（純 CPU 模式）
@@ -148,14 +142,6 @@ pip install opencv-python numpy scikit-learn scikit-image Pillow ultralytics
 # 安裝 RetinaFace (Bypass 限制)
 pip install tensorflow
 pip install retinaface --no-deps
-```
-
-驗證 CPU 模式：
-
-```python
-import onnxruntime as ort
-print(ort.get_available_providers())
-# 應看到：['CPUExecutionProvider']
 ```
 
 ---
