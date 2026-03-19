@@ -7,7 +7,7 @@
 
 ## 目錄 (Table of Contents)
 
-- [核心功能 (Features)](#-核心功能-features)
+- [核心功能 (Features)](#核心功能)
 - [Tree Structure (專案目錄結構)](#-tree-structure-專案目錄結構)
 - [環境及模組 (Environment & Modules)](#-環境及模組-environment--modules)
 - [環境安裝指南 (Installation - CUDA/CPU)](#️-環境安裝指南-installation)
