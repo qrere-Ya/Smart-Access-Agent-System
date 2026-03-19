@@ -4,6 +4,5 @@ scikit-learn==1.4.1.post1
 scikit-image==0.22.0
 Pillow==10.2.0
 tensorflow==2.15.0
-retinaface==1.1.1
 onnxruntime-gpu==1.17.1
 ultralytics==8.1.24
