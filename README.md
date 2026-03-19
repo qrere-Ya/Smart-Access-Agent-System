@@ -113,11 +113,8 @@ source venv/bin/activate
 #### 具備 NVIDIA 顯卡（GPU 加速模式）
 
 1. **NVIDIA Driver：** 至官網安裝最新版顯示卡驅動。  
-   → https://www.nvidia.com/download/index.aspx
-2. **CUDA Toolkit 11.8：** 與 `onnxruntime-gpu` 最穩定的版本。  
-   → https://developer.nvidia.com/cuda-11-8-0-download-archive
+2. **CUDA Toolkit：** 與 `onnxruntime-gpu` 最穩定的版本。  
 3. **cuDNN：** 下載與 CUDA 版本對應的擴充包並覆蓋至 CUDA 目錄。  
-   → https://developer.nvidia.com/cudnn
 
 **安裝 Python 套件**
 
