@@ -267,6 +267,5 @@ python main_system.py
 * **ONNX Runtime：** [Official Documentation](https://onnxruntime.ai/)
 * **NVIDIA CUDA Toolkit：** https://developer.nvidia.com/cuda/toolkit
 * **cuDNN：** https://developer.nvidia.com/cudnn
-* **Python 3.10：** https://www.python.org/downloads/
 
 ---
