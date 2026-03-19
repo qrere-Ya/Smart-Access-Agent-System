@@ -265,7 +265,7 @@ python main_system.py
 * **ArcFace：** [InsightFace ONNX Models](https://github.com/onnx/models/tree/master/vision/body_analysis/arcface)
 * **YOLOv8：** [Ultralytics Official Repository](https://github.com/ultralytics/ultralytics)
 * **ONNX Runtime：** [Official Documentation](https://onnxruntime.ai/)
-* **NVIDIA CUDA Toolkit 11.8：** https://developer.nvidia.com/cuda-11-8-0-download-archive
+* **NVIDIA CUDA Toolkit：** https://developer.nvidia.com/cuda/toolkit
 * **cuDNN：** https://developer.nvidia.com/cudnn
 * **Python 3.10：** https://www.python.org/downloads/
 
