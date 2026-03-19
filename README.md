@@ -9,9 +9,9 @@
 
 - [核心功能 (Features)](#核心功能)
 - [Tree Structure (專案目錄結構)](#-tree-structure-專案目錄結構)
-- [環境及模組 (Environment & Modules)](#-環境及模組-environment--modules)
-- [環境安裝指南 (Installation - CUDA/CPU)](#️-環境安裝指南-installation)
-- [下載辨識模型 (Download Models)](#-下載辨識模型-download-models)
+- [環境及模組 (Environment & Modules)](#環境及模組-environment--modules)
+- [環境安裝指南 (Installation - CUDA/CPU)](#️環境安裝指南-installation)
+- [下載辨識模型 (Download Models)](#下載辨識模型-download-models)
 - [流程與講解 (Process & Explanation)](#-流程與講解-process--explanation)
 - [系統操作說明與 DEMO (Usage & Demo)](#-系統操作說明與-demo-usage--demo)
 - [參考資料、網頁 (References)](#-參考資料網頁-references)
