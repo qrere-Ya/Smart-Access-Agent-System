@@ -90,8 +90,6 @@ My_Smart_Access_System/
 
 ## 環境安裝指南 (Installation)
 
-使用具備 NVIDIA 獨立顯示卡的電腦運行（以發揮最佳效能）。但若無顯卡，亦可使用 CPU 模式運行。
-
 ### 步驟 1：建立虛擬環境
 
 ```bash
@@ -123,8 +121,6 @@ pip install -r requirements.txt
 # 2. 解決 RetinaFace 對舊版 TensorFlow 的依賴衝突
 pip install retinaface --no-deps
 ```
-
-驗證 GPU 是否可被偵測到：
 
 ---
 
