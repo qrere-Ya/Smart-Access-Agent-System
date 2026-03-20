@@ -94,8 +94,6 @@ My_Smart_Access_System/
 
 ### 步驟 1：建立虛擬環境
 
-> 虛擬環境就像是給這個專案蓋一間獨立小房間，不會和電腦裡其他程式互相干擾。
-
 ```bash
 python -m venv venv
 
