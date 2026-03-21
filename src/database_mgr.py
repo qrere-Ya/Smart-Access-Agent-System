@@ -59,57 +59,79 @@ def log_attendance(name):
     
     # 取得現在的時間與日期
     now = datetime.datetime.now()
-    today_date = now.strftime("%Y-%m-%d") # 今天的日期
-    current_time = now.strftime("%H:%M:%S") # 現在的時間
+    today_date = now.strftime("%Y-%m-%d") 
+    current_time = now.strftime("%H:%M:%S") 
     full_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 抓出所有開頭是今天日期的 timestamp
-    cursor.execute("SELECT status FROM Attendance WHERE name=? AND timestamp LIKE ?", (name, f"{today_date}%"))
+    cursor.execute("SELECT id, status FROM Attendance WHERE name=? AND timestamp LIKE ? ORDER BY timestamp ASC", (name, f"{today_date}%"))
     records = cursor.fetchall()
 
-    if len(records) == 0: # 今天還沒有任何紀錄
+    # 狀態 0：今天第一次刷臉 (處理上班、遲到)
+    if len(records) == 0: 
         if current_time >= "07:40:00" and current_time <= "08:00:00":
             status = "上班"
-            # 寫入資料庫
             conn_db.execute("INSERT INTO Attendance (name, timestamp, status) VALUES (?, ?, ?)", (name, full_timestamp, status))
             conn_db.commit()
-            msg = f"In: {name} (Morning)" # 畫面顯示用：上班成功
+            msg = f"In: {name} (Morning)" 
         
-        elif current_time > "08:00:00" and current_time < "17:40:00":
+        elif current_time > "08:00:00" and current_time < "12:00:00":
+            # 延後遲到判斷的時間，中午前來都算遲到
             status = "遲到"
             conn_db.execute("INSERT INTO Attendance (name, timestamp, status) VALUES (?, ?, ?)", (name, full_timestamp, status))
             conn_db.commit()
-            msg = f"In: {name} (be late)"
+            msg = f"In: {name} (Be late)"
         
         else:
-            msg = "您的上班時間還未到..."
+            msg = "您的上班時間還未到或已過早上打卡時間..."
 
-    elif len(records) == 1: # 已經有打卡紀錄
-        if  current_time >= "17:40:00" and current_time <= "18:00:00":
-            status = "下班"
-            conn_db.execute("INSERT INTO Attendance (name, timestamp, status) VALUES (?, ?, ?)", (name, full_timestamp, status))
-            conn_db.commit()
-            msg = f"Out: {name} (Bye!)"
-        
-        elif current_time >= "12:00:00" and current_time <= "17:40:00":
+    # 狀態 1：今天第二次刷臉 (處理下班、早退，以及午休防誤觸)
+    elif len(records) == 1: 
+        # 防誤觸緩衝區：中午到下午四點半前經過鏡頭，不紀錄下班，只給提示
+        if current_time >= "12:00:00" and current_time < "16:30:00":
+            msg = f"Keep going: {name}!" 
+            return msg # 直接結束，不寫入資料庫
+            
+        elif current_time >= "16:30:00" and current_time < "17:40:00":
             status = "早退"
             conn_db.execute("INSERT INTO Attendance (name, timestamp, status) VALUES (?, ?, ?)", (name, full_timestamp, status))
             conn_db.commit()
             msg = f"Out: {name} (Leave early)"
-        
-        elif current_time >= "18:00:00":
-            status = "下班 (加班)"
+            
+        elif current_time >= "17:40:00" and current_time <= "18:00:00":
+            status = "下班"
             conn_db.execute("INSERT INTO Attendance (name, timestamp, status) VALUES (?, ?, ?)", (name, full_timestamp, status))
             conn_db.commit()
             msg = f"Out: {name} (Bye!)"
+            
+        elif current_time > "18:00:00":
+            status = "下班 (加班)"
+            conn_db.execute("INSERT INTO Attendance (name, timestamp, status) VALUES (?, ?, ?)", (name, full_timestamp, status))
+            conn_db.commit()
+            msg = f"Out: {name} (Overtime)"
 
         else:
             msg = f"Done: {name} (Morning)"
+
+    # 狀態 2：今天第三次(或以上)刷臉 (啟動更新機制！)
     else:
-        msg = f"Done: {name} (All Day)" # 不寫入資料庫，以上下班完成
+        # 取得上一筆(也就是下班那筆)的專屬 ID
+        last_record_id = records[-1][0] 
+        
+        if current_time >= "16:30:00" and current_time < "17:40:00":
+            status = "早退"
+        elif current_time >= "17:40:00" and current_time <= "18:00:00":
+            status = "下班"
+        elif current_time > "18:00:00":
+            status = "下班 (加班)"
+        else:
+            return f"Done: {name} (All Day)" # 如果不是上述時間，就維持完成狀態
+
+        conn_db.execute("UPDATE Attendance SET timestamp=?, status=? WHERE id=?", (full_timestamp, status, last_record_id))
+        conn_db.commit()
+        msg = f"Updated: {name} ({status})"
 
     conn_db.close()
-    print(f"系統日誌: {msg} - 時間 {full_timestamp}")
+    print(f"系統日誌: {msg} - 時間: {full_timestamp}")
 
     return msg
 
