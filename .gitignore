@@ -1,9 +1,0 @@
-database/*.db
-anomaly_logs/*.jpg
-models/*.onnx
-models/*.pt
-__pycache__/
-*.pyc
-venv/
-.env
-.gitignore
