@@ -58,9 +58,9 @@ def fetch_employee_names():
 
 def search_attendance():
     # 查詢選定員工的打卡紀錄
-    name = combo_name.get().strop()
+    name = combo_name.get().strip()
     if not name:
-        messagebox.showwarning("請選擇或輸入員工姓名！")
+        messagebox.showwarning("警告", "請選擇或輸入員工姓名！")
         return
     
     # 清空表格
@@ -75,7 +75,7 @@ def search_attendance():
         conn.close()
 
         if not records:
-            messagebox.showinfo(f"找不到 [{name}] 的紀錄")
+            messagebox.showinfo("提示", f"找不到 [{name}] 的紀錄。")
             return
         
         for rec in records:
@@ -85,20 +85,20 @@ def search_attendance():
             if "遲到" in status or "早退" in status:
                 tag = "warning"
             
-            tree.insert("", ttk.END, value=(rec[0], status), tags=(tag,))
+            tree.insert("", ttk.END, values=(rec[0], status), tags=(tag,))
     
     except Exception as e:
-        messagebox.showerror(f"讀取失敗: {e}")
+        messagebox.showerror("錯誤", f"讀取失敗: {e}")
 
 def show_latest_anomaly():
     # 在介面右側顯示最新的異常圖
     if not os.path.exists(ANOMALY_PATH):
-        messagebox.showinfo("目前沒有異常紀錄")
+        messagebox.showinfo("提示", "目前沒有異常紀錄")
         return
     # 抓取資料夾內所有 jpg 並按時間排序找最新的一張
     list_of_files = glob.glob(os.path.join(ANOMALY_PATH, '*.jpg'))
     if not list_of_files:
-        messagebox.showinfo("目前沒有任何尾隨異常紀錄")
+        messagebox.showinfo("安全", "目前沒有任何尾隨異常紀錄")
         return
     
     latest_file = max(list_of_files, key=os.path.getctime)
@@ -114,7 +114,7 @@ def show_latest_anomaly():
         lbl_image.image = photo # 必須保留參照，否則會被垃圾回收機制清除
         lbl_img_path.config(text=f"最新證據: {os.path.basename(latest_file)}")
     except Exception as e:
-        messagebox.showerror(f"無法載入圖片: {e}")
+        messagebox.showerror("錯誤", f"無法載入圖片: {e}")
 
 # ==========================================
 # UI 介面設計 
@@ -178,9 +178,9 @@ frame_right = ttk.Labelframe(frame_main, text="監控證據庫", padding=15)
 frame_right.pack(side=RIGHT, fill=BOTH, expand=True)
 
 btn_load_img = ttk.Button(frame_right, text="載入最新異常截圖", bootstyle=DANGER, command=show_latest_anomaly)
-btn_load_img.pack(fill=X, padx=(0, 10))
+btn_load_img.pack(fill=X, pady=(0, 10))
 
-lbl_img_path = ttk.Button(frame_right, text="尚未載入圖片", bootstyle=SECONDARY)
+lbl_img_path = ttk.Label(frame_right, text="尚未載入圖片", bootstyle=SECONDARY)
 lbl_img_path.pack(pady=5)
 
 # 放圖片的容器
