@@ -39,22 +39,22 @@
 
 ```bash
 My_Smart_Access_System/
-├── anomaly_logs/           # 存放防尾隨異常證據圖 (自動生成)
+├── anomaly_logs/          
 │   └── tailgate_YYYYMMDD_HHMMSS.jpg
-├── database/               # 存放 SQLite 打卡資料庫 (自動生成)
+├── database/            
 │   └── attendance.db
-├── models/                 # 存放 ArcFace 與 YOLO 模型檔案
+├── models/                
 │   ├── arcface_r100_v1.onnx
-│   └── yolov8s.pt          # 首次執行時自動下載
+│   └── yolov8s.pt         
 ├── src/
-│   ├── main_system.py      # 主程式 (UI 與多執行緒中樞)
-│   ├── vision_core.py      # 視覺核心 (RetinaFace + ArcFace)
-│   ├── database_mgr.py     # 記憶中樞 (SQLite 打卡邏輯)
-│   ├── security.py         # 安防核心 (YOLO 人數計算與證據合成)
-│   └── utils.py            # 工具箱 (Pillow 中文渲染)
-├── requirements.txt        # 環境套件清單
-├── .gitignore              # Git 忽略清單 (模型、資料庫等大型檔案)
-└── README.md               # 專案說明書
+│   ├── main_system.py      
+│   ├── vision_core.py      
+│   ├── database_mgr.py     
+│   ├── security.py        
+│   └── utils.py            
+├── requirements.txt      
+├── .gitignore             
+└── README.md               
 ```
 
 ---
