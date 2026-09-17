@@ -1,6 +1,11 @@
 faiss_storage/
 database/*.db
-anomaly_logs/*.jpg
+
+# 2026-09-17：anomaly_logs/ 含真實尾隨偵測畫面、data/ 是執行時放置的資料
+# （法規 PDF、考勤示範資料），兩個都整個資料夾不進版控
+anomaly_logs/
+data/
+
 models/**/*.onnx
 models/**/*.pt
 models/**/*.tar.bz2
