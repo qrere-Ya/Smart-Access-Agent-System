@@ -1,0 +1,32 @@
+# 自訓練活體偵測模型（research/antispoof_training/）專用依賴
+# 特意跟 repo 根目錄的 requirements.txt（正式系統依賴）分開，避免正式系統背負
+# PyTorch 這種只有訓練時才需要的重量套件。也建議另外開一個獨立 venv（例如
+# venv_antispoof）裝，避免跟正式系統 venv 裡的 retinaface/TensorFlow 版本衝突。
+#
+# 【Windows 常見坑】不要直接 `pip install -r requirements.txt` 裝 torch/torchvision！
+# Windows 上 `pip install torch` 預設會裝到 CPU-only 版本（不會自動抓 CUDA 版），
+# 就算顯示卡驅動、CUDA 都裝好了也一樣，必須指定 --index-url 才會裝到有編譯 CUDA
+# 的版本。裝法：
+#   1. 先手動裝有 CUDA 的版本（去 https://pytorch.org/get-started/locally/ 選
+#      Windows/Pip/你的 CUDA 版本，複製當下給的指令；範例：
+#      pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   2. 再跑 pip install -r research/antispoof_training/requirements.txt 裝其他套件
+#      （torch/torchvision 已經裝好，這行不會覆蓋掉剛裝的 CUDA 版）
+#   3. 裝完用這行驗證有抓到 GPU（要印出 True 跟顯卡名稱，不是 False）：
+#      python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# （macOS/Linux 通常不用擔心這個坑，pip install torch 大多會裝對版本。）
+
+torch
+torchvision
+albumentations
+scikit-learn
+onnx
+onnxruntime
+onnxsim
+opencv-python
+numpy
+
+# prepare_celeba_spoof.py 專用：從 Hugging Face 下載已裁切好的 CelebA-Spoof
+# 精簡版資料集（見該檔案開頭的完整說明與限制）
+datasets
+pillow
