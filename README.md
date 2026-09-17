@@ -100,16 +100,7 @@ Smart_Access_Agent_System/
 
 ## 開發文件索引
 
-開發過程中累積的規劃文件跟工作報告放在 `docs/`，依主題分成四個子資料夾：
-
-| 主題 | 位置 | 說明 |
-| --- | --- | --- |
-| 學術／專案規劃 | [`docs/planning/`](./docs/planning/) | 專題學術性強化計畫、活體偵測訓練教學、專案現況總覽 |
-| 後端模組化重構 | [`docs/backend-modularization/`](./docs/backend-modularization/) | 把 `backend_main.py` 從一支檔案拆成模組化卡片式管理後台的規劃與四階段（P1–P3）實作報告 |
-| 健檢待辦排序 | [`docs/health-check/`](./docs/health-check/) | 專案健檢後，剩餘待辦項目依可行性／風險分級排序，以及已完成項目的報告 |
-| RAG 子系統 | [`docs/rag/`](./docs/rag/) | RAG 問答子系統的功能實作、bug 修復、驗證報告與對應測試腳本 |
-
-各子資料夾內容細目見 [`docs/README.md`](./docs/README.md)。
+系統架構的模組拆分細節、執行環境（虛擬環境、依賴套件、連接埠）說明見 [`docs/README.md`](./docs/README.md)。
 
 ## 安裝
 
