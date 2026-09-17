@@ -1,6 +1,6 @@
 # Smart Access Agent System（智慧門禁代理系統）
 
-[English Version](./README_EN.md)
+只想快速把系統跑起來，見 [快速部署](./快速部署.md)。
 
 ## 專案簡介
 
@@ -68,7 +68,7 @@ Smart_Access_Agent_System/
 ├── ablation_config.py         消融實驗開關設定
 ├── run_ablation_suite.py      消融實驗跑批主入口
 ├── run_single_ablation_eval.py 消融實驗單輪執行器
-├── RAG.md / README_EN.md      RAG 部分技術文件
+├── RAG.md                     RAG 部分技術文件
 │
 ├── backend_main.py           門禁：Tkinter 管理後台（含三個服務開關）
 ├── service_manager.py         後台服務啟動/停止邏輯
@@ -94,7 +94,8 @@ Smart_Access_Agent_System/
 │
 ├── config.yaml                  LiteLLM Proxy 路由設定
 ├── requirements.txt              統一依賴套件清單
-└── pyproject.toml                Python 專案識別檔
+├── pyproject.toml                Python 專案識別檔
+└── 快速部署.md                  只想跑起來的最短安裝／啟動步驟
 ```
 
 ## 安裝
