@@ -87,10 +87,10 @@ Smart_Access_Agent_System/
 │
 ├── research/antispoof_training/  自訓練活體偵測模型研究子專案（獨立，見其自身 README）
 │
-├── data/laws/                  勞基法相關 PDF（RAG 法規知識庫來源）
+├── data/laws/                  勞基法相關 PDF（RAG 法規知識庫來源，不進版控，需另外放入）
 ├── database/database.db        打卡紀錄資料庫
-├── models/                     大型 AI 模型檔案（ArcFace、YOLOv8、MiniFASNetV2、TTS 模型等）
-├── anomaly_logs/                尾隨異常證據照片存放處
+├── models/                     大型 AI 模型檔案（ArcFace、YOLOv8、MiniFASNetV2、TTS 模型等，不進版控）
+├── anomaly_logs/                尾隨異常證據照片存放處（不進版控，含真實拍攝畫面）
 │
 ├── config.yaml                  LiteLLM Proxy 路由設定
 ├── requirements.txt              統一依賴套件清單
@@ -114,6 +114,8 @@ pip install retinaface --no-deps
 若有 NVIDIA 顯卡並已安裝對應版本的 CUDA Toolkit + cuDNN，可將 `requirements.txt` 中的 `onnxruntime==1.23.2` 改為 `onnxruntime-gpu==1.23.2`（兩者不可同時安裝）。
 
 `models/` 資料夾內的大型模型檔案（`arcface_r100_v1.onnx`、`yolov8s.pt`、`MiniFASNetV2.onnx`、TTS 語音模型等，約 490MB）需另外取得，不隨版本控制提供。
+
+`data/laws/` 底下的勞基法 PDF／`anomaly_logs/`（含真實尾隨偵測畫面）同樣不隨版本控制提供，前者需自行放入法規文件，後者留給系統執行時自動產生。
 
 ## 啟動方式
 
