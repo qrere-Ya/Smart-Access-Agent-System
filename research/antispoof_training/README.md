@@ -2,7 +2,7 @@
 
 這個資料夾是**獨立於正式系統之外**的研究性質工作，跟 repo 根目錄那些已經真實環境驗證過的正式檔案（`vision_core.py`、`database_mgr.py`、`security.py`…）完全分開，不會被這裡的任何東西影響。
 
-完整教學跟決策說明在專案文件 `claude/anti-spoofing-training-guide.md`（Claude outputs 資料夾裡也有一份），這裡只放實際會跑的程式碼跟資料。
+完整教學跟決策說明見 `docs/planning/anti-spoofing-training-guide.md`，這裡只放實際會跑的程式碼跟資料。
 
 ## 為什麼要獨立出來
 
