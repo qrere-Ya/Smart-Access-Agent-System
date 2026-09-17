@@ -1,0 +1,38 @@
+model_list:
+  # 2026-09-12 health check (P3): removed 5 duplicate aliases (claude-opus-5,
+  # claude-opus-4-8, claude-sonnet-4-6, claude-3-5-sonnet-20241022,
+  # claude-haiku-4-5-20251001) that pointed to the exact same model as the
+  # "claude-*" wildcard rule below, so they were pure duplication.
+  # evaluate_rag.py's judge model now defaults to "gpt-4o" (see below), so it
+  # never calls those 5 old aliases anyway; removing them does not affect any
+  # existing caller. If something later asks for a specific "claude-xxx"
+  # alias, the wildcard rule below still covers it.
+  #
+  # NOTE: keep this file ASCII-only. LiteLLM's config loader opens this file
+  # with Python's default text encoding, which on this Windows machine
+  # resolves to GBK (not UTF-8). A prior version of this file used
+  # full-width CJK punctuation (e.g. the bracket characters U+3010/U+3011)
+  # in a comment here, and those specific UTF-8 byte sequences are not valid
+  # GBK, which crashed the LiteLLM Proxy on startup with a UnicodeDecodeError
+  # before it could even read the config. Plain Traditional Chinese text
+  # happened not to trigger this, but do not rely on that - any non-ASCII
+  # byte here is a risk on this machine, so this file stays English-only and
+  # the Traditional Chinese explanation lives in the project's markdown
+  # reports instead.
+  - model_name: "claude-*"
+    litellm_params:
+      model: nvidia_nim/google/gemma-4-31b-it
+      api_key: "os.environ/NVIDIA_API_KEY"
+      drop_params: true
+
+  # 2026-09-08: evaluate_rag.py's question-setter/judge calls the "gpt-4o"
+  # alias (see get_judge_llm() in evaluate_rag.py for the full reason): the
+  # OpenAI-compatible client library validates the model name locally
+  # against known OpenAI model names before it will call out at all, and a
+  # custom alias like "claude-*" fails that local check. Only a name that
+  # looks like a real OpenAI model (e.g. "gpt-4o") passes it.
+  - model_name: gpt-4o
+    litellm_params:
+      model: nvidia_nim/google/gemma-4-31b-it
+      api_key: "os.environ/NVIDIA_API_KEY"
+      drop_params: true

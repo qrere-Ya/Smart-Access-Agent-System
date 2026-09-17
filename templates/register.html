@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>員工自助註冊系統</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; }
+        #preview { width: 100%; max-width: 300px; border-radius: 10px; margin: 10px 0; }
+        input[type="text"] { width: 80%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; }
+        button { background: #28a745; color: white; padding: 15px 30px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; }
+        .gender-group { margin: 15px 0; }
+    </style>
+</head>
+<body>
+    <h2>員工自助註冊</h2>
+    <input type="text" id="emp_name" placeholder="請輸入姓名">
+    <input type="text" id="emp_id" placeholder="請輸入員工編號">
+    <br>
+    <div class="gender-group">
+        <label><input type="radio" name="gender" value="男" checked> 男</label>
+        <label><input type="radio" name="gender" value="女"> 女</label>
+        <label><input type="radio" name="gender" value="其他"> 其他</label>
+    </div>
+    <input type="file" id="cameraInput" accept="image/*" capture="user" style="display: none;">
+    <button onclick="document.getElementById('cameraInput').click()">📸 點擊拍照</button>
+    <br>
+    <img id="preview" style="display:none;">
+    <br>
+    <button id="submitBtn" style="display:none; background: #007bff;" onclick="uploadData()">確認註冊</button>
+
+    <script>
+        const cameraInput = document.getElementById('cameraInput');
+        const preview = document.getElementById('preview');
+        const submitBtn = document.getElementById('submitBtn');
+
+        cameraInput.onchange = function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                preview.src = URL.createObjectURL(file);
+                preview.style.display = 'inline-block';
+                submitBtn.style.display = 'inline-block';
+            }
+        };
+
+        async function uploadData() {
+            const name = document.getElementById('emp_name').value;
+            const id = document.getElementById('emp_id').value;
+            const file = cameraInput.files[0];
+            const gender = document.querySelector('input[name="gender"]:checked').value;
+
+            if(!name || !id) { alert("請填寫姓名與工號"); return; }
+
+            // 從 URL 中抓取 Token (例如 ?t=aB3x9Y)
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('t');
+
+            const formData = new FormData();
+            formData.append('image', file);
+            formData.append('name', name);
+            formData.append('emp_id', id);
+            formData.append('gender', gender);
+            formData.append('token', token); // 夾帶 Token 送往後端驗證
+
+            const response = await fetch('/api/register', {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+            alert(result.message);
+            if(result.status === "success") { location.reload(); }
+        }
+    </script>
+</body>
+</html>

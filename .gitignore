@@ -4,6 +4,11 @@ anomaly_logs/*.jpg
 models/**/*.onnx
 models/**/*.pt
 models/**/*.tar.bz2
+
+# 2026-09-17：TTS 模型 vits-piper-zh_CN-huayan-medium 整個資料夾都不進版控——
+# 主模型檔 .onnx 已經被上面 models/**/*.onnx 擋掉，若只留底下的 espeak-ng-data/
+# 語言字典跟其他附屬檔案，會變成沒有主模型檔配套、單獨也跑不動的雜項檔案，乾脆整個排除
+models/vits-piper-zh_CN-huayan-medium/
 __pycache__/
 *.pyc
 venv/
