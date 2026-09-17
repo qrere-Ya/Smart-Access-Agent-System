@@ -38,7 +38,7 @@ ROC AUC 是額外用 `roc_data_*.npz` 裡的 fpr/tpr 算出來的補充指標（
 research/antispoof_training/
 ├── README.md               本檔案
 ├── requirements.txt        這個子專案專用的訓練依賴（跟正式系統的 requirements.txt 分開）
-├── roc_comparison.png      兩個自訓練版本的 ROC 曲線對照圖（見上方「目前訓練結果」）
+├── roc_comparison.png      MiniFASNetV2／凍結骨幹／解凍微調三方的 ROC 曲線對照圖（見上方「目前訓練結果」）
 ├── data/                    資料集（.gitignore 已排除，不會進版控，檔案太大）
 │   ├── raw_footage/         原始蒐集的影片/照片，子資料夾：bona_fide / print_attack / replay_attack
 │   ├── external/            公開資料集解壓縮後放這裡（CelebA-Spoof、NUAA…）
@@ -66,13 +66,13 @@ research/antispoof_training/
 │   ├── finetune_unfreeze.py  第二階段：接續第一階段權重，解凍最後 3 個 block 再微調
 │   ├── export_onnx.py        匯出 ONNX + onnxsim 簡化，可指定要匯出哪個 checkpoint
 │   ├── evaluate_antispoof.py 計算 APCER/BPCER/ACER/EER，畫 ROC 曲線資料，可指定要評估哪個 checkpoint
-│   └── evaluate_minifasnet.py 用同一套指標評估現有的 MiniFASNetV2.onnx，見上方「跟現有 MiniFASNetV2 的對照」
+│   └── evaluate_minifasnet.py 用同一套指標評估現有的 MiniFASNetV2.onnx，見上方「目前訓練結果」
 └── outputs/                  訓練產出（.gitignore 已排除大檔案）
     ├── antispoof_best.pth                      第一階段（凍結骨幹）權重
     ├── antispoof_finetuned_best.pth             第二階段（解凍微調）權重
     ├── antispoof_mobilenetv3_antispoof_best.onnx / _sim.onnx          第一階段匯出
     ├── antispoof_mobilenetv3_antispoof_finetuned_best.onnx / _sim.onnx 第二階段匯出
-    └── roc_data_antispoof_best.npz / roc_data_antispoof_finetuned_best.npz  兩階段的 ROC 曲線資料
+    └── roc_data_minifasnetv2.npz / roc_data_antispoof_best.npz / roc_data_antispoof_finetuned_best.npz  三方模型各自的 ROC 曲線資料
 ```
 
 ## 怎麼跑（依序執行）
@@ -127,24 +127,38 @@ python scripts/evaluate_minifasnet.py
 
 ## 重新產生 ROC 對照圖
 
-`roc_comparison.png` 是用下面這段 matplotlib 腳本，讀 `outputs/roc_data_antispoof_best.npz` 跟 `outputs/roc_data_antispoof_finetuned_best.npz` 裡 `evaluate_antispoof.py` 算好的 `fpr`/`tpr` 陣列畫出來的，換了新的 checkpoint 重跑一次 `evaluate_antispoof.py` 之後，把下面這段存成 `scripts/plot_roc.py` 重新執行即可更新：
+`roc_comparison.png` 是用下面這段 matplotlib 腳本，讀 `outputs/roc_data_minifasnetv2.npz`／`outputs/roc_data_antispoof_best.npz`／`outputs/roc_data_antispoof_finetuned_best.npz` 三份資料的 `fpr`/`tpr` 陣列畫出來的（`evaluate_minifasnet.py`／`evaluate_antispoof.py` 各自算好、存成 `.npz`），任一模型重新評估過後，把下面這段存成 `scripts/plot_roc.py`、在 `research/antispoof_training/` 底下用 `python scripts/plot_roc.py` 重新執行即可更新：
 
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-for label, path in [("凍結骨幹", "outputs/roc_data_antispoof_best.npz"),
-                     ("解凍微調", "outputs/roc_data_antispoof_finetuned_best.npz")]:
-    data = np.load(path)
-    fpr, tpr = data["fpr"], data["tpr"]
-    plt.plot(fpr, tpr, label=label)
+FILES = {
+    "MiniFASNetV2（現成模型）": {"path": "outputs/roc_data_minifasnetv2.npz", "eer": 0.3787},
+    "凍結骨幹（基準）": {"path": "outputs/roc_data_antispoof_best.npz", "eer": 0.1840},
+    "解凍微調": {"path": "outputs/roc_data_antispoof_finetuned_best.npz", "eer": 0.1056},
+}
 
-plt.plot([0, 1], [0, 1], "--", color="gray")
-plt.xlabel("False Positive Rate")
-plt.ylabel("True Positive Rate")
-plt.legend()
-plt.savefig("roc_comparison.png", dpi=150)
+fig, ax = plt.subplots(figsize=(7, 6), dpi=150)
+
+for label, info in FILES.items():
+    data = np.load(info["path"])
+    fpr, tpr = data["fpr"], data["tpr"]
+    order = np.argsort(fpr)
+    fpr, tpr = fpr[order], tpr[order]
+    auc = np.trapezoid(tpr, fpr)
+    ax.plot(fpr, tpr, linewidth=2, label=f"{label}（AUC={auc:.3f}, EER={info['eer']*100:.2f}%）")
+
+ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1, label="隨機猜測")
+ax.set_xlabel("False Positive Rate")
+ax.set_ylabel("True Positive Rate")
+ax.set_title("活體偵測模型 ROC 曲線對照（CelebA-Spoof 測試集，n=67,170）")
+ax.legend(loc="lower right", fontsize=9)
+fig.tight_layout()
+fig.savefig("roc_comparison.png", dpi=150)
 ```
+
+（如果要在圖上顯示正體中文標籤，額外用 `matplotlib.font_manager` 註冊一套系統上有的中文字型即可，跟中文顯示無關的部分不受影響。）
 
 ## 依賴套件說明
 
