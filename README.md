@@ -40,6 +40,20 @@
 
 以 ImageNet 預訓練的 MobileNetV3-Small 做遷移學習，訓練二分類（bona_fide / attack）活體偵測模型。支援三種資料來源：自行蒐集影片裁切（`prepare_dataset.py` + `split_dataset.py`，照人切分避免資料洩漏）、HuggingFace 精簡版 CelebA-Spoof（`prepare_celeba_spoof.py`）、官方完整版 CelebA-Spoof（`prepare_official_celeba_spoof.py`，以 manifest 方式讀取，不複製圖片、照人切分並排除訓練／測試集間的身分重疊）。`finetune_unfreeze.py` 提供第二階段部分解凍微調，`evaluate_antispoof.py` 計算 APCER／BPCER／ACER／EER 等 PAD 領域標準指標，`export_onnx.py` 匯出 ONNX 模型。詳見 `research/antispoof_training/README.md`。
 
+## 活體偵測研究成果（Anti-Spoofing PAD）
+
+以官方 CelebA-Spoof 測試集（67,170 張，19,923 真人 / 47,247 攻擊，依身分切分、與訓練／驗證集無重疊）評估，三方比較：正式系統目前在用的現成模型 `MiniFASNetV2`、自訓練骨幹完全凍結的基準版本、以及在此基礎上解凍最後 3 個 block 再微調的版本。
+
+| | MiniFASNetV2（現成） | 凍結骨幹（基準） | 解凍微調 |
+| --- | --- | --- | --- |
+| 驗證準確率 | 不適用（非本專案訓練） | 0.9740 | 0.9940 |
+| 測試集 EER | 37.87%（門檻 0.0193） | 18.40%（門檻 0.0579） | 10.56%（門檻 0.0012） |
+| ROC AUC | 0.671 | 0.898 | 0.963 |
+
+![ROC 曲線對照](research/antispoof_training/roc_comparison.png)
+
+微調版的 EER 比現成的 MiniFASNetV2 低 72.1%（37.87% → 10.56%），凍結骨幹的基準版本也低 51.4%。這是合理的結果：MiniFASNetV2 是沒有在 CelebA-Spoof 上訓練過的現成模型，跨資料集評估（cross-dataset）本來就比在同一份資料集上訓練、驗證的模型吃虧，這正是這次自訓練活體偵測模型的動機——不是說 MiniFASNetV2 效果差，而是換一個資料集／場景後，沒有針對性訓練過的現成模型會出現明顯的泛化落差。APCER／BPCER／ACER／EER 依 ISO/IEC 30107-3 標準計算，完整的評估方法（各自 EER 門檻 vs. 固定門檻 0.5 的取捨、前處理跟 `vision_core.py` 的一致性驗證）見 `research/antispoof_training/README.md` 的「目前訓練結果」章節。
+
 ## 目錄結構
 
 ```
