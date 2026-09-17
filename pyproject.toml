@@ -1,0 +1,10 @@
+[project]
+name = "smart-access-agent-system"
+version = "0.1.0"
+description = "合併專案：門禁與人臉辨識系統 + 勞基法/考勤 RAG AI 助理"
+requires-python = ">=3.10"
+
+# 實際依賴清單維護在 requirements.txt（套件版本較多、且有兩邊合併的相容性註記，
+# 用 requirements.txt 比較方便閱讀跟維護）。這個檔案主要是讓這個資料夾可以被
+# 辨識成一個 Python 專案/套件；要用 pip 安裝依賴，請執行：
+#   pip install -r requirements.txt
