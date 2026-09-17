@@ -1,0 +1,23 @@
+faiss_storage/
+database/*.db
+anomaly_logs/*.jpg
+models/**/*.onnx
+models/**/*.pt
+models/**/*.tar.bz2
+__pycache__/
+*.pyc
+venv/
+.venv/
+venv_litellm/
+.env
+
+# 2026-09-17：research/antispoof_training/ 下自己的訓練虛擬環境，跟根目錄的 venv/
+# 一樣體積大且跟機器綁定，不進版控
+research/antispoof_training/venv_antispoof/
+
+# 2026-09-15：自訓練活體偵測模型（research/antispoof_training/）產出的資料集/訓練
+# 產物檔案都很大（影片、圖片、.pth、.onnx），不進版控；.gitkeep 讓空資料夾結構保留
+research/antispoof_training/data/*
+!research/antispoof_training/data/.gitkeep
+research/antispoof_training/outputs/*
+!research/antispoof_training/outputs/.gitkeep
