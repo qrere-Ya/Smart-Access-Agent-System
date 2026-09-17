@@ -1,0 +1,207 @@
+# ==========================================
+# Smart_Access_Agent_System 合併專案 - 統一依賴套件清單
+# 這份檔案合併了原本 Edge_LlamaIndex_RAG 與 My_Smart_Access_System 各自的
+# requirements.txt。標準安裝方式（兩個步驟，順序不能反）：
+#   1) pip install -r requirements.txt
+#   2) pip install retinaface --no-deps      ← 一定要加 --no-deps，見下方說明
+#
+# ✅ Python 3.10 相容性：已用 PyPI 的套件中繼資料逐一核對（2026-09-01），這份
+#    清單裡列出的每一個套件版本都明確支援 Python 3.10，且都有對應的 Windows
+#    cp310 wheel（opencv-python 用的是涵蓋 3.10 的 abi3 通用 wheel），可以放心
+#    在 Python 3.10.0 的環境下安裝，不會有「這個版本根本不支援 3.10」的問題。
+#
+# ⚠️ 版本衝突說明（我沒辦法在你的電腦上實測，請安裝完務必自己跑一次驗證）：
+#   - numpy：RAG 端原本鎖 1.26.4（註解說是為了相容性），門禁系統端是 2.2.6。
+#     兩個沒辦法同時滿足，這裡選擇門禁系統的 2.2.6（比較新，AI 視覺那邊的套件
+#     對版本比較敏感）。經查 tensorflow==2.21.0、onnxruntime==1.23.2、
+#     ultralytics==8.4.59、scikit-image==0.25.2 這幾個對 numpy 版本最敏感的套件，
+#     官方相依需求都是「numpy>=1.x」沒有設上限，所以 numpy 2.2.6 不會在安裝階段
+#     衝突。但這不保證程式「執行時」不會因為 numpy 2.x 的行為變化而出錯，
+#     如果之後 llama-index / faiss-cpu / huggingface-embeddings 在 numpy 2.x 下
+#     報錯，代表這個相容性問題還沒解決，需要另外處理（例如把 RAG 部分改到獨立的
+#     虛擬環境跑）。
+#   - torch：RAG 端原本是 2.3.0，門禁系統端是 2.12.0，這裡選擇比較新的 2.12.0。
+#
+# 🚨 retinaface 必須「另外」安裝，不能放在上面這行一起裝（重要，會影響 tensorflow）：
+#    retinaface==1.1.1 這個套件自己在 PyPI 上宣告寫死要裝 tensorflow==2.5.0（一個
+#    2021 年的極舊版本，甚至不支援 Python 3.10！），如果照一般方式跟其他套件一起
+#    `pip install -r requirements.txt`，pip 的相依解析器會試圖把我們要的
+#    tensorflow==2.21.0 換成這個舊版，直接打壞整個視覺辨識環境，或是解析失敗直接
+#    報錯裝不成功。這正是你自己 GitHub README 裡特別提醒的安裝注意事項。
+#    解法：requirements.txt 完全不列 retinaface，永遠用下面這行「單獨、額外」安裝：
+#        pip install retinaface --no-deps
+#    --no-deps 的意思是「只裝 retinaface 這個套件本身，不要理會它宣告的相依套件」，
+#    因為我們要的 tensorflow / opencv 版本已經在上面裝好了，retinaface 實際執行
+#    不需要真的用到 2.5.0 版的 tensorflow。
+#
+# 🎮 GPU / CPU 二選一（onnxruntime）：
+#    下面預設列的是 onnxruntime==1.23.2（CPU 版）。如果你的電腦有 NVIDIA 顯卡且已
+#    裝好對應版本的 CUDA Toolkit + cuDNN，可以改成：
+#        onnxruntime-gpu==1.23.2
+#    兩個套件功能重疊、不要同時裝，否則兩邊的 onnxruntime 動態庫會互相打架。
+#
+# 🚨 litellm 最後結論：還是要裝在「獨立的虛擬環境」，但原因跟之前不一樣了
+#    （2026-09-01 兩次更新，這是最新、最終的結論）：
+#
+#    第一次更新時我以為只要把 llama-index 升級到 0.14.x（見下方版本，讓
+#    llama-index-llms-openai 放寬到允許 openai <3,>=1.108.1），跟 litellm 要求的
+#    openai >=2.20.0,<3.0 就有交集了，可以裝同一個環境。這個版本號的推理沒有錯，
+#    但實際讓你去裝、去跑 `litellm --config config.yaml` 之後，發現一個更根本的
+#    問題：litellm 從 1.85.0 到目前最新的 1.99.0，程式碼裡有好幾個地方直接寫
+#    `from typing import NotRequired`——但 `NotRequired` 這個東西是 Python 3.11
+#    才加進標準函式庫的（PEP 655），Python 3.10（你電腦用的版本）根本沒有這個東西，
+#    所以只要載入 litellm 就會直接 ImportError，跟版本號怎麼配都沒關係，是
+#    litellm 自己程式碼對 Python 3.10 支援不完整的問題（雖然它在 PyPI 上寫的是
+#    支援 >=3.10）。我實際下載了 1.80.0 到 1.99.0 之間好幾個版本的原始碼逐一核對
+#    過，確認這個 bug 從 1.85.0（litellm 開始要求 openai>=2.20 的那個版本）就已經
+#    存在，一路延續到最新版，沒有一個「同時滿足 openai>=2.20 又不踩到這個 bug」的
+#    litellm 版本。
+#
+#    真正乾淨的解法：litellm 用「另一個 Python 3.11 以上版本」的直譯器建立獨立虛擬
+#    環境來跑（不是 Python 版本不同就一定要分開環境，是這次剛好 litellm 本身的
+#    程式碼假設了 3.11+，用回 3.11+ 直譯器就完全沒有這個問題）。詳細安裝指令見
+#    README.md 的「🚀 啟動方式」那一節。這個虛擬環境跟這份 requirements.txt 安裝的
+#    主環境（維持 Python 3.10.0，因為門禁系統的人臉辨識/視覺套件是針對 3.10 測試
+#    的）完全分開、不衝突。
+# ==========================================
+
+# ---- RAG / LLM 編排框架 ----
+# 注意：這裡故意不裝「llama-index」這個總包（umbrella package）。它會多拉一堆
+# 我們用不到的子套件（agent-openai、cli、multi-modal-llms-openai 等等），而且
+# 它自己會把 llama-index-llms-openai 的版本鎖在比較舊的範圍，反而會跟 litellm
+# 卡住。改成只裝我們程式碼實際有 import 的子套件，一樣能用，範圍更乾淨。
+llama-index-core==0.14.24
+llama-index-workflows==2.23.3
+llama-index-llms-ollama==0.11.0
+llama-index-embeddings-huggingface==0.8.0
+llama-index-embeddings-openai==0.7.0
+llama-index-llms-openai==0.8.0
+llama-index-vector-stores-faiss==0.7.0
+llama-index-readers-file==0.7.0
+# faiss-cpu 也要跟著升級：1.8.0 這個版本是用 numpy 1.x 的 C API 編譯的，跟 numpy==2.2.6
+# 一起用會直接壞掉（AttributeError: _ARRAY_API not found）。我去查了 faiss 官方的
+# CHANGELOG，正式支援 numpy 2 是從 1.13.0 開始（PR #4523「Upgrade Faiss OSS side to
+# numpy2」），所以改用比它更新的 1.15.0。
+faiss-cpu==1.15.0
+openai==2.54.0
+# litellm 不裝在這裡！請看上方「🚨 litellm 最後結論」的說明，litellm 要用 Python 3.11+
+# 另外建立一個獨立的虛擬環境安裝，不能跟這份 requirements.txt 裝在一起。
+python-dotenv==1.2.2
+# pypdf 也跟著這次升級一起調整：新版 llama-index-readers-file==0.7.0 規定 pypdf 要在
+# 6.1.3~7.0 之間，原本鎖的 5.9.0 太舊、裝不進去，所以改成 6.16.2。
+pypdf==6.16.2
+# gradio 這次改成鎖版本（2026-09-02 補上，之前一直沒鎖是漏掉了）：舊版這裡不鎖版本，
+# 導致每次重新安裝都會裝到「當下最新版」，結果裝到某個新版本後，app.py / evaluate_rag.py
+# 裡 Chatbot 用的舊版 [user訊息, bot訊息] tuple 寫法直接壞掉，跳錯
+# "Data incompatible with messages format..."——因為新版 Gradio 的 Chatbot 元件已經
+# 完全不支援這種舊格式了，只吃「messages」格式（一則訊息一個 dict，有 role/content
+# 兩個 key）。已經把 app.py、evaluate_rag.py 兩份程式碼都改成新格式，並且拿實際裝好的
+# gradio==6.26.0 執行過、確認 Chatbot 能正常吃這個格式不會報錯，所以鎖在這個版本，
+# 以後就不會再無預警地因為套件自動升級而壞掉了。
+gradio==6.26.0
+SQLAlchemy==2.0.35
+
+# ---- 科學計算 / 深度學習基礎（版本取兩邊較新者，見上方說明） ----
+numpy==2.2.6
+torch==2.12.0
+torchvision==0.27.0
+scipy==1.15.3
+scikit-learn==1.7.2
+scikit-image==0.25.2
+
+# ---- 門禁系統：視覺辨識 ----
+opencv-python==4.13.0.92
+onnx==1.21.0
+onnxruntime==1.23.2
+# retinaface 不放在這裡！請看上方「🚨 retinaface 必須另外安裝」的說明，
+# 裝完這份 requirements.txt 之後單獨執行：pip install retinaface --no-deps
+ultralytics==8.4.59
+ultralytics-thop==2.0.19
+tensorflow==2.21.0
+tf_keras==2.21.0
+keras==3.12.2
+
+# ---- 門禁系統：語音 ----
+sherpa-onnx==1.13.2
+sherpa-onnx-core==1.13.2
+sounddevice==0.5.5
+
+# ---- 門禁系統：Web / 資料庫 / 介面 ----
+Flask==3.1.3
+ttkbootstrap==1.20.3
+pyqrcode==1.2.1
+pypng==0.20220715.0
+Pillow==12.2.0
+
+# ---- 共用工具套件 ----
+requests==2.34.2
+PyYAML==6.0.3
+tqdm==4.67.3
+psutil==7.2.2
+matplotlib==3.10.9
+
+# ---- 以下為門禁系統原始 requirements.txt 中列出、其他套件的間接依賴，
+#      pip 安裝時通常會自動處理，這裡保留原始版本號以避免踩雷 ----
+absl-py==2.4.0
+astunparse==1.6.3
+beautifulsoup4==4.14.3
+blinker==1.9.0
+certifi==2026.5.20
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.4.1
+colorama==0.4.6
+coloredlogs==15.0.1
+contourpy==1.3.2
+cycler==0.12.1
+filelock==3.29.0
+flatbuffers==25.12.19
+fonttools==4.63.0
+fsspec==2026.4.0
+gast==0.7.0
+gdown==6.1.0
+google-pasta==0.2.0
+grpcio==1.81.0
+h5py==3.14.0
+humanfriendly==10.0
+idna==3.17
+ImageIO==2.37.3
+iso-639==0.4.5
+itsdangerous==2.2.0
+Jinja2==3.1.6
+joblib==1.5.3
+kiwisolver==1.5.0
+lazy-loader==0.5
+libclang==18.1.1
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+mdurl==0.1.2
+ml_dtypes==0.5.4
+mpmath==1.3.0
+namex==0.1.0
+networkx==3.4.2
+opt_einsum==3.4.0
+optree==0.19.1
+packaging==26.2
+polars==1.41.2
+polars-runtime-32==1.41.2
+protobuf==7.35.0
+pycparser==3.0
+Pygments==2.20.0
+pyparsing==3.3.2
+pyreadline3==3.5.6
+PySocks==1.7.1
+python-dateutil==2.9.0.post0
+# rich 也要跟著調：litellm[proxy] 規定 rich 必須 <14.0（原本鎖的 15.0.0 太新，裝不進去），
+# 13.9.4 同時滿足 litellm 和 typer（gradio 生態系用到）的要求。
+rich==13.9.4
+six==1.17.0
+soupsieve==2.8.4
+sympy==1.14.0
+termcolor==3.3.0
+threadpoolctl==3.6.0
+tifffile==2025.5.10
+typing_extensions==4.15.0
+urllib3==2.7.0
+Werkzeug==3.1.8
+wrapt==2.2.1
