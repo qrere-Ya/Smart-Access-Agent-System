@@ -8,3 +8,30 @@ requires-python = ">=3.10"
 # 用 requirements.txt 比較方便閱讀跟維護）。這個檔案主要是讓這個資料夾可以被
 # 辨識成一個 Python 專案/套件；要用 pip 安裝依賴，請執行：
 #   pip install -r requirements.txt
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [
+    "venv",
+    "research/antispoof_training/venv_antispoof",
+    "models",
+    "faiss_storage",
+    "database",
+    "anomaly_logs",
+    "data",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "S", "C4"]
+
+[tool.bandit]
+exclude_dirs = [
+    "venv",
+    "research/antispoof_training/venv_antispoof",
+    "models",
+    "faiss_storage",
+    "database",
+    "anomaly_logs",
+    "data",
+]

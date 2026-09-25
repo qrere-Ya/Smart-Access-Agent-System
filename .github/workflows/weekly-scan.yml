@@ -1,0 +1,101 @@
+name: Weekly Full Scan
+
+on:
+  schedule:
+    - cron: "0 18 * * 0"  # 每週日 18:00 UTC（台灣時間週一 02:00）
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  weekly-scan:
+    name: Full Repository Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install scanners
+        run: pip install "bandit[sarif]" semgrep pip-audit
+
+      - name: Bandit full scan (JSON)
+        run: bandit -c pyproject.toml -r . -f json -o bandit-report.json --exit-zero
+
+      - name: Semgrep full scan (JSON)
+        run: semgrep scan --config auto --config .semgrep.yml --json --output semgrep-report.json
+        continue-on-error: true
+
+      - name: pip-audit report (JSON)
+        run: pip-audit -r requirements.txt -f json -o pip-audit-report.json
+        continue-on-error: true
+
+      - name: Secret scan (full git history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Build report and open/update tracking Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            function loadJson(path) {
+              try { return JSON.parse(fs.readFileSync(path, 'utf8')); }
+              catch (e) { return null; }
+            }
+            const bandit = loadJson('bandit-report.json');
+            const semgrep = loadJson('semgrep-report.json');
+            const pipAudit = loadJson('pip-audit-report.json');
+            const buckets = { high: [], medium: [], low: [] };
+            function bucketOf(sev) {
+              sev = (sev || '').toUpperCase();
+              if (sev === 'HIGH' || sev === 'CRITICAL' || sev === 'ERROR') return 'high';
+              if (sev === 'MEDIUM' || sev === 'WARNING') return 'medium';
+              return 'low';
+            }
+            if (bandit && bandit.results) {
+              for (const r of bandit.results) {
+                buckets[bucketOf(r.issue_severity)].push(`- [Bandit] \`${r.filename}:${r.line_number}\` — ${r.issue_text}`);
+              }
+            }
+            if (semgrep && semgrep.results) {
+              for (const r of semgrep.results) {
+                const sev = r.extra && r.extra.severity;
+                buckets[bucketOf(sev)].push(`- [Semgrep] \`${r.path}:${r.start.line}\` — ${r.check_id}`);
+              }
+            }
+            if (pipAudit && Array.isArray(pipAudit)) {
+              for (const dep of pipAudit) {
+                for (const v of (dep.vulns || [])) {
+                  buckets.high.push(`- [pip-audit] \`${dep.name}==${dep.version}\` — ${v.id}`);
+                }
+              }
+            }
+            const section = (title, items) => items.length ? `### ${title}\n${items.join('\n')}\n` : `### ${title}\n（無發現）\n`;
+            const today = new Date().toISOString().slice(0, 10);
+            const body = [
+              `## 每週代碼健康報告 - ${today}`, '', `### 摘要`,
+              `- 🔴 高風險（${buckets.high.length} 項）`,
+              `- 🟡 中風險（${buckets.medium.length} 項）`,
+              `- ⚪ 低風險（${buckets.low.length} 項）`, '',
+              section('🔴 高風險 — 建議立即修復', buckets.high),
+              section('🟡 中風險 — 建議排入下一版', buckets.medium),
+              section('⚪ 低風險 — 觀察/封存', buckets.low), '',
+              '> 本報告由掃描工具依 severity 欄位機械式分級，尚未經語意複核。',
+              '> 若需依 CLAUDE.md 的信心水準規則做更細緻分類，請在下次 Claude Code 會話中搭配 jev-mcp 複核。',
+            ].join('\n');
+            const label = 'weekly-scan';
+            const { data: issues } = await github.rest.issues.listForRepo({owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: label});
+            if (issues.length > 0) {
+              await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: issues[0].number, body});
+            } else {
+              await github.rest.issues.create({owner: context.repo.owner, repo: context.repo.repo, title: `每週代碼健康報告 - ${today}`, body, labels: [label]});
+            }

@@ -1,0 +1,102 @@
+name: PR Code Scan
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  ruff:
+    name: Ruff Lint
+    runs-on: ubuntu-latest
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Ruff
+        run: pip install ruff
+      - name: Full report (annotations only, never fails; 既有技術債交給 weekly report 追蹤)
+        run: ruff check --output-format=github --exit-zero .
+      - name: Block merge on new issues in PR-changed files only
+        run: |
+          git diff -z --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.py' \
+            | xargs -0 -r ruff check
+
+  bandit:
+    name: Bandit Security Scan
+    runs-on: ubuntu-latest
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Bandit
+        run: pip install "bandit[sarif]"
+      - name: Full report (SARIF, never fails; 既有技術債交給 weekly report 追蹤)
+        run: bandit -c pyproject.toml -r . -f sarif -o bandit-results.sarif --exit-zero
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+      - name: Block merge on HIGH severity in PR-changed files only
+        run: |
+          git diff -z --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.py' \
+            | xargs -0 -r bandit -c pyproject.toml -lll
+
+  semgrep:
+    name: Semgrep Scan
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Mark workspace as safe (container runs as different UID)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Full report (SARIF, never fails; 既有技術債交給 weekly report 追蹤)
+        run: semgrep scan --config auto --config .semgrep.yml --sarif --output semgrep-results.sarif || true
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+      - name: Block merge on ERROR severity in PR-changed files only
+        run: |
+          git diff -z --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.py' \
+            | xargs -0 -r semgrep scan --config auto --config .semgrep.yml --severity ERROR --error
+
+  dependency-audit:
+    name: Dependency Vulnerability Scan (informational only for now)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      # 目前既有 requirements.txt 版本可能已含已知 CVE（尚未逐一盤點過），先設 informational
+      # 避免導入當天就整批擋下所有 PR；等第一輪 weekly report 盤點/修完存量問題後，
+      # 再把這裡改成 blocking。
+      - name: Run pip-audit (non-blocking)
+        run: pip-audit -r requirements.txt
+        continue-on-error: true
