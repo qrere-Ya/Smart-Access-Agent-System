@@ -11,6 +11,8 @@ import os
 import re
 import sqlite3
 import pathlib
+import threading
+import time
 
 from sqlalchemy import create_engine
 from llama_index.core import SQLDatabase
@@ -245,12 +247,34 @@ def build_sql_engine():
         return None
 
 
+# 【2026-09-22 效能】_get_known_employee_names() 在同一題問答裡可能被呼叫兩次
+# （check_query_route() 的 _detect_mixed_question() 一次、try_attendance_answer() 的
+# _try_deterministic_date_lookup() 一次），原本每次呼叫都重新開一個 SQLite 連線查一次
+# 整張 EmployeeRoster 視圖。員工名冊不是每毫秒都在變的資料，這裡加一個很短的 TTL
+# 快取：預設 5 秒內的重複呼叫直接回傳快取結果；可用環境變數 EMPLOYEE_ROSTER_CACHE_TTL
+# 調整。刻意設得很短（不是常見的分鐘級快取），是因為這個系統有 QR 掃碼即時註冊員工的
+# 功能（見 web_server.py），新註冊的員工最慢也要在幾秒內就能被對話系統查到，不能因為
+# 快取太久而讓「剛註冊完馬上問」查不到人。
+_EMPLOYEE_NAMES_CACHE_TTL = float(os.environ.get("EMPLOYEE_ROSTER_CACHE_TTL", "5"))
+_employee_names_cache_lock = threading.Lock()
+_employee_names_cache = {"names": None, "at": 0.0}
+
+
 def _get_known_employee_names():
     """
     從安全的 EmployeeRoster 視圖查出目前所有真實員工姓名，供
     _try_deterministic_date_lookup() 判斷問題裡有沒有出現「真實存在」的員工姓名用。
     查不到（例如資料庫還沒建立視圖）就回傳空清單，不讓整個查詢流程掛掉。
+
+    結果會被短暫快取（見上面 _EMPLOYEE_NAMES_CACHE_TTL 的說明），查詢失敗時不快取
+    空清單，下一次呼叫會照樣重新查一次，不會被一次失敗卡住。
     """
+    now = time.time()
+    with _employee_names_cache_lock:
+        cached_names = _employee_names_cache["names"]
+        if cached_names is not None and (now - _employee_names_cache["at"]) < _EMPLOYEE_NAMES_CACHE_TTL:
+            return cached_names
+
     if not os.path.exists(ACCESS_SYSTEM_DB_PATH):
         return []
     try:
@@ -261,10 +285,14 @@ def _get_known_employee_names():
         cursor.execute("SELECT DISTINCT name FROM EmployeeRoster")
         names = [row[0] for row in cursor.fetchall() if row[0]]
         conn.close()
-        return names
     except Exception as e:
         print(f"⚠️ [SQL Engine] 查詢員工名冊失敗: {e}")
         return []
+
+    with _employee_names_cache_lock:
+        _employee_names_cache["names"] = names
+        _employee_names_cache["at"] = now
+    return names
 
 
 _DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")

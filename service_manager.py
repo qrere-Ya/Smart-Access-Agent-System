@@ -94,11 +94,31 @@ def stop_service(key, port=None):
     停止一個服務：優先用本程式自己存的 Popen 物件關閉（乾淨、快）；如果沒有（代表是
     外部或前一次啟動的），且有給 port，才退而求其次用 psutil 依 port 找出行程強制關閉。
     回傳 True/False 代表有沒有成功處理掉。
+
+    【2026-09-18，修正「開開關關」快速切換 QR 註冊伺服器會連續逾時的真正原因】
+    原本 terminate() 送出之後就立刻 return True，完全沒有等行程真的結束、也沒有
+    確認 port 有沒有真的釋放。如果使用者按「停止」之後很快又按「啟動」（例如測試
+    WiFi Direct 熱點時常見的「開開關關」操作），舊行程的 TCP 監聽 port 這時候
+    很可能還沒真的釋放，新行程 bind 同一個 port 會直接失敗、啟動後立刻當掉——但
+    畫面已經顯示「已啟動」成功訊息，之後 QR 畫面每 5 秒打一次 API 都會連續逾時，
+    完全看不出問題出在「上一個行程沒關乾淨」。改成：terminate() 之後最多等 5 秒
+    讓行程真的結束（逾時就算了，不強制 kill，避免影響其他正常情況）；如果有給
+    port，再額外最多等 3 秒確認 port 真的釋放掉，這樣「停止」回傳的時候，port
+    才是真的可以馬上重新綁定的狀態，不會再有快速切換造成的假成功。
     """
     proc = _service_procs.pop(key, None)
     if proc is not None:
         try:
             proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            if port is not None:
+                waited = 0.0
+                while is_port_open("127.0.0.1", port) and waited < 3.0:
+                    time.sleep(0.2)
+                    waited += 0.2
             return True
         except Exception as e:
             print(f"[停止 {key} 失敗] {e}")
@@ -109,6 +129,10 @@ def stop_service(key, port=None):
             try:
                 import psutil
                 psutil.Process(pid).terminate()
+                waited = 0.0
+                while is_port_open("127.0.0.1", port) and waited < 3.0:
+                    time.sleep(0.2)
+                    waited += 0.2
                 return True
             except Exception as e:
                 print(f"[依 port 停止 {key} 失敗] {e}")
@@ -182,9 +206,42 @@ def _python_child_env():
     跑得好好的 LiteLLM 搞當機（結束碼 3，沒有任何錯誤訊息）。現在只留下真正解決問題
     所需要的 PYTHONIOENCODING，範圍降到最小；LiteLLM 不需要這個修正，已經從它的啟動
     設定裡拿掉了（見 _start_rag_services_worker() 裡 LiteLLM 那一段）。
+
+    【2026-09-18 新增：RAG 助理網頁載入 bge-m3 完就直接當機，結束碼 3221225477】
+    這個結束碼換算成十六進位是 0xC0000005（Windows 的 STATUS_ACCESS_VIOLATION，
+    等於 Linux/macOS 的 segfault）——是作業系統層級直接把整個行程砍掉，不是
+    Python 的例外，所以 RAG App 那邊的輸出完全看不到任何 traceback，就是「印完
+    Loading weights: 100% 之後整個沒了」。從實際發生的時間點（bge-m3 權重讀完、
+    緊接著第一次呼叫 get_text_embedding() 做測試向量）來看，最吻合的已知成因是
+    Windows 上經典的「OpenMP / MKL 動態庫重複初始化衝突」：這個行程裡同時載入了
+    faiss-cpu（rag_index.py）跟 torch（bge-m3 embedding 模型底層用的框架），這兩個
+    套件各自內建/連結了自己的 OpenMP 執行期（torch 帶的是 libiomp5md.dll），在同一
+    個行程裡被重複初始化時，有些情況會印出「OMP: Error #15」這種警告訊息，但也有
+    不少情況（尤其是子行程輸出被導到 pipe、不是真的終端機時）不會印出任何警告，
+    直接在第一次真正呼叫到底層數學運算（也就是這裡的第一次 embedding 推論）的當下
+    整個行程当場中止，符合這次「連錯誤訊息都沒有」的症狀。標準解法是設定環境變數
+    KMP_DUPLICATE_LIB_OK=TRUE，告訴 OpenMP 執行期「就算偵測到重複初始化也不要
+    直接砍掉行程」。這裡直接加在 _python_child_env()（三個子服務共用同一個函式）
+    而不是只加在 RAG App 那條路徑，是因為人臉辨識終端機那邊同時也用了
+    onnxruntime + opencv + tensorflow，理論上有一樣的風險，先一次修掉。
+
+    【還沒辦法 100% 排除的另一種可能，先記錄下來】HuggingFaceEmbedding()
+    目前沒有明確指定 device 參數，預設會偵測到有 NVIDIA 顯示卡就自動用 CUDA——
+    但同一時間 Ollama 的 log 顯示這張 4060 只剩 1.4 GiB 可用顯存（其餘被 Ollama
+    自己占用），如果 pip 裝到的 torch==2.12.0 剛好是有 CUDA 支援的版本（不是
+    CPU-only 版本），bge-m3 想搬上 GPU 時可能撞到顯存不足，在某些驅動版本下
+    顯示卡驅動層級的記憶體錯誤也會以 access violation 的方式讓行程直接消失，
+    而不是乾淨的 Python OutOfMemoryError。如果加了 KMP_DUPLICATE_LIB_OK=TRUE
+    之後重跑還是在同一個地方當掉，下一步要檢查的就是這個：確認
+    `python -c "import torch; print(torch.__version__, torch.cuda.is_available())"`
+    的結果，如果是 True，就要把 HuggingFaceEmbedding 改成明確指定
+    device="cpu"，避免跟 Ollama 搶顯存。
     """
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    # 見上面這次新增的說明：避免 faiss-cpu 跟 torch 各自的 OpenMP 執行期在同一個
+    # 子行程裡重複初始化、導致沒有任何錯誤訊息的 access violation（0xC0000005）。
+    env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     return env
 
 
@@ -289,10 +346,17 @@ def _start_rag_services_worker(on_output_line, on_finished):
                 # errors="replace"：這裡故意不指定 encoding（沒有強迫 Ollama 用哪種編碼
                 # 印字，它是 Go 寫的，跟 Python 的編碼設定無關），讀取這一端就照系統預設
                 # 去解，只加 errors="replace" 當安全網。
+                # 【資源規範】Ollama 官方環境變數：閒置 2 分鐘卸載模型、同時只載入 1 個模型、
+                # 不並行（每多 1 個並行 slot，KV cache 就多一份），避免模型與 KV cache 常駐吃滿記憶體/顯存。
+                # 使用者自己已設定的值優先（setdefault）。
+                _ollama_env = _python_child_env()
+                _ollama_env.setdefault("OLLAMA_KEEP_ALIVE", "2m")
+                _ollama_env.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
+                _ollama_env.setdefault("OLLAMA_NUM_PARALLEL", "1")
                 proc = subprocess.Popen(
                     [ollama_exe, "serve"],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                    errors="replace",
+                    errors="replace", env=_ollama_env,
                     **_hidden_console_popen_kwargs(),
                 )
                 _service_procs["ollama"] = proc

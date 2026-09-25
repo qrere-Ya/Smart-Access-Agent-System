@@ -708,8 +708,21 @@ class BackendManagerApp:
         right_col.pack_propagate(False)
 
         # 1. 基礎連線設定
-        base_ip = service_manager.get_local_ip_offline()
-        base_url = f"http://{base_ip}:5000"
+        # 【2026-09-18，修正「WiFi 熱點的路由跟 QR 系統的 IP 對不上」的真正原因】
+        # 原本這裡只在視窗一打開的當下呼叫一次 get_local_ip_offline()，之後整個
+        # 視窗開著的期間，不管過多久、QR Code 每 5 秒重刷幾次，網址裡的 IP 都是
+        # 用這個「開窗當下」拍的一次快照，不會再更新。但 WiFiDirectHotspotCore
+        # 開的虛擬網卡，常常是在剛開熱點、甚至要等手機真的連上去之後，才會拿到
+        # 穩定的 IP——如果剛好在那個 IP 還沒穩定下來的當下打開這個視窗，就會把
+        # 錯的/過期的 IP 寫死用一整個視窗生命週期，QR Code 掃出來的網址手機永遠
+        # 連不到；重新關開視窗「剛好」IP 已經穩定了，看起來就像「關掉開啟來就對
+        # 上了」，其實只是運氣好重新拍到一次正確的快照而已，不是真的修好。改成
+        # base_url 不再是開窗當下算好、之後都不變的固定值，而是 update_qr() 每次
+        # 重新整理（每 5 秒一次）都重新呼叫 get_local_ip_offline() 重新偵測一次，
+        # IP 換了會在最多 5 秒內自動反映到新產生的 QR Code／網址上，不用使用者
+        # 自己發現「不對」再手動關開視窗。
+        def _current_base_url():
+            return f"http://{service_manager.get_local_ip_offline()}:5000"
 
         # 【服務開關搬過來這裡】QR Code 要能被手機掃到、掃了要能真的送出註冊資料，
         # 都得靠 web_server.py 這個伺服器在跑，所以開關直接放進這個註冊畫面，
@@ -766,7 +779,7 @@ class BackendManagerApp:
                     data = json.loads(response.read().decode())
                     token = data['token']
 
-                dynamic_url = f"{base_url}?t={token}"
+                dynamic_url = f"{_current_base_url()}?t={token}"
 
                 # 2. 記憶體內生成 QR Code
                 qr = pyqrcode.create(dynamic_url)

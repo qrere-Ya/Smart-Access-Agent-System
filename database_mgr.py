@@ -269,22 +269,24 @@ def recognize_face(target_embedding, threshold=1.0):
     功能做的修改：停用一個帳號之後，這個人應該要真的刷不到臉、被系統判定為查無資料，
     不能只是帳號管理畫面上打個叉好看而已。
     """
+    # 【資源規範・RAM】不再 fetchall() 把所有員工的 512 維向量一次讀進記憶體（每一幀都會呼叫），
+    # 改成逐列迭代、只保留目前最小距離，任何時刻記憶體只有一列。
+    best_name, best_dist = None, None
     conn_db = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
-    cursor = conn_db.cursor()
-    cursor.execute("SELECT name, embedding FROM Users WHERE is_active = 1 OR is_active IS NULL")
-    db_data = cursor.fetchall()
-    conn_db.close()
+    try:
+        cursor = conn_db.cursor()
+        cursor.execute("SELECT name, embedding FROM Users WHERE is_active = 1 OR is_active IS NULL")
+        for name, emb in cursor:
+            dist = round(float(np.linalg.norm(emb - target_embedding)), 2)
+            if best_dist is None or dist < best_dist:  # 嚴格小於：距離相同時保留先出現者，與原 argmin 行為一致
+                best_name, best_dist = name, dist
+    finally:
+        conn_db.close()
 
-    if not db_data:
+    if best_dist is None:
         return ("Empty DB", 99.9)
 
-    total_names = [data[0] for data in db_data]
-    total_distances = [round(np.linalg.norm(data[1] - target_embedding), 2) for data in db_data]
-
-    idx_min = np.argmin(total_distances)
-    name, dist = total_names[idx_min], total_distances[idx_min]
-
-    return (name, dist) if dist < threshold else ("Unknown", dist)
+    return (best_name, best_dist) if best_dist < threshold else ("Unknown", best_dist)
 
 
 def log_llm_usage(event_type, question, route=None, guardrail_pass=None, similarity_score=None, source="gradio"):
