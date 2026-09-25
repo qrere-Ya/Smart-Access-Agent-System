@@ -164,7 +164,7 @@ google-pasta==0.2.0
 grpcio==1.81.0
 h5py==3.14.0
 humanfriendly==10.0
-idna==3.17
+idna==3.20
 ImageIO==2.37.3
 iso-639==0.4.5
 itsdangerous==2.2.0
