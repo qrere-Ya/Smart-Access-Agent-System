@@ -184,7 +184,7 @@ opt_einsum==3.4.0
 optree==0.19.1
 packaging==26.2
 polars==1.41.2
-polars-runtime-32==1.41.2
+polars-runtime-32==1.44.2
 protobuf==7.35.0
 pycparser==3.0
 Pygments==2.20.0
