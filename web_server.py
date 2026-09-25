@@ -175,14 +175,16 @@ def api_register():
         npimg = np.frombuffer(filestr, np.uint8)
         frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
 
-        rgb_img, detections = vc.face_detect_bgr(frame, vc.detector)
-        if len(detections) != 1:
-            return jsonify({"status": "fail", "message": "註冊失敗:請確保照片中有一張清晰可辨的人臉"})
+        # 【資源規範】註冊是偶發請求：申請視覺模型 -> 辨識 -> 離開區塊即無條件釋放（不常駐）
+        with vc.vision_session():
+            rgb_img, detections = vc.face_detect_bgr(frame, vc.detector)
+            if len(detections) != 1:
+                return jsonify({"status": "fail", "message": "註冊失敗:請確保照片中有一張清晰可辨的人臉"})
 
-        face_info = detections[0]
-        landmarks = [face_info['left_eye'], face_info['right_eye'], face_info['nose'], face_info['left_lip'], face_info['right_lip']]
-        aligned_face = vc.face_align(rgb_img, landmarks)
-        face_dna = vc.feature_extract(aligned_face)
+            face_info = detections[0]
+            landmarks = [face_info['left_eye'], face_info['right_eye'], face_info['nose'], face_info['left_lip'], face_info['right_lip']]
+            aligned_face = vc.face_align(rgb_img, landmarks)
+            face_dna = vc.feature_extract(aligned_face)
 
         # 4. 寫入資料庫（內含姓名/員工編號重複檢查，重複會直接被拒絕、不寫入）
         success, db_message = db.register_user(name, gender, emp_id, face_dna)

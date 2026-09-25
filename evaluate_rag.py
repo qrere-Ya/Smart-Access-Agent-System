@@ -13,6 +13,7 @@ from main_guardrail_rag import (
     sample_random_attendance_record,
 )
 import ablation_config
+import llm_settings
 
 # ==========================================
 # 類別三「正負例」測試用的固定問題池
@@ -70,6 +71,54 @@ BAD_SAMPLE_QUESTIONS = [
 ]
 
 
+import re
+
+# 【2026-09-20】出題官（尤其是本機 7B 模型）常常不會一字不差照「問題:／答案:」格式輸出：
+# 用全形冒號「問題：」、加粗「**問題**:」、加編號、或整段沒有答案，舊版用
+# split("問題:")[1] 直接取值，找不到標記就丟 IndexError（list index out of range）＝「解析考題失敗」。
+# 改成：容許全形/半形冒號、markdown 符號、英文 Question/Answer；解析不出來就自動重問（最多 3 次）。
+_QA_RE = re.compile(r"(?:問題|Question)\s*[:：]\s*(?P<q>.+?)\s*(?:標準)?(?:答案|Answer)\s*[:：]\s*(?P<a>.+)",
+                    re.S | re.I)
+
+
+def _strip_wrapping(s):
+    s = s.strip()
+    if len(s) >= 2 and s[0] in "[［【「" and s[-1] in "]］】」":
+        s = s[1:-1].strip()
+    return s
+
+
+def _parse_qa(text):
+    """從出題官輸出取出 (問題, 標準答案)；格式對不上回傳 None。"""
+    cleaned = re.sub(r"[*`#]+", "", text or "")
+    m = _QA_RE.search(cleaned)
+    if not m:
+        return None
+    q = re.sub(r"\s*\d+[.、)）]\s*$", "", m.group("q"))  # 去掉「2. 標準答案」前面殘留的編號
+    q, a = _strip_wrapping(q), _strip_wrapping(m.group("a"))
+    if len(q) < 4 or not a:
+        return None
+    return q, a
+
+
+def _generate_qa(judge_llm, prompt_str, tries=3):
+    """
+    請出題官出題並解析；格式不對就重問（最多 tries 次）。
+    回傳 (問題, 標準答案, 最後一次的原始輸出)；全部失敗時前兩者為 None。
+    LLM 呼叫本身的例外（API/本機模型壞了）不在這裡吞掉，交給呼叫端顯示白話原因。
+    """
+    last_text = ""
+    for _ in range(tries):
+        text = ""
+        for resp in judge_llm.stream_complete(prompt_str):
+            text += resp.delta
+        last_text = text
+        qa = _parse_qa(text)
+        if qa:
+            return qa[0], qa[1], text
+    return None, None, last_text
+
+
 def _add_examiner(history, text):
     """
     【2026-09-08，三度修正：改回單一 history，但嚴格用「角色」分左右】
@@ -94,35 +143,22 @@ def _start_student_turn(history, initial_text=""):
 
 def get_judge_llm():
     """
-    出題官／裁判官專用的 API LLM。
+    出題官／裁判官專用的 LLM（跟考生 Settings.llm 是分開的物件）。
 
-    刻意跟考生（本地 Ollama Qwen，也就是 Settings.llm）分開建立成一個完全獨立的物件，
-    確保「出題、答題、改考卷」是三個真正獨立的角色，而不是同一顆模型球員兼裁判
-    （這是舊版程式的漏洞：舊版三個角色其實都共用同一個 Settings.llm）。
-
-    透過同一個合併專案根目錄下 config.yaml 裡設定好的 LiteLLM Proxy 路由，
-    呼叫 NVIDIA 代管的 Gemma 4 31B 模型。使用前請先另外啟動 LiteLLM Proxy，例如：
-        litellm --config config.yaml
-    如果你的 Proxy 位址、金鑰或要用的模型別名不同，改下面三個環境變數即可，不用動程式碼：
-        LITELLM_PROXY_BASE, LITELLM_PROXY_API_KEY, LITELLM_JUDGE_MODEL
-
-    【2026-09-08，修正：模型別名改用 "gpt-4o"，不要用 "claude-3-5-sonnet-20241022"】
-    這裡的 `OpenAICompatibleLLM`（其實就是 llama_index 的 `llms.openai.OpenAI`）
-    在真正送出請求「之前」，會先在本地（不經過下面的 LiteLLM Proxy）核對 model
-    名稱是不是官方真的登記過的 OpenAI 模型——像 "gpt-4o"、"o1" 這種它認得，但
-    "claude-3-5-sonnet-20241022" 這種自訂別名它不認得，就會直接丟出
-    `ValueError: Unknown model 'claude-3-5-sonnet-20241022'. Please provide a
-    valid OpenAI model name in: ...` 這個錯誤，連請求都還沒送到 LiteLLM Proxy
-    就先在本地端失敗了——這跟 config.yaml 裡的路由設定對不對完全無關，是這個
-    Python 套件自己做的「白名單檢查」。改用 "gpt-4o" 當別名就能通過這個本地
-    檢查，config.yaml 裡也已經同步新增了 "gpt-4o" 這個別名、一樣指到同一個
-    NVIDIA Gemma 4 31B 模型，實際效果跟改之前完全一樣，只是換一個「看起來像
-    OpenAI 模型」的別名名稱。
+    【2026-09-20 改版】不再固定走 LiteLLM Proxy -> NVIDIA。改由網頁右上角「⚙️ 設定」決定：
+    使用者自己填 API 金鑰，或選「只用本機模型」；API 金鑰無效／連不上時自動改用本機 Ollama 模型。
+    詳見 llm_settings.py。回傳 None 代表連本機模型也不能用（run_dynamic_evaluation 會用白話說明並中止）。
+    舊的環境變數 LITELLM_* 不再使用。
     """
-    api_base = os.environ.get("LITELLM_PROXY_BASE", "http://localhost:4000/v1")
-    api_key = os.environ.get("LITELLM_PROXY_API_KEY", "sk-litellm-local")
-    model_name = os.environ.get("LITELLM_JUDGE_MODEL", "gpt-4o")
-    return OpenAICompatibleLLM(model=model_name, api_base=api_base, api_key=api_key, temperature=0.0)
+    llm, _note = llm_settings.build_judge_llm()
+    return llm
+
+
+def _flush_judge_notices(history, judge_llm):
+    """評估途中如果 API 失效、自動切到本機模型，在畫面上補一行白話提示（不是錯誤）。"""
+    for note in judge_llm.pop_notices() if hasattr(judge_llm, "pop_notices") else []:
+        _add_examiner(history, note)
+        yield history
 
 
 def _judge_answer(history, judge_llm, ground_truth, ai_response_text):
@@ -150,7 +186,7 @@ def _judge_answer(history, judge_llm, ground_truth, ai_response_text):
     )
     eval_prompt_str = eval_prompt.format(ground_truth=ground_truth, ai_response=ai_response_text)
 
-    _add_examiner(history, "⚖️ **【裁判官 (API LLM)】**\n\n")
+    _add_examiner(history, "⚖️ **【裁判官 (LLM)】**\n\n")
     yield history
 
     full_eval_text = ""
@@ -160,7 +196,7 @@ def _judge_answer(history, judge_llm, ground_truth, ai_response_text):
             history[-1]["content"] += token.delta
             yield history
     except Exception as e:
-        history[-1]["content"] += f"\n\n❌ 裁判官 API 呼叫失敗：{str(e)}"
+        history[-1]["content"] += f"\n\n❌ 裁判官呼叫失敗：{llm_settings.describe_exception(e)}（請到右上角 ⚙️ 設定確認）"
         # 裁判官失敗時，考卷還是要交代清楚，所以還是把標準答案揭曉出來，方便你
         # 自己對照；正常情況下（裁判官沒失敗）標準答案會在下面判定完成之後才
         # 揭曉，不會在考生作答前就先曝光。
@@ -231,32 +267,30 @@ def _run_law_category(history, judge_llm, all_law_nodes, n):
             "請根據以下法規背景資料，合成一個關於『勞基法』的具體問題，並提供一個絕對正確的標準答案。\n\n"
             "【資料】:\n{chunk}\n\n"
             "出題要求：問題必須包含足夠的『關鍵字』（例如具體法規名稱、特定數字或情境）。\n"
-            "請嚴格依照以下格式輸出：\n問題: [問題內容]\n答案: [標準答案內容]"
+            "請嚴格依照以下格式輸出，不要加任何其他說明、標題或粗體符號，第一行必須以「問題:」開頭，換行後以「答案:」開頭：\n問題: [問題內容]\n答案: [標準答案內容]"
         )
 
         # 出題官的原始輸出（含答案）只在背景累積，不即時顯示到畫面上，避免「答案」
         # 在考生作答前就先被人看到；生成完成、拆出「問題」之後，只把問題本身
         # 貼回考官那一側（右邊）的畫面，答案留到裁判官判定完才會一起揭曉。
-        _add_examiner(history, "📝 **【出題官・法規 (API LLM)】**\n\n🔒 出題中...（為避免劇透，答案會等裁判官判定完才顯示）")
+        _add_examiner(history, "📝 **【出題官・法規 (LLM)】**\n\n🔒 出題中...（為避免劇透，答案會等裁判官判定完才顯示）")
         yield history
-        full_gen_text = ""
         try:
-            for resp in judge_llm.stream_complete(generation_prompt.format(chunk=chunk_text)):
-                full_gen_text += resp.delta
+            question, ground_truth, full_gen_text = _generate_qa(judge_llm, generation_prompt.format(chunk=chunk_text))
         except Exception as e:
-            history[-1]["content"] = f"📝 **【出題官・法規 (API LLM)】**\n\n❌ 出題官 API 呼叫失敗：{str(e)}\n（請確認 LiteLLM Proxy 是否已啟動、API Key 是否正確）"
+            history[-1]["content"] = f"📝 **【出題官・法規 (LLM)】**\n\n❌ 出題官呼叫失敗：{llm_settings.describe_exception(e)}\n（請到右上角 ⚙️ 設定，用「測試」按鈕確認 API 或本機模型）"
             yield history
             continue
 
-        try:
-            question = full_gen_text.split("問題:")[1].split("答案:")[0].strip()
-            ground_truth = full_gen_text.split("答案:")[1].strip()
-        except Exception as e:
-            history[-1]["content"] = f"📝 **【出題官・法規 (API LLM)】**\n\n❌ 解析考題失敗：{str(e)}"
+        if question is None:
+            history[-1]["content"] = (
+                f"📝 **【出題官・法規 (LLM)】**\n\n❌ 解析考題失敗：出題模型連續 3 次都沒有照「問題:／答案:」的格式輸出。\n"
+                f"（模型原始輸出前 150 字：{full_gen_text[:150]!r}）\n"
+                f"這題跳過；如果一直發生，請到右上角 ⚙️ 設定改用雲端 API（本機 7B 模型較不容易遵守格式）。")
             yield history
             continue
 
-        history[-1]["content"] = f"📝 **【出題官・法規 (API LLM)】**\n\n{question}"
+        history[-1]["content"] = f"📝 **【出題官・法規 (LLM)】**\n\n{question}"
         yield history
         time.sleep(1.0)
 
@@ -321,29 +355,27 @@ def _run_attendance_category(history, judge_llm, n):
             "並提供絕對正確的標準答案（答案必須直接來自這筆紀錄，不可以瞎猜）。\n\n"
             "【打卡紀錄】:\n{chunk}\n\n"
             "出題要求：問題必須包含員工姓名，讓系統能查到對應的這筆紀錄。\n"
-            "請嚴格依照以下格式輸出：\n問題: [問題內容]\n答案: [標準答案內容]"
+            "請嚴格依照以下格式輸出，不要加任何其他說明、標題或粗體符號，第一行必須以「問題:」開頭，換行後以「答案:」開頭：\n問題: [問題內容]\n答案: [標準答案內容]"
         )
 
-        _add_examiner(history, "📝 **【出題官・考勤 (API LLM)】**\n\n🔒 出題中...（為避免劇透，答案會等裁判官判定完才顯示）")
+        _add_examiner(history, "📝 **【出題官・考勤 (LLM)】**\n\n🔒 出題中...（為避免劇透，答案會等裁判官判定完才顯示）")
         yield history
-        full_gen_text = ""
         try:
-            for resp in judge_llm.stream_complete(generation_prompt.format(chunk=record_text)):
-                full_gen_text += resp.delta
+            question, ground_truth, full_gen_text = _generate_qa(judge_llm, generation_prompt.format(chunk=record_text))
         except Exception as e:
-            history[-1]["content"] = f"📝 **【出題官・考勤 (API LLM)】**\n\n❌ 出題官 API 呼叫失敗：{str(e)}"
+            history[-1]["content"] = f"📝 **【出題官・考勤 (LLM)】**\n\n❌ 出題官呼叫失敗：{llm_settings.describe_exception(e)}\n（請到右上角 ⚙️ 設定，用「測試」按鈕確認 API 或本機模型）"
             yield history
             continue
 
-        try:
-            question = full_gen_text.split("問題:")[1].split("答案:")[0].strip()
-            ground_truth = full_gen_text.split("答案:")[1].strip()
-        except Exception as e:
-            history[-1]["content"] = f"📝 **【出題官・考勤 (API LLM)】**\n\n❌ 解析考題失敗：{str(e)}"
+        if question is None:
+            history[-1]["content"] = (
+                f"📝 **【出題官・考勤 (LLM)】**\n\n❌ 解析考題失敗：出題模型連續 3 次都沒有照「問題:／答案:」的格式輸出。\n"
+                f"（模型原始輸出前 150 字：{full_gen_text[:150]!r}）\n"
+                f"這題跳過；如果一直發生，請到右上角 ⚙️ 設定改用雲端 API（本機 7B 模型較不容易遵守格式）。")
             yield history
             continue
 
-        history[-1]["content"] = f"📝 **【出題官・考勤 (API LLM)】**\n\n{question}"
+        history[-1]["content"] = f"📝 **【出題官・考勤 (LLM)】**\n\n{question}"
         yield history
         time.sleep(1.0)
 
@@ -454,8 +486,12 @@ def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.
     # 初始化環境以確保 Settings.llm（考生模型）可用
     setup_environment()
 
-    # 出題官／裁判官改用獨立的 API LLM
-    judge_llm = get_judge_llm()
+    # 出題官／裁判官：依「⚙️ 設定」決定用雲端 API 或本機模型；API 不能用會自動改本機（見 llm_settings.py）
+    judge_llm, judge_note = llm_settings.build_judge_llm()
+    if judge_llm is None:
+        _add_examiner(history, judge_note)
+        yield history
+        return {}
 
     # 取得法規索引與所有文本塊（類別一要用）
     index = load_or_build_index()
@@ -472,9 +508,13 @@ def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.
         ),
     )
     yield history
+    _add_examiner(history, f"🧠 {judge_note}")
+    yield history
 
     law_results = yield from _run_law_category(history, judge_llm, all_law_nodes, questions_per_category)
+    yield from _flush_judge_notices(history, judge_llm)
     attendance_results = yield from _run_attendance_category(history, judge_llm, questions_per_category)
+    yield from _flush_judge_notices(history, judge_llm)
     guardrail_results = yield from _run_guardrail_category(history, questions_per_category)
 
     # ==========================================
