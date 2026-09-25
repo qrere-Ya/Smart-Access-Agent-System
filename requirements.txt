@@ -14,7 +14,7 @@
 #   - numpy：RAG 端原本鎖 1.26.4（註解說是為了相容性），門禁系統端是 2.2.6。
 #     兩個沒辦法同時滿足，這裡選擇門禁系統的 2.2.6（比較新，AI 視覺那邊的套件
 #     對版本比較敏感）。經查 tensorflow==2.21.0、onnxruntime==1.23.2、
-#     ultralytics==8.4.59、scikit-image==0.25.2 這幾個對 numpy 版本最敏感的套件，
+#     ultralytics==8.4.159、scikit-image==0.25.2 這幾個對 numpy 版本最敏感的套件，
 #     官方相依需求都是「numpy>=1.x」沒有設上限，所以 numpy 2.2.6 不會在安裝階段
 #     衝突。但這不保證程式「執行時」不會因為 numpy 2.x 的行為變化而出錯，
 #     如果之後 llama-index / faiss-cpu / huggingface-embeddings 在 numpy 2.x 下
@@ -115,7 +115,7 @@ onnx==1.21.0
 onnxruntime==1.23.2
 # retinaface 不放在這裡！請看上方「🚨 retinaface 必須另外安裝」的說明，
 # 裝完這份 requirements.txt 之後單獨執行：pip install retinaface --no-deps
-ultralytics==8.4.59
+ultralytics==8.4.159
 ultralytics-thop==2.0.19
 tensorflow==2.21.0
 tf_keras==2.21.0
