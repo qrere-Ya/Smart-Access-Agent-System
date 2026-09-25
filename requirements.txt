@@ -170,7 +170,7 @@ iso-639==0.4.5
 itsdangerous==2.2.0
 Jinja2==3.1.6
 joblib==1.5.3
-kiwisolver==1.5.0
+kiwisolver==1.5.1
 lazy-loader==0.5
 libclang==18.1.1
 markdown-it-py==4.2.0
