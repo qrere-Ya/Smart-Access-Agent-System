@@ -2,16 +2,48 @@ import cv2
 import numpy as np
 import os
 import datetime
-from ultralytics import YOLO
+from resource_manager import ManagedResource, cuda_available
 
 # 【合併專案調整】改用 __file__ 相對路徑，不管從哪個資料夾執行都能正確定位到專案根目錄
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# 初始化 YOLO 模型
-yolo_model = YOLO(os.path.join(_PROJECT_ROOT, 'models', 'yolov8s.pt'))
+# 【資源規範】YOLOv8s 原本在 import 時載入並永久常駐。改成受中央協調器管理：首次偵測才載入、
+# 閒置逾時或被驅逐時釋放；模型走 GPU（YOLO_DEVICE 可覆寫，無 CUDA 時自動退回 CPU）。
+_YOLO_PREF = os.environ.get("YOLO_DEVICE", "cuda:0")
+
+
+class _YoloResource(ManagedResource):
+    def __init__(self):
+        super().__init__("security.yolov8s", est_ram_mb=500,
+                         est_vram_mb=0 if _YOLO_PREF == "cpu" else 800, idle_ttl=60)
+        self.device = "cpu"
+
+    def _load(self):
+        from ultralytics import YOLO  # 延後 import（會帶入 torch）
+        if _YOLO_PREF != "cpu" and not cuda_available():
+            print("[security] ⚠️ 找不到可用的 CUDA，YOLO 退回 CPU。")
+            self.device = "cpu"
+        else:
+            self.device = _YOLO_PREF
+        return YOLO(os.path.join(_PROJECT_ROOT, 'models', 'yolov8s.pt'))
+
+    def _unload(self, impl):
+        try:
+            impl.to("cpu")
+        except Exception:
+            pass
+
+
+_yolo = _YoloResource()
+
+
+def release_yolo():
+    _yolo.release("explicit")
+
 
 def count_persons(frame):
-    results = yolo_model.predict(source=frame, verbose=False, conf=0.6)
+    with _yolo.use() as yolo_model:
+        results = yolo_model.predict(source=frame, verbose=False, conf=0.6, device=_yolo.device)
     person_boxes = []
 
     # 取得畫面總面積，用來做比例尺

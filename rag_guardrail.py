@@ -7,12 +7,89 @@
 向量索引，也不負責組出最終答案。
 """
 
+import threading
+
 from scipy.spatial.distance import cosine
 from llama_index.core import Settings
 
 import database_mgr
 import rag_sql_engine
 import ablation_config
+import guardrail_policy
+
+
+# 【2026-09-22，效能：check_semantic_guardrail() / check_query_route() 共用嵌入快取】
+# 健康檢查發現這兩支函式在同一題問答裡，各自獨立呼叫 embed_model.get_text_embedding()：
+#   1. check_query_route() 的 attendance_domain / law_domain 是兩段寫死不變的描述文字，
+#      卻每一題都重新算一次嵌入，從沒被快取過。
+#   2. 沒有上一句上下文時（例如對話第一句），check_semantic_guardrail() 判斷「當句」
+#      跟 check_query_route() 判斷「當句」用的是同一段文字，卻各自獨立呼叫了一次。
+# 這裡刻意不改動任何判斷邏輯本身——guardrail_policy.py 的門檻/規則、check_query_route()
+# 該不該合併上下文的規則都完全沒動——只是把「同一個 embed_model、同一段文字」算過的
+# 嵌入結果記住，重複算到就直接命中快取，回傳值保證跟沒有快取時完全一樣，純粹省掉
+# 重複的模型前向運算。用 (id(embed_model), text) 當 key 而不是存 embed_model 物件本身，
+# 是為了不讓這個快取多保留一份 embed_model（rag_resources.py 的 ManagedHFEmbedding
+# 代理）的參照，避免日後不小心影響到它的釋放邏輯。
+_EMBED_CACHE_MAXSIZE = 32
+_embed_cache_lock = threading.Lock()
+_embed_text_cache = {}          # {(id(embed_model), text): 嵌入向量}
+_embed_text_cache_order = []    # 依寫入順序記錄 key，超過上限時 FIFO 淘汰最舊的一筆
+
+
+def _cached_get_text_embedding(embed_model, text):
+    key = (id(embed_model), text)
+    with _embed_cache_lock:
+        cached = _embed_text_cache.get(key)
+    if cached is not None:
+        return cached
+    vec = embed_model.get_text_embedding(text)
+    with _embed_cache_lock:
+        if key not in _embed_text_cache:
+            _embed_text_cache[key] = vec
+            _embed_text_cache_order.append(key)
+            if len(_embed_text_cache_order) > _EMBED_CACHE_MAXSIZE:
+                oldest = _embed_text_cache_order.pop(0)
+                _embed_text_cache.pop(oldest, None)
+        return _embed_text_cache[key]
+
+
+class _CachedEmbedModel:
+    """
+    輕量包裝：get_text_embedding() 接到上面的共用快取；get_text_embedding_batch()
+    直接透傳給原本的 embed_model，不重複做一層跟 guardrail_policy.py 的 _ANCHOR_CACHE
+    一樣的批次快取。
+
+    每個底層 embed_model 只會透過 _get_cached_embed_model() 建立「一份」這種包裝、
+    重複使用同一個物件，不會每次呼叫都重新包一個新的——guardrail_policy.py 自己的
+    _ANCHOR_CACHE 是用 id(傳進去的 embed_model) 當 key，如果這裡每次都包一個新物件，
+    會讓它的錨點快取一直被判定成「換了一個 embed_model」而失效、每題都要重算 24 個
+    錨點的嵌入，反而更浪費。
+    """
+
+    def __init__(self, embed_model):
+        self._embed_model = embed_model
+
+    def get_text_embedding(self, text):
+        return _cached_get_text_embedding(self._embed_model, text)
+
+    def get_text_embedding_batch(self, texts):
+        return self._embed_model.get_text_embedding_batch(texts)
+
+
+_wrapped_embed_model_lock = threading.Lock()
+_wrapped_embed_model_cache = {}  # {id(真正的 embed_model): 對應的 _CachedEmbedModel 單例}
+
+
+def _get_cached_embed_model(embed_model):
+    """回傳 embed_model 對應的、穩定不變的快取包裝物件（同一個底層 embed_model 只會有一份，
+    確保傳給 guardrail_policy.make_margin_fn() 的物件 id() 在每次呼叫之間保持一致）。"""
+    key = id(embed_model)
+    with _wrapped_embed_model_lock:
+        wrapped = _wrapped_embed_model_cache.get(key)
+        if wrapped is None:
+            wrapped = _CachedEmbedModel(embed_model)
+            _wrapped_embed_model_cache[key] = wrapped
+        return wrapped
 
 
 # 【2026-09-08，六度更新：關鍵字快速通道】
@@ -112,7 +189,10 @@ def extract_last_user_context(history):
     """
     if not history:
         return None
-    user_messages = [item.get("content", "") for item in history if item.get("role") == "user"]
+    # 【2026-09-20】Gradio 的 content 可能是 [{'text': ..., 'type': 'text'}] 清單，先轉成純文字，
+    # 不然 repr 字串會原樣進到嵌入模型與 Debug 訊息裡。
+    user_messages = [guardrail_policy.content_to_text(item.get("content", ""))
+                     for item in history if item.get("role") == "user"]
     if len(user_messages) < 2:
         # 少於 2 則使用者訊息，代表這是對話的第一句，沒有「上一句」可以參考
         return None
@@ -126,43 +206,26 @@ def check_semantic_guardrail(query: str, context: str = None) -> bool:
     if not ablation_config.USE_SEMANTIC_GUARDRAIL:
         return _check_keyword_only_guardrail(query)
 
-    positive_domain = (
-        "查詢員工打卡紀錄、上下班時間、遲到早退狀況、勞動基準法規、"
-        "薪資扣除規定、加班費計算、門禁系統出入紀錄、請假規定、"
-        "員工姓名查詢、特定日期出勤紀錄、勞基法條文解釋、特殊工作者規定。"
+    # 【2026-09-20 重寫，見 guardrail_policy.py 模組說明】舊版「一律把上一句拼進嵌入文字 +
+    # 單一混合錨點 + sim_neg > sim_pos」實測會讓離題問題在多輪對話中 80% 突破。新版：
+    # 意圖詞規則 -> 只看當前句的多錨點差值 -> 灰區且像追問時才用上一句救援。
+    # 判定邏輯全部在 guardrail_policy.decide()（純函式，可單獨測試）。
+    margin_fn = guardrail_policy.make_margin_fn(_get_cached_embed_model(Settings.embed_model))
+    passed, reason, detail = guardrail_policy.decide(
+        guardrail_policy.content_to_text(query), guardrail_policy.content_to_text(context), margin_fn
     )
-    negative_domain = (
-        "寫程式、Python腳本、翻譯、數學計算、寫作、寫詩、聊天閒扯、"
-        "歷史故事、天氣預報、醫療建議、與人事差勤完全無關的任務。"
-    )
 
-    # 【2026-09-02】如果有「上一句話」的上下文，跟這一句合併起來再算語意相似度，
-    # 讓「有名子嗎？」這種需要上下文才聽得懂的簡短追問，也能正確判斷成合法範圍內的問題。
-    embed_text = f"{context}，{query}" if context else query
+    print(f"  [Debug Guardrail] {'放行' if passed else '攔截'}（{reason}）"
+          + (f" | 當句 正向 {detail['pos']:.4f} 負向 {detail['neg']:.4f} 差值 {detail['margin']:+.4f}"
+             if "margin" in detail else f" | 意圖詞規則: {detail.get('intent')}")
+          + (f" | 上一句差值 {detail['prev_margin']:+.4f}" if "prev_margin" in detail else "")
+          + (f" | 併上一句後差值 {detail['ctx_margin']:+.4f}" if "ctx_margin" in detail else ""))
 
-    embed_model = Settings.embed_model
-    query_embedding = embed_model.get_text_embedding(embed_text)
-    pos_embedding = embed_model.get_text_embedding(positive_domain)
-    neg_embedding = embed_model.get_text_embedding(negative_domain)
-
-    sim_pos = 1 - cosine(query_embedding, pos_embedding)
-    sim_neg = 1 - cosine(query_embedding, neg_embedding)
-
-    print(f"  [Debug Guardrail] 正向相似度: {sim_pos:.4f} | 負向相似度: {sim_neg:.4f}"
-          + (f" | (已合併上一句上下文: 「{context}」)" if context else ""))
-
-    # 對比判定：如果跟非法領域比較像，或者跟合法領域極度無關，就攔截
-    if sim_neg > sim_pos or sim_pos < 0.3:
-        # 【P0，2026-09-12 新增】稽核紀錄：guardrail 攔截事件，不影響判斷結果本身。
-        database_mgr.log_llm_usage(
-            event_type="guardrail", question=query, guardrail_pass=False, similarity_score=sim_pos
-        )
-        return False
-    # 【P0，2026-09-12 新增】稽核紀錄：guardrail 放行事件，不影響判斷結果本身。
+    # 【P0，2026-09-12 新增】稽核紀錄：guardrail 放行／攔截事件，不影響判斷結果本身。
     database_mgr.log_llm_usage(
-        event_type="guardrail", question=query, guardrail_pass=True, similarity_score=sim_pos
+        event_type="guardrail", question=query, guardrail_pass=passed, similarity_score=detail.get("pos")
     )
-    return True
+    return passed
 
 
 def check_query_route(query: str, context: str = None) -> str:
@@ -227,7 +290,12 @@ def check_query_route(query: str, context: str = None) -> str:
     # 理由相同：「有名子嗎？」這種簡短追問單獨看毫無線索，合併上一句才知道在問員工名冊。
     embed_text = f"{context}，{query}" if context else query
 
-    embed_model = Settings.embed_model
+    # 【效能】attendance_domain / law_domain 是寫死不變的描述文字，且沒有上下文時
+    # 這裡的 query 跟 check_semantic_guardrail() 剛算過的「當句」是同一段文字——
+    # 用 _get_cached_embed_model() 包裝過的 embed_model，三次呼叫裡只要文字重複
+    # （不管是自己前面算過的、還是 check_semantic_guardrail() 算過的），都會直接命中
+    # 快取，不會真的再跑一次 bge-m3 前向運算；分類結果跟沒有快取時保證完全一樣。
+    embed_model = _get_cached_embed_model(Settings.embed_model)
     query_embedding = embed_model.get_text_embedding(embed_text)
     att_embedding = embed_model.get_text_embedding(attendance_domain)
     law_embedding = embed_model.get_text_embedding(law_domain)

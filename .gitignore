@@ -10,6 +10,11 @@ models/**/*.onnx
 models/**/*.pt
 models/**/*.tar.bz2
 
+# 2026-09-18：download_bge_m3_local.py 下載的 BAAI/bge-m3 embedding 模型本機
+# 快取（完整約 2GB，.safetensors/tokenizer 等檔案不會被上面的規則擋到），
+# 每台電腦各自下載一次即可，不進版控
+models/bge-m3/
+
 # 2026-09-17：TTS 模型 vits-piper-zh_CN-huayan-medium 整個資料夾都不進版控——
 # 主模型檔 .onnx 已經被上面 models/**/*.onnx 擋掉，若只留底下的 espeak-ng-data/
 # 語言字典跟其他附屬檔案，會變成沒有主模型檔配套、單獨也跑不動的雜項檔案，乾脆整個排除
@@ -31,3 +36,7 @@ research/antispoof_training/data/*
 !research/antispoof_training/data/.gitkeep
 research/antispoof_training/outputs/*
 !research/antispoof_training/outputs/.gitkeep
+
+# 2026-09-20 使用者在網頁「⚙️ 設定」填的 API 金鑰存在這個檔案，絕對不能進版控
+llm_settings.json
+llm_settings.json.tmp
