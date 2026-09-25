@@ -1,0 +1,67 @@
+rules:
+  - id: bare-except
+    languages: [python]
+    severity: WARNING
+    message: >-
+      捕捉所有例外（bare except 或 except Exception）卻沒有記錄或重新拋出，
+      可能讓外部 API 斷線或模組錯誤被靜默吞掉。請至少記錄錯誤，必要時重新拋出。
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try:
+                  ...
+              except:
+                  pass
+          - pattern: |
+              try:
+                  ...
+              except Exception:
+                  pass
+
+  - id: requests-call-without-timeout
+    languages: [python]
+    severity: WARNING
+    message: >-
+      requests.get/post/put/delete 呼叫沒有設定 timeout，外部 API 若無回應會讓
+      呼叫端無限期卡住。請加上 timeout=<秒數> 參數。
+    patterns:
+      - pattern-either:
+          - pattern: requests.get(...)
+          - pattern: requests.post(...)
+          - pattern: requests.put(...)
+          - pattern: requests.delete(...)
+      - pattern-not: requests.get(..., timeout=$T, ...)
+      - pattern-not: requests.post(..., timeout=$T, ...)
+      - pattern-not: requests.put(..., timeout=$T, ...)
+      - pattern-not: requests.delete(..., timeout=$T, ...)
+
+  - id: sqlite-connect-without-cleanup
+    languages: [python]
+    severity: WARNING
+    message: >-
+      sqlite3.connect() 建立的連線沒有透過 with 陳述式或 try/finally 保證關閉，
+      若中間拋出例外連線會洩漏。請改用 `with sqlite3.connect(...) as conn:`
+      或在 try/finally 中呼叫 conn.close()。
+    patterns:
+      - pattern: $CONN = sqlite3.connect(...)
+      - pattern-not-inside: |
+          with sqlite3.connect(...) as $CONN:
+              ...
+      - pattern-not-inside: |
+          try:
+              ...
+          finally:
+              ...
+
+  - id: string-formatted-sql
+    languages: [python]
+    severity: ERROR
+    message: >-
+      以 f-string／字串拼接／% 格式化組出 SQL 再執行，是 SQL Injection 的典型成因。
+      請改用參數化查詢（execute(sql, params)）。
+    patterns:
+      - pattern-either:
+          - pattern: $CUR.execute(f"...")
+          - pattern: $CUR.execute("..." + ...)
+          - pattern: $CUR.execute("...".format(...))
+          - pattern: $CUR.execute("...%s..." % ...)
