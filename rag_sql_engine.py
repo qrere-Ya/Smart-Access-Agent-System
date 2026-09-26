@@ -14,6 +14,8 @@ import pathlib
 import threading
 import time
 
+import sqlglot
+from sqlglot import exp
 from sqlalchemy import create_engine
 from llama_index.core import SQLDatabase
 from llama_index.core.query_engine import NLSQLTableQueryEngine
@@ -21,6 +23,7 @@ from llama_index.core.prompts import PromptTemplate
 from llama_index.core.prompts.prompt_type import PromptType
 
 import ablation_config
+from fuzzy_match import min_edit_distance_in_text
 
 # ==========================================
 # 門禁系統即時資料庫位置
@@ -195,6 +198,41 @@ def _ensure_safe_employee_roster_view(db_path: str):
         conn.close()
 
 
+# 【2026-09-26，安全修補】include_tables=["Attendance","EmployeeRoster"] 只在組 LLM
+# prompt 時用來決定要秀哪些表的 schema 給 LLM 看，不影響 SQLDatabase.run_sql() 實際
+# 執行 SQL 時的行為——llama_index 原始實作的 run_sql() 是直接
+# connection.execute(text(command))，完全不檢查 include_tables，即使 LLM（受提示詞
+# 注入或模型自身錯誤）生成了查詢 Users（含人臉 embedding）、llm_usage_log（其他使用者
+# 對話紀錄）等白名單外資料表的 SQL，一樣會被正常執行、正常回傳結果。這裡覆寫
+# run_sql()，在真正執行前用 sqlglot 解析 SQL 的 AST 做白名單驗證：只允許單一 SELECT
+# 陳述式（擋掉 ATTACH/PRAGMA/多陳述式），且陳述式（含子查詢）裡引用到的資料表都必須
+# 在白名單內。驗證失敗時拋出 ValueError，會被 try_attendance_answer() 既有的
+# except Exception 接住，等同「這題查不到」，不會讓例外整個往外炸。
+_ALLOWED_SQL_TABLES = {"attendance", "employeeroster"}
+
+
+class SafeSQLDatabase(SQLDatabase):
+    def run_sql(self, command: str):
+        try:
+            statements = [s for s in sqlglot.parse(command, read="sqlite") if s is not None]
+        except Exception as e:
+            raise ValueError(f"SQL 解析失敗，拒絕執行: {e}") from e
+
+        if len(statements) != 1:
+            raise ValueError(f"只允許單一 SELECT 陳述式，拒絕執行（偵測到 {len(statements)} 句）。")
+
+        statement = statements[0]
+        if not isinstance(statement, exp.Select):
+            raise ValueError(f"只允許 SELECT 陳述式，拒絕執行（偵測到 {type(statement).__name__}）。")
+
+        referenced_tables = {table.name.lower() for table in statement.find_all(exp.Table)}
+        disallowed = referenced_tables - _ALLOWED_SQL_TABLES
+        if disallowed:
+            raise ValueError(f"查詢引用了白名單外的資料表 {disallowed}，拒絕執行。")
+
+        return super().run_sql(command)
+
+
 def build_sql_engine():
     """
     建立即時查詢門禁系統資料庫 (database.db) 的 SQL 查詢引擎。
@@ -226,7 +264,7 @@ def build_sql_engine():
 
     try:
         engine = create_engine("sqlite://", creator=_readonly_connection)
-        sql_database = SQLDatabase(
+        sql_database = SafeSQLDatabase(
             engine,
             include_tables=["Attendance", "EmployeeRoster"],
             view_support=True,  # 一定要打開，EmployeeRoster 是視圖不是表，沒開這個會被忽略
@@ -297,6 +335,13 @@ def _get_known_employee_names():
 
 _DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
+# 【2026-09-26，錯字容錯，务必保守】中文姓名通常只有 2-4 個字，如果模糊比對的門檻
+# 放太寬，「陳柏豫」跟「陳柏羽」這種只差一個字的不同人姓名很容易被誤判成同一人，
+# 等於把 A 的打卡紀錄當成 B 的回答出去，是新的資料錯置風險，比「查不到」嚴重得多。
+# 因此這裡只容許 1 個字元的編輯距離，而且下面比對邏輯規定「同時有兩個以上候選人
+# 都在門檻內」時一律放棄、不猜（見 _try_deterministic_date_lookup 內的用法）。
+_EMPLOYEE_NAME_FUZZY_MAX_DISTANCE = 1
+
 
 def _try_deterministic_date_lookup(message: str):
     """
@@ -329,6 +374,24 @@ def _try_deterministic_date_lookup(message: str):
         if name and name in message:
             matched_name = name
             break
+
+    if matched_name is None and known_names:
+        # 精確比對沒找到，改用模糊比對抓拼字錯誤（見上面 _EMPLOYEE_NAME_FUZZY_MAX_DISTANCE
+        # 的說明）。如果同時有兩個以上候選人都在門檻內，代表訊息裡的錯字剛好卡在兩個真實
+        # 姓名中間，寧可查不到、fallback 給下面的 NL-to-SQL 路線，也不要亂猜一個人選。
+        fuzzy_candidates = [
+            name for name in known_names
+            if name and (
+                (distance := min_edit_distance_in_text(name, message)) is not None
+                and distance <= _EMPLOYEE_NAME_FUZZY_MAX_DISTANCE
+            )
+        ]
+        if len(fuzzy_candidates) == 1:
+            matched_name = fuzzy_candidates[0]
+            print(f"  [Debug SQL] 姓名模糊比對命中「{matched_name}」（訊息中沒有完全相符的姓名，判定為打字誤差）")
+        elif len(fuzzy_candidates) > 1:
+            print(f"  [Debug SQL] 姓名模糊比對有多個候選人 {fuzzy_candidates}，無法判斷是哪一位，放棄比對")
+
     if not matched_name:
         return None
 

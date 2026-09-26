@@ -16,6 +16,7 @@ import database_mgr
 import rag_sql_engine
 import ablation_config
 import guardrail_policy
+from fuzzy_match import min_edit_distance_in_text
 
 
 # 【2026-09-22，效能：check_semantic_guardrail() / check_query_route() 共用嵌入快取】
@@ -99,6 +100,13 @@ def _get_cached_embed_model(embed_model):
 # 的高信心度詞組，直接判定 attendance、跳過語意相似度計算，不會誤傷像「員工遲到是否
 # 可以扣除整天薪水」這種真正在問規則、句子裡沒有這些詞組的問題。
 _ATTENDANCE_KEYWORD_FAST_PATH = ("打卡時間", "打卡紀錄", "系統判定狀態", "打卡狀態")
+
+# 【2026-09-26，錯字容錯】上面的關鍵字原本是精確子字串比對，打錯一個字（例如
+# 「打卡紀錄」打成「打考紀錄」）就完全不會命中，只能繼續往下跑語意相似度分類，
+# 平白多花一次不必要的 embedding 運算。這裡允許最多 1 個字元的增刪改，取捨見
+# fuzzy_match.py 的說明。門檻設得比姓名比對寬鬆：這裡誤判的代價很低（頂多多繞去
+# 語意分類那一層，不會像姓名比對錯誤那樣把 A 的資料當成 B 的回答出去）。
+_ATTENDANCE_KEYWORD_FUZZY_MAX_DISTANCE = 1
 
 # 【2026-09-14，學術強化方向 1：消融實驗】check_semantic_guardrail() 的「純關鍵字過濾」
 # 對照組專用詞庫，只在 ablation_config.USE_SEMANTIC_GUARDRAIL 被明確關掉時才會用到，
@@ -266,8 +274,9 @@ def check_query_route(query: str, context: str = None) -> str:
     # 直接落到下面純語意分類，藉此量化快速通道對路由正確率的實際貢獻。
     if ablation_config.USE_KEYWORD_FASTPATH:
         for keyword in _ATTENDANCE_KEYWORD_FAST_PATH:
-            if keyword in query:
-                print(f"  [Debug Router] 命中關鍵字快速通道「{keyword}」，直接判定為 attendance（跳過語意相似度計算）")
+            distance = min_edit_distance_in_text(keyword, query)
+            if distance is not None and distance <= _ATTENDANCE_KEYWORD_FUZZY_MAX_DISTANCE:
+                print(f"  [Debug Router] 命中關鍵字快速通道「{keyword}」（編輯距離 {distance}），直接判定為 attendance（跳過語意相似度計算）")
                 # 【P0，2026-09-12 新增】稽核紀錄：快速通道命中，沒有語意相似度分數可記。
                 database_mgr.log_llm_usage(event_type="route", question=query, route="attendance")
                 return "attendance"

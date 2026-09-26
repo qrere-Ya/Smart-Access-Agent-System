@@ -78,6 +78,15 @@ llama-index-embeddings-openai==0.7.0
 llama-index-llms-openai==0.8.0
 llama-index-vector-stores-faiss==0.7.0
 llama-index-readers-file==0.7.0
+# rag_chat_engine.py 的混合檢索（向量+BM25+RRF）用來提升法規查詢的錯字容錯與
+# 關鍵字精確匹配能力；bm25s/PyStemmer 是 llama-index-retrievers-bm25 的依賴。
+# 【實測發現】這個版本的 tokenizer= 參數已 deprecated 且完全不生效（傳了只印警告，
+# 底層還是用英文正則分詞，中文會全部算出 0 分），改成用 jieba 手動把語料庫跟查詢
+# 都預先斷詞、插入空白（見 rag_chat_engine.py 的 _ChineseBM25Retriever 說明）。
+llama-index-retrievers-bm25==0.8.0
+bm25s==0.3.11
+PyStemmer==2.2.0.3
+jieba==0.42.1
 # faiss-cpu 也要跟著升級：1.8.0 這個版本是用 numpy 1.x 的 C API 編譯的，跟 numpy==2.2.6
 # 一起用會直接壞掉（AttributeError: _ARRAY_API not found）。我去查了 faiss 官方的
 # CHANGELOG，正式支援 numpy 2 是從 1.13.0 開始（PR #4523「Upgrade Faiss OSS side to
@@ -100,6 +109,11 @@ pypdf==6.16.2
 # 以後就不會再無預警地因為套件自動升級而壞掉了。
 gradio==6.26.0
 SQLAlchemy==2.0.35
+# rag_sql_engine.py 的 SafeSQLDatabase 用來在執行前解析 LLM 生成的 SQL AST、
+# 驗證只查白名單資料表，防止 include_tables 只限制 prompt 內容、不限制實際執行範圍
+sqlglot==30.19.0
+# fuzzy_match.py 用來讓考勤查詢的關鍵字路由/員工姓名比對容忍打錯字（見該檔案說明）
+rapidfuzz==3.14.5
 
 # ---- 科學計算 / 深度學習基礎（版本取兩邊較新者，見上方說明） ----
 numpy==2.2.6
