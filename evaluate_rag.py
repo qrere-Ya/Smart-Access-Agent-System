@@ -1,8 +1,24 @@
+"""
+evaluate_rag.py：RAG 系統的 LLM-as-a-Judge 自動化評估。
+
+主要功能：
+  - 三類測驗：純法規（從法規知識塊出題，測檢索與答題）、純考勤（從真實打卡紀錄出題，測 SQL 查詢）、
+    正負例（固定問題池，測防護欄放行與攔截）
+  - 出題官與裁判官由 llm_settings 提供（雲端 API 或本機模型），考生是系統本身
+  - 同一個對話視窗以角色分左右：考生作答在左（assistant），出題官、裁判官、診斷在右（user）
+  - 彙總各類別合格率、檢索命中率、路由正確率、幻覺率與綜合判定，並回傳量化結果供消融實驗使用
+
+串接模組：
+  - main_guardrail_rag：以 RAG 路由取得考生作答，並讀取檢索與路由紀錄
+  - llm_settings：出題官與裁判官 LLM
+  - ablation_config：在報告中標註本輪機制開關
+  - app：「Execute Evaluate」按鈕呼叫
+  - run_single_ablation_eval：無介面執行並取得量化結果
+"""
 import os
 import random
 import time
 from llama_index.core import PromptTemplate, Settings
-from llama_index.llms.openai import OpenAI as OpenAICompatibleLLM
 from main_guardrail_rag import (
     get_chat_response,
     stream_chat_response,
@@ -15,16 +31,7 @@ from main_guardrail_rag import (
 import ablation_config
 import llm_settings
 
-# ==========================================
-# 類別三「正負例」測試用的固定問題池
-# 直接對應 main_guardrail_rag.check_semantic_guardrail() 裡定義的正/負定義域，
-# 確保測的就是防護欄自己宣稱要守住的範圍。
-# ==========================================
-# 【2026-09-12，學術強化方向 5：擴大評估樣本數】原本每個池只有 5 題，questions_per_category
-# 調高之後（例如 20），_run_guardrail_category() 的 good_pool[:n] / bad_pool[:n] 會因為
-# 池子不夠大而悄悄被截斷成 5 題，跟「純法規」「純考勤」兩類實際跑的題數對不上，統計結果
-# 會失真。這裡把兩個池子各自擴充到 20 題，涵蓋度盡量對應 check_semantic_guardrail() 裡
-# positive_domain／negative_domain 描述的範圍，讓三大類在同一個 n 下題數能真正對齊。
+# 正負例測試的固定問題池，涵蓋防護欄的正向與負向範圍
 GOOD_SAMPLE_QUESTIONS = [
     "請問員工遲到要怎麼計算扣薪？",
     "查詢王大明本週的打卡紀錄",
@@ -73,15 +80,13 @@ BAD_SAMPLE_QUESTIONS = [
 
 import re
 
-# 【2026-09-20】出題官（尤其是本機 7B 模型）常常不會一字不差照「問題:／答案:」格式輸出：
-# 用全形冒號「問題：」、加粗「**問題**:」、加編號、或整段沒有答案，舊版用
-# split("問題:")[1] 直接取值，找不到標記就丟 IndexError（list index out of range）＝「解析考題失敗」。
-# 改成：容許全形/半形冒號、markdown 符號、英文 Question/Answer；解析不出來就自動重問（最多 3 次）。
+# 解析出題官輸出的「問題/答案」，容許全形半形冒號、markdown 符號與英文標記
 _QA_RE = re.compile(r"(?:問題|Question)\s*[:：]\s*(?P<q>.+?)\s*(?:標準)?(?:答案|Answer)\s*[:：]\s*(?P<a>.+)",
                     re.S | re.I)
 
 
 def _strip_wrapping(s):
+    """去掉最外層的括號包裹"""
     s = s.strip()
     if len(s) >= 2 and s[0] in "[［【「" and s[-1] in "]］】」":
         s = s[1:-1].strip()
@@ -89,12 +94,12 @@ def _strip_wrapping(s):
 
 
 def _parse_qa(text):
-    """從出題官輸出取出 (問題, 標準答案)；格式對不上回傳 None。"""
+    """從出題官輸出取出 (問題, 標準答案)，格式對不上回傳 None"""
     cleaned = re.sub(r"[*`#]+", "", text or "")
     m = _QA_RE.search(cleaned)
     if not m:
         return None
-    q = re.sub(r"\s*\d+[.、)）]\s*$", "", m.group("q"))  # 去掉「2. 標準答案」前面殘留的編號
+    q = re.sub(r"\s*\d+[.、)）]\s*$", "", m.group("q"))  # 去掉答案標記前殘留的編號
     q, a = _strip_wrapping(q), _strip_wrapping(m.group("a"))
     if len(q) < 4 or not a:
         return None
@@ -102,11 +107,7 @@ def _parse_qa(text):
 
 
 def _generate_qa(judge_llm, prompt_str, tries=3):
-    """
-    請出題官出題並解析；格式不對就重問（最多 tries 次）。
-    回傳 (問題, 標準答案, 最後一次的原始輸出)；全部失敗時前兩者為 None。
-    LLM 呼叫本身的例外（API/本機模型壞了）不在這裡吞掉，交給呼叫端顯示白話原因。
-    """
+    """請出題官出題並解析，格式不對最多重問 tries 次；回傳 (問題, 標準答案, 最後一次原始輸出)，全部失敗時前兩者為 None"""
     last_text = ""
     for _ in range(tries):
         text = ""
@@ -120,53 +121,31 @@ def _generate_qa(judge_llm, prompt_str, tries=3):
 
 
 def _add_examiner(history, text):
-    """
-    【2026-09-08，三度修正：改回單一 history，但嚴格用「角色」分左右】
-    出題官／裁判官／系統訊息／每題診斷，一律用 role="user" 塞進同一份 history。
-    Gradio 的 Chatbot（messages 格式）預設就是 user 訊息靠右、assistant 訊息靠左，
-    這裡刻意「只」用這個角色來放考官這一側的內容，確保右邊看到的永遠是出題／
-    評分／系統這些幕後過程，不會混進考生自己的作答。
-    """
+    """加入考官側訊息（出題官、裁判官、系統、診斷），一律用 user 角色，在畫面右側"""
     history.append({"role": "user", "content": text})
 
 
 def _start_student_turn(history, initial_text=""):
-    """
-    考生（Edge AI）開始作答，一律用 role="assistant" 塞進同一份 history，畫面上
-    會靠左顯示——跟上面 _add_examiner() 嚴格對應，左邊永遠只會出現考生自己的
-    題目回應，絕對不會出現出題官、裁判官、系統訊息、診斷資訊這些內容。
-    回傳這則訊息本身（history 的最後一筆），方便呼叫端用 `+=` 逐字接上串流內容。
-    """
+    """開始考生作答，一律用 assistant 角色，在畫面左側；回傳該則訊息供後續串流接字"""
     history.append({"role": "assistant", "content": initial_text})
     return history[-1]
 
 
 def get_judge_llm():
-    """
-    出題官／裁判官專用的 LLM（跟考生 Settings.llm 是分開的物件）。
-
-    【2026-09-20 改版】不再固定走 LiteLLM Proxy -> NVIDIA。改由網頁右上角「⚙️ 設定」決定：
-    使用者自己填 API 金鑰，或選「只用本機模型」；API 金鑰無效／連不上時自動改用本機 Ollama 模型。
-    詳見 llm_settings.py。回傳 None 代表連本機模型也不能用（run_dynamic_evaluation 會用白話說明並中止）。
-    舊的環境變數 LITELLM_* 不再使用。
-    """
+    """取得出題官/裁判官 LLM（由設定面板決定），回傳 None 代表連本機模型也不能用"""
     llm, _note = llm_settings.build_judge_llm()
     return llm
 
 
 def _flush_judge_notices(history, judge_llm):
-    """評估途中如果 API 失效、自動切到本機模型，在畫面上補一行白話提示（不是錯誤）。"""
+    """評估途中若 API 失效並自動切到本機模型，在畫面補一行提示"""
     for note in judge_llm.pop_notices() if hasattr(judge_llm, "pop_notices") else []:
         _add_examiner(history, note)
         yield history
 
 
 def _judge_answer(history, judge_llm, ground_truth, ai_response_text):
-    """
-    共用的「裁判官」評分流程：把標準答案跟 AI 答案交給 API LLM 評分，
-    串流輸出到畫面右邊（考官這一側），並回傳 (是否合格, 不合格分類)。
-    分類三選一：矛盾 / 遺漏關鍵資訊 / 幻覺瞎掰（合格時分類為「無」）。
-    """
+    """裁判官評分：比較標準答案與 AI 答案並串流顯示，回傳 (是否合格, 不合格分類：矛盾/遺漏關鍵資訊/幻覺瞎掰，合格為「無」)"""
     eval_prompt = PromptTemplate(
         "作為嚴格但公正的法務評分員，請比較【標準答案】與【AI答案】。\n\n"
         "【標準答案】(核心考點):\n{ground_truth}\n\n"
@@ -197,29 +176,19 @@ def _judge_answer(history, judge_llm, ground_truth, ai_response_text):
             yield history
     except Exception as e:
         history[-1]["content"] += f"\n\n❌ 裁判官呼叫失敗：{llm_settings.describe_exception(e)}（請到右上角 ⚙️ 設定確認）"
-        # 裁判官失敗時，考卷還是要交代清楚，所以還是把標準答案揭曉出來，方便你
-        # 自己對照；正常情況下（裁判官沒失敗）標準答案會在下面判定完成之後才
-        # 揭曉，不會在考生作答前就先曝光。
+        # 裁判官失敗時仍揭曉標準答案，方便自行對照
         history[-1]["content"] += f"\n\n📖 **標準答案（因裁判官呼叫失敗，提前公開）：** {ground_truth}"
         yield history
         return (False, "未知（API失敗）")
     time.sleep(1.0)
 
-    # 【2026-09-08，發現並修正】原本這裡嚴格要求裁判官輸出「[合格]」「[不合格]」
-    # 這種『連方括號一起寫』的格式，才判定得出來。但實測發現裁判官（真正的 API LLM）
-    # 有時候只會寫「[判定結果] 合格」（值本身沒有再包一層方括號），這時候舊邏輯
-    # 兩個 in 判斷都不會命中、掉進 else 保守視為不合格——導致畫面上明明顯示
-    # 「[判定結果] 合格」，最後彙總報告卻把這一題算成不合格，答題合格率因此被
-    # 錯誤拉低（不是真的答錯，是解析邏輯太嚴格漏判）。改成直接比對「不合格」／
-    # 「合格」這兩個中文詞本身，不要求一定要連著方括號：先判「不合格」（一定要放在
-    # 前面判斷，因為「不合格」這個詞本身就包含「合格」兩個字，順序判斷才不會誤判），
-    # 沒有才判「合格」，兩種寫法（有沒有方括號包住）都能正確辨識。
+    # 直接比對「不合格」「合格」兩個詞，不要求方括號；先判不合格，因為它包含「合格」兩字
     if "不合格" in full_eval_text:
         is_pass = False
     elif "合格" in full_eval_text:
         is_pass = True
     else:
-        is_pass = False  # 格式解析不出來時，保守視為不合格，避免灌水合格率
+        is_pass = False  # 解析不出來時保守視為不合格
 
     category = "無"
     if not is_pass:
@@ -229,9 +198,7 @@ def _judge_answer(history, judge_llm, ground_truth, ai_response_text):
                 category = cat
                 break
 
-    # 判定完成後才把標準答案揭曉出來（只在考官這一側／右邊，不會出現在考生
-    # 那一側／左邊），方便你回頭比對裁判官判得準不準。這個時間點考生早就已經
-    # 作答完畢了，所以不會影響考生有沒有「偷看答案」——考生原本就只拿得到題目本身。
+    # 判定完才揭曉標準答案，只顯示在考官側
     history[-1]["content"] += f"\n\n📖 **標準答案（判定後才顯示）：** {ground_truth}"
     yield history
 
@@ -239,15 +206,7 @@ def _judge_answer(history, judge_llm, ground_truth, ai_response_text):
 
 
 def _run_law_category(history, judge_llm, all_law_nodes, n):
-    """
-    類別一：純法規。
-    直接從法規向量索引抽樣知識塊出題，用來測試「答題品質」跟「向量資料庫檢索準不準」。
-
-    【2026-09-08，三度修正】畫面全部塞回同一個「對話視窗」，但嚴格照角色分左右：
-    出題官、系統訊息、裁判官、每題診斷全部用 _add_examiner()（右邊）；考生自己的
-    題目回應用 _start_student_turn()（左邊）——左邊看起來就跟一般聊天視窗一樣，
-    只會出現考生的作答，完全看不到出題官、裁判官這些幕後過程。
-    """
+    """類別一：純法規。從法規向量索引抽樣知識塊出題，測答題品質與檢索命中，回傳每題結果清單"""
     results = []
     if len(all_law_nodes) < 2:
         _add_examiner(history, "【類別一・純法規】\n\n❌ 法規知識庫的文本塊不足以抽樣，跳過此類別。")
@@ -270,9 +229,7 @@ def _run_law_category(history, judge_llm, all_law_nodes, n):
             "請嚴格依照以下格式輸出，不要加任何其他說明、標題或粗體符號，第一行必須以「問題:」開頭，換行後以「答案:」開頭：\n問題: [問題內容]\n答案: [標準答案內容]"
         )
 
-        # 出題官的原始輸出（含答案）只在背景累積，不即時顯示到畫面上，避免「答案」
-        # 在考生作答前就先被人看到；生成完成、拆出「問題」之後，只把問題本身
-        # 貼回考官那一側（右邊）的畫面，答案留到裁判官判定完才會一起揭曉。
+        # 出題官原始輸出（含答案）只在背景累積，只把問題貼到畫面，答案等判定完才揭曉
         _add_examiner(history, "📝 **【出題官・法規 (LLM)】**\n\n🔒 出題中...（為避免劇透，答案會等裁判官判定完才顯示）")
         yield history
         try:
@@ -294,7 +251,7 @@ def _run_law_category(history, judge_llm, all_law_nodes, n):
         yield history
         time.sleep(1.0)
 
-        # 【考生視角，左邊】新開一則 assistant 訊息，只有考生自己的作答會出現在這裡。
+        # 考生作答（畫面左側）
         _start_student_turn(history, "🤖 **【考生 (Edge AI)】**\n\n")
         yield history
         ai_response_text = ""
@@ -327,11 +284,7 @@ def _run_law_category(history, judge_llm, all_law_nodes, n):
 
 
 def _run_attendance_category(history, judge_llm, n):
-    """
-    類別二：純考勤。
-    直接從門禁系統資料庫抽樣一筆「真實打卡紀錄」出題，測試即時 SQL 查詢是否正確、
-    以及問題有沒有被正確分類到考勤路由。左右分邊的做法跟類別一・純法規相同。
-    """
+    """類別二：純考勤。抽樣一筆真實打卡紀錄出題，測 SQL 查詢與路由分類，回傳每題結果清單"""
     results = []
     for i in range(n):
         _add_examiner(history, f"【類別二・純考勤】第 {i+1}/{n} 題\n\n🔍 **[系統]** 準備從門禁系統資料庫抽樣真實打卡紀錄...")
@@ -379,7 +332,7 @@ def _run_attendance_category(history, judge_llm, n):
         yield history
         time.sleep(1.0)
 
-        # 【考生視角，左邊】
+        # 考生作答（畫面左側）
         _start_student_turn(history, "🤖 **【考生 (Edge AI)】**\n\n")
         yield history
         ai_response_text = ""
@@ -408,14 +361,7 @@ def _run_attendance_category(history, judge_llm, n):
 
 
 def _run_guardrail_category(history, n):
-    """
-    類別三：正負例。
-    模擬一般使用者可能問的「好問題」（應該放行）與「壞問題」（應該攔截），
-    直接檢驗防護欄的正/負向判定實際運作起來準不準，不需要 LLM 裁判官（用規則判斷即可）。
-
-    這一類沒有出題官（題目直接來自固定問題池），出題／送出問題本身算「考官」動作
-    （右邊），考生實際的回覆／被攔截訊息才是左邊，診斷結果一樣放右邊。
-    """
+    """類別三：正負例。從固定問題池送出好問題（應放行）與壞問題（應攔截），以規則判斷防護欄是否正確，不需裁判官"""
     results = []
     good_pool = list(GOOD_SAMPLE_QUESTIONS)
     bad_pool = list(BAD_SAMPLE_QUESTIONS)
@@ -455,6 +401,7 @@ def _run_guardrail_category(history, n):
 
 
 def _cat_stats(results):
+    """統計一個類別的題數、合格率與幻覺率，沒有結果回傳 None"""
     total = len(results)
     if total == 0:
         return None
@@ -471,29 +418,20 @@ def _cat_stats(results):
 
 def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.8, hallucination_threshold=0.1):
     """
-    自動化評估主流程，分三大類進行：
-      一、純法規 —— 測試向量資料庫的檢索準確度
-      二、純考勤 —— 測試即時資料庫查詢的正確性
-      三、正負例 —— 模擬一般使用者的好問題／壞問題，測試防護欄是否正常
-    全部跑完後輸出各類別的分項報告，以及一個綜合最終判定（合格／不合格）。
-
-    【2026-09-08，三度修正】不再另外開獨立視窗或拆成兩個並排的 Chatbot，改回跟
-    `app.py` 最上面那個給真人聊天用的「對話視窗」共用同一份 `history`；靠嚴格的
-    角色分配（`_add_examiner()` 一律 role="user"／右邊，`_start_student_turn()`
-    一律 role="assistant"／左邊）確保左邊只會出現考生的題目跟作答，右邊只會出現
-    出題官／裁判官／系統訊息／診斷這些幕後過程。
+    自動化評估主流程：依序跑純法規、純考勤、正負例三類，逐步 yield 對話歷史給畫面，
+    最後輸出分項報告與綜合判定（答題合格率、幻覺率、防護欄準確率都達標才算合格），並回傳量化結果 dict。
     """
-    # 初始化環境以確保 Settings.llm（考生模型）可用
+    # 確保考生模型可用
     setup_environment()
 
-    # 出題官／裁判官：依「⚙️ 設定」決定用雲端 API 或本機模型；API 不能用會自動改本機（見 llm_settings.py）
+    # 出題官/裁判官由設定面板決定，API 不能用會自動改本機
     judge_llm, judge_note = llm_settings.build_judge_llm()
     if judge_llm is None:
         _add_examiner(history, judge_note)
         yield history
         return {}
 
-    # 取得法規索引與所有文本塊（類別一要用）
+    # 取得法規索引與所有文本塊（類別一使用）
     index = load_or_build_index()
     docstore = index.docstore
     all_law_nodes = list(docstore.docs.values())
@@ -517,9 +455,7 @@ def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.
     yield from _flush_judge_notices(history, judge_llm)
     guardrail_results = yield from _run_guardrail_category(history, questions_per_category)
 
-    # ==========================================
-    # 彙總報告
-    # ==========================================
+    # --- 彙總報告 ---
     law_stats = _cat_stats(law_results)
     att_stats = _cat_stats(attendance_results)
 
@@ -535,9 +471,7 @@ def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.
 
     lines = ["## 📊 自動化評估總結報告\n"]
 
-    # 【2026-09-14，學術強化方向 1：消融實驗】把這一輪實際跑的 4 個開關狀態印在報告
-    # 最前面，這樣不管是真人在畫面上看、還是之後回頭對照 run_ablation_suite.py 產出的
-    # 比較表，都能一眼確認這一輪測的到底是哪個設定，不用去猜當時環境變數設了什麼。
+    # 報告開頭標註本輪的機制開關設定
     cfg = ablation_config.current_config()
     lines.append(
         "### ⚙️ 本輪消融實驗設定\n"
@@ -578,9 +512,7 @@ def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.
     else:
         lines.append("### 三、正負例（防護欄）\n- ⚠️ 無有效測驗結果\n")
 
-    # ==========================================
-    # 綜合最終判定：法規 + 考勤的答題表現，加上防護欄準確率都要達標才算合格
-    # ==========================================
+    # --- 綜合最終判定：法規與考勤的答題表現，加上防護欄準確率都要達標 ---
     combined_pass_count = (law_stats["pass_count"] if law_stats else 0) + (att_stats["pass_count"] if att_stats else 0)
     combined_hallucination_count = (law_stats["hallucination_count"] if law_stats else 0) + (att_stats["hallucination_count"] if att_stats else 0)
     combined_total = (law_stats["total"] if law_stats else 0) + (att_stats["total"] if att_stats else 0)
@@ -607,13 +539,7 @@ def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.
     _add_examiner(history, "📋 **系統總結**\n\n" + "\n".join(lines))
     yield history
 
-    # 【2026-09-14，學術強化方向 1：消融實驗】這個函式本來就是 generator（給 Gradio 畫面
-    # 逐步 yield 用），原本沒有 return 任何東西。這裡在最後補一個 return，把算好的數字
-    # 包成一個 dict 回傳——generator 的 return 值會變成 StopIteration.value，只有「手動
-    # 呼叫 next() 並接住 StopIteration」的呼叫端才拿得到，對現有「用 for 迴圈疊代」的
-    # 呼叫端（app.py、這個檔案自己最下面的 __main__ 區塊）完全沒有影響，是純附加、
-    # 不改變既有行為的擴充。run_single_ablation_eval.py 會用這種方式接住這個 dict，
-    # 印成 JSON 給 run_ablation_suite.py 解析、彙整成消融實驗比較表。
+    # generator 的 return 值（StopIteration.value）供消融實驗取得量化結果，用 for 迴圈的呼叫端不受影響
     return {
         "law_pass_rate": law_stats["pass_rate"] if law_stats else None,
         "law_hit_rate": law_hit_rate,
@@ -633,7 +559,7 @@ def run_dynamic_evaluation(history, questions_per_category=20, pass_threshold=0.
 
 
 if __name__ == "__main__":
-    # For standalone test, mock history
+    # 單獨執行時的簡單測試
     h = []
     for updated_h in run_dynamic_evaluation(h):
         print(updated_h[-1])

@@ -1,48 +1,18 @@
 """
-消融實驗（Ablation Study）跑批腳本 —— 學術強化方向 1，主入口。
+run_ablation_suite.py：消融實驗跑批主程式。
 
-【2026-09-14 新增】依序用 5 種設定各跑一次 evaluate_rag.py 的自動化評估：
-    1. baseline_full             —— 基準線，4 個機制全部開啟（= 目前正式系統的行為）
-    2. no_long_context_reorder   —— 關掉 LongContextReorder
-    3. no_semantic_guardrail     —— 防護欄改用純關鍵字過濾（關掉對比式語意防護欄）
-    4. no_keyword_fastpath       —— 考勤路由關掉關鍵字快速通道（純語意分類）
-    5. no_deterministic_sql      —— 關掉確定性 SQL 查詢（全部交給小模型翻譯）
+主要功能：
+  - 依序用 5 種設定各跑一次自動化評估：基準線（全開），以及分別關閉
+    LongContextReorder、語意防護欄、關鍵字快速通道、確定性 SQL 查詢
+  - 每種設定各開一個新的子程序（run_single_ablation_eval.py），避免全域狀態互相汙染
+  - 5 輪使用同一個亂數種子，讓法規抽樣與正負例洗牌盡量一致（考勤抽樣不受種子影響）
+  - 輸出帶時間戳記的 Markdown 比較表與 CSV
+  執行前需啟動 Ollama（評估若用雲端 API，需先在設定面板填金鑰），且資料庫有打卡資料、data/laws/ 有法規文件。
+  執行方式：python run_ablation_suite.py --questions-per-category 10
 
-每種設定都用「全新的 Python 子程序」執行 run_single_ablation_eval.py（透過環境變數
-帶入對應的開關設定），不是在同一個程序裡切換——因為 Settings.llm、
-_GLOBAL_CHAT_ENGINE、_GLOBAL_SQL_ENGINE 這些都是 main_guardrail_rag.py 裡的模組級
-全域變數，混在同一個程序裡連續跑好幾輪，上一輪殘留的狀態可能汙染下一輪的結果；
-用子程序保證每一輪都是完全乾淨的起點，這點犧牲一些執行時間換取結果可信度，划算。
-
-【執行前置需求】
-  - 本地 Ollama 要有啟動（考生模型 qwen2:7b）
-  - LiteLLM Proxy 要有啟動（出題官／裁判官用的 API LLM），例如：litellm --config config.yaml
-  - 門禁系統資料庫 database/database.db 裡要有打卡資料，法規知識庫 data/laws/ 要有文件
-
-【執行方式】在 Smart_Access_Agent_System 資料夾底下：
-    python run_ablation_suite.py --questions-per-category 10
-
-預設每類 10 題只是為了讓 5 輪加起來不用等太久（本地小模型 + API 裁判官都要跑滿
-30 題 x 5 輪，非常花時間）。正式要放進論文的版本，建議在時間允許的情況下調高到
-20（跟 evaluate_rag.py 正式系統評估用的樣本數一致），跑之前預留足夠時間。
-
-【產出】在同一個資料夾底下輸出一份 Markdown 比較表跟一份 CSV，檔名帶時間戳記，
-可以直接放進論文的實驗章節，或用 Excel/其他工具重畫圖表。
-
-【2026-09-14 新增，真實環境第一輪實測後發現的方法論問題】evaluate_rag.py 的
-_run_law_category() 每次都是「即時隨機抽一段法規知識塊、現場請裁判官 LLM 出題」，
-_run_guardrail_category() 也會每次重新洗牌正負例題庫——這代表如果 5 輪之間完全不
-固定亂數種子，每一輪測到的實際題目都不一樣，數字差異可能只是「剛好抽到比較難/
-比較簡單的題目」，不是真的反映被關掉的那個機制的影響，這樣消融實驗的比較就不夠
-嚴謹。這裡預設所有 5 輪都帶入同一個 `--seed`（預設 42），讓法規抽樣、正負例洗牌
-順序在 5 輪之間盡量一致，把「換了題目」這個干擾因素降到最低。
-
-【殘留的限制，老實說】即時考勤類別（_run_attendance_category()）抽樣是用 SQL 的
-`ORDER BY RANDOM() LIMIT 1`（SQLite 自己的亂數，不是 Python 的 random 模組），
-這裡的 `--seed` 對它沒有作用，考勤題目每一輪還是會不一樣。如果要徹底控制這個變因，
-需要另外修改 rag_sql_engine.sample_random_attendance_record() 讓它也能接受固定
-種子，目前沒有做這一步（風險相對較低：考勤資料庫裡目前只有少數幾筆打卡紀錄，
-真的抽到差異很大的題目機率不高），跑出來的比較表裡考勤那幾欄數字請保守解讀。
+串接模組：
+  - run_single_ablation_eval：單輪執行器
+  - ablation_config：由環境變數控制機制開關
 """
 
 import argparse
@@ -53,10 +23,7 @@ import subprocess
 import sys
 from datetime import datetime
 
-# 【2026-09-14 修正，真實環境跑批發現】跟 run_single_ablation_eval.py 同一個問題：
-# 這支腳本自己印的 emoji（✅⚠️▶）在某些 Windows 終端機／被重導向到檔案時，也可能
-# 用到系統的 ANSI 語言代碼頁（cp936/GBK）而不是 UTF-8，一樣有 UnicodeEncodeError
-# 當掉的風險，這裡一併防禦性修正。
+# 避免終端機或重導向的預設編碼印不出特殊符號而當掉
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -91,15 +58,10 @@ CONFIGS = [
 
 
 def _run_one(config, questions_per_category, script_dir, seed):
+    """用新的子程序跑一種設定，回傳解析後的量化結果；失敗時回傳帶 error 欄位的 dict"""
     env = os.environ.copy()
     env.update(config["env"])
-    # 【2026-09-14 修正，真實環境跑批發現】這是真正的根因修正：子程序的 stdout 被這裡
-    # 用管線（pipe）接走時，Windows 上的 Python 不會沿用你平常在終端機互動執行時的
-    # 編碼，而是退回作業系統的 ANSI 語言代碼頁（繁體中文 Windows 通常是 cp936/GBK）
-    # ——這個碼表連「▶」這種常見符號都沒有，一印就整個子程序 UnicodeEncodeError 當掉
-    # （實測過：5 輪全部這樣失敗，比較表整份都是空的）。明確設定 PYTHONIOENCODING=utf-8
-    # 讓子程序不管跑在哪種語言代碼頁的 Windows 上，永遠用 UTF-8 印輸出，才是真正解決
-    # 問題，不是只讓崩潰訊息看起來好看一點。
+    # 子程序輸出接管線時，Windows 會退回系統編碼，所以指定 UTF-8
     env["PYTHONIOENCODING"] = "utf-8"
     cmd = [
         sys.executable,
@@ -115,8 +77,7 @@ def _run_one(config, questions_per_category, script_dir, seed):
         cmd, env=env, cwd=script_dir, capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
 
-    # 子程序過程中會印很多 [Debug ...] 訊息，這裡只印最後一段避免洗版，完整輸出
-    # 如果之後要除錯，可以自己改成印 result.stdout 全文。
+    # 只印輸出最後一段，避免洗版
     tail = result.stdout[-2000:] if result.stdout else ""
     print(tail, flush=True)
 
@@ -138,12 +99,14 @@ def _run_one(config, questions_per_category, script_dir, seed):
 
 
 def _fmt_pct(v):
+    """格式化成百分比，None 顯示為破折號"""
     if v is None:
         return "—"
     return f"{v:.1%}"
 
 
 def _write_markdown(results, path, n):
+    """輸出 Markdown 比較表"""
     lines = [
         "# RAG 消融實驗（Ablation Study）比較表",
         "",
@@ -182,6 +145,7 @@ def _write_markdown(results, path, n):
 
 
 def _write_csv(results, path):
+    """輸出 CSV"""
     fieldnames = [
         "label", "name_zh", "law_pass_rate", "law_hit_rate", "law_route_rate",
         "law_hallucination_rate", "att_pass_rate", "att_route_rate",
@@ -197,6 +161,7 @@ def _write_csv(results, path):
 
 
 def main():
+    """依序跑完 5 種設定並輸出比較表，最後統計成功與失敗的輪數"""
     parser = argparse.ArgumentParser(description="消融實驗跑批腳本（依序跑 5 種設定並產出比較表）")
     parser.add_argument("--questions-per-category", type=int, default=10)
     parser.add_argument("--output-prefix", type=str, default=None, help="輸出檔名前綴，預設用時間戳記自動產生")
@@ -222,10 +187,7 @@ def main():
     _write_markdown(all_results, md_path, args.questions_per_category)
     _write_csv(all_results, csv_path)
 
-    # 【2026-09-14 修正，真實環境跑批發現】原本不管每一輪實際成功還是失敗，最後都會
-    # 印同一句「✅ 全部跑完」，實測時 5 輪全部因為編碼問題失敗、比較表整份是空的，
-    # 畫面卻還是顯示「✅」，會讓人誤以為跑成功了，要點開檔案才發現整份都是
-    # ⚠️ subprocess_failed。這裡改成老實統計成功/失敗數量，有任何一輪失敗就不能用 ✅。
+    # 如實回報成功與失敗的輪數
     failed = [r for r in all_results if r.get("error")]
     ok_count = len(all_results) - len(failed)
     if failed:

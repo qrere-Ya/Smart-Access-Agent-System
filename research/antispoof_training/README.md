@@ -14,15 +14,27 @@ repo 根目錄現在已經有 30+ 個正式模組檔案（人臉辨識、考勤�
 
 | | MiniFASNetV2（現成） | 凍結骨幹（基準） | 解凍微調 |
 | --- | --- | --- | --- |
-| 驗證準確率 | 不適用（非本專案訓練） | 0.9740 | 0.9940 |
-| 測試集 EER | 37.87%（門檻 0.0193） | 18.40%（門檻 0.0579） | 10.56%（門檻 0.0012） |
-| ROC AUC | 0.671 | 0.898 | 0.963 |
+| 驗證準確率 | 不適用（非本專案訓練） | 未留存訓練當下的 log（見下方說明） | 0.9893 |
+| 測試集 EER | 37.87%（門檻 0.0193） | 13.73%（門檻 0.2076） | 7.83%（門檻 0.0124） |
+| ROC AUC | 0.671 | 0.941 | 0.977 |
 
 ![ROC 曲線對照](roc_comparison.png)
 
-APCER／BPCER／ACER／EER 依 ISO/IEC 30107-3 標準計算。三個模型的分數分布差異很大（EER 對應門檻分別是 0.0193、0.0579、0.0012），固定用同一個門檻（例如 0.5）比較會失真，`evaluate_antispoof.py`／`evaluate_minifasnet.py` 都同時印出「固定門檻 0.5」與「各自 EER 門檻」下的數字，上表用的是各自 EER 門檻，是公平比較三個模型的方式（詳見兩個檔案內的說明）。MiniFASNetV2 在固定門檻 0.5 下的原始數字是 APCER=76.44%／BPCER=7.52%／ACER=41.98%——APCER 遠高於 BPCER，代表它在這個資料集上主要的弱點是「放過攻擊」而不是「誤拒真人」。
+**2026-09-27 更新，取代下方舊數字**：`celeba_spoof_dataset.py` 在 2026-09-18 修正了
+一個訓練/推論框架不對齊的 bug——正式上線 `vision_core.py` 的 `check_liveness()`
+一定會先用人臉框裁切、外擴 20% padding 再丟進模型，但當時的訓練資料集完全沒有
+做這個裁切，直接餵整張原始照片，導致訓練時的 EER 數字（凍結骨幹 18.40%、解凍
+微調 10.56%）雖然好看，實際部署測試卻出現「開燈能辨識、關燈判定非活體」「翻拍
+偶爾能通過」這類不穩定情況（詳見 `celeba_spoof_dataset.py` 檔頭註解）。上表是
+套用裁切對齊修正之後，於 2026-09-27 用真實官方 CelebA-Spoof 測試集重新訓練
+（凍結骨幹版沿用 09-20 重新訓練的權重）／評估的結果，訓練/推論裁切邏輯已對齊，
+才是能反映實際部署效果的可信數字；舊的 18.40%／10.56% 已不再採用。凍結骨幹版
+這次只重新做了評估，09-20 那次重新訓練當下沒有保留驗證準確率的 log，所以上表
+該欄位誠實標示缺漏，不編造數字。
 
-微調版的 EER 比現成的 MiniFASNetV2 低 72.1%（37.87% → 10.56%），凍結骨幹的基準版本也低 51.4%。這是合理的結果：MiniFASNetV2 是沒有在 CelebA-Spoof 上訓練過的現成模型，跨資料集評估（cross-dataset）本來就比在同一份資料集上訓練、驗證的模型吃虧，這也是這次自訓練活體偵測模型的動機所在——不是說 MiniFASNetV2 本身效果差，而是「換一個資料集／場景」時，沒有針對性訓練過的現成模型有明顯的泛化落差。
+APCER／BPCER／ACER／EER 依 ISO/IEC 30107-3 標準計算。三個模型的分數分布差異很大（EER 對應門檻分別是 0.0193、0.2076、0.0124），固定用同一個門檻（例如 0.5）比較會失真，`evaluate_antispoof.py`／`evaluate_minifasnet.py` 都同時印出「固定門檻 0.5」與「各自 EER 門檻」下的數字，上表用的是各自 EER 門檻，是公平比較三個模型的方式（詳見兩個檔案內的說明）。MiniFASNetV2 在固定門檻 0.5 下的原始數字是 APCER=76.44%／BPCER=7.52%／ACER=41.98%——APCER 遠高於 BPCER，代表它在這個資料集上主要的弱點是「放過攻擊」而不是「誤拒真人」。凍結骨幹版在固定門檻 0.5 下是 APCER=25.00%／BPCER=5.77%／ACER=15.39%；解凍微調版是 APCER=25.35%／BPCER=0.93%／ACER=13.14%。
+
+微調版的 EER 比現成的 MiniFASNetV2 低 79.3%（37.87% → 7.83%），凍結骨幹的基準版本也低 63.7%（37.87% → 13.73%）。這是合理的結果：MiniFASNetV2 是沒有在 CelebA-Spoof 上訓練過的現成模型，跨資料集評估（cross-dataset）本來就比在同一份資料集上訓練、驗證的模型吃虧，這也是這次自訓練活體偵測模型的動機所在——不是說 MiniFASNetV2 本身效果差，而是「換一個資料集／場景」時，沒有針對性訓練過的現成模型有明顯的泛化落差。
 
 ROC AUC 是額外用 `roc_data_*.npz` 裡的 fpr/tpr 算出來的補充指標（`evaluate_antispoof.py`／`evaluate_minifasnet.py` 本身都不印這個值，這裡用 `numpy.trapezoid` 對 ROC 曲線做梯形積分得到），跟 EER 方向一致。
 
@@ -130,11 +142,19 @@ python scripts/evaluate_minifasnet.py
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
+
+# 正體中文標籤需要額外註冊字型，否則會印出「Glyph missing」警告、圖上中文變空白方塊
+# （見下方「依賴套件說明」）；這裡沿用專案其他地方（vision_core.py）已經在用的同一套字型。
+_cjk_font_path = r"C:\Windows\Fonts\msjh.ttc"
+font_manager.fontManager.addfont(_cjk_font_path)
+plt.rcParams["font.family"] = font_manager.FontProperties(fname=_cjk_font_path).get_name()
+plt.rcParams["axes.unicode_minus"] = False
 
 FILES = {
     "MiniFASNetV2（現成模型）": {"path": "outputs/roc_data_minifasnetv2.npz", "eer": 0.3787},
-    "凍結骨幹（基準）": {"path": "outputs/roc_data_antispoof_best.npz", "eer": 0.1840},
-    "解凍微調": {"path": "outputs/roc_data_antispoof_finetuned_best.npz", "eer": 0.1056},
+    "凍結骨幹（基準）": {"path": "outputs/roc_data_antispoof_best.npz", "eer": 0.1373},
+    "解凍微調": {"path": "outputs/roc_data_antispoof_finetuned_best.npz", "eer": 0.0783},
 }
 
 fig, ax = plt.subplots(figsize=(7, 6), dpi=150)
@@ -156,7 +176,7 @@ fig.tight_layout()
 fig.savefig("roc_comparison.png", dpi=150)
 ```
 
-（如果要在圖上顯示正體中文標籤，額外用 `matplotlib.font_manager` 註冊一套系統上有的中文字型即可，跟中文顯示無關的部分不受影響。）
+腳本裡已經內建中文字型註冊（沿用系統上的微軟正黑體 `msjh.ttc`），在其他系統上跑則需要把 `_cjk_font_path` 換成該系統上實際有的中文字型路徑。
 
 ## 依賴套件說明
 

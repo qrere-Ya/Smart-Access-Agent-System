@@ -1,15 +1,15 @@
 """
-帳號管理：列出所有員工、停用/啟用、刪除。
+account_admin.py：員工帳號管理的資料庫操作。
 
-【2026-09-12，P2 新增】對應 Syscom Cubi 截圖裡「帳號管理」表格的概念。這裡只負責
-資料庫操作，回傳查詢結果或 (ok, message)，不碰任何畫面元件——跟 service_manager.py /
-dashboard_stats.py 同樣的分工方式：backend_main.py 呼叫這裡的函式，再把結果轉成
-畫面上的文字/表格列。
+主要功能：
+  - 列出所有員工（含角色、啟用狀態、最新打卡紀錄）
+  - 停用 / 啟用帳號：停用後 recognize_face 不再比對該員工，刷臉會被判定為查無資料
+  - 刪除帳號：只刪 Users 資料，Attendance 打卡歷史保留
+  只處理資料庫，不碰任何畫面元件。
 
-【重要】"停用" 不是只在畫面上打個勾而已：database_mgr.recognize_face() 已經改成只
-會拿 is_active=1 的員工特徵去做 1:N 比對（見 database_mgr.py 的修改），所以停用一個
-員工之後，他在門口刷臉會被系統判定為查無資料，這是刻意的行為，停用要真的有效果，
-不能只是好看的按鈕。
+串接模組：
+  - database_mgr：取得資料庫路徑
+  - backend_main：「員工帳號管理」視窗呼叫這裡的函式
 """
 import sqlite3
 
@@ -17,13 +17,7 @@ import database_mgr
 
 
 def list_users():
-    """
-    回傳所有員工，依 id 排序，每一筆是一個 dict：
-    {id, employee_id, name, gender, role, is_active, last_status, last_time}
-    （last_status/last_time 是這個人最近一筆打卡紀錄，查無紀錄則是 '待機' / '-'，
-    跟原本 backend_main.py 的員工資料庫視窗查詢邏輯一致）。查詢失敗回傳空清單，
-    不拋例外——呼叫端看到空清單，畫面上就是「目前沒有資料可顯示」，不會讓程式當掉。
-    """
+    """回傳所有員工的 dict 清單（依 id 排序）；查詢失敗回傳空清單。"""
     try:
         conn = sqlite3.connect(database_mgr.DB_PATH)
         c = conn.cursor()
@@ -43,8 +37,7 @@ def list_users():
                 "name": r[2],
                 "gender": r[3],
                 "role": r[4] or "employee",
-                # 舊資料庫升級後、還沒被明確設成 0 的一律視為啟用（None 或 1 都算啟用），
-                # 只有明確是 0 才算停用，避免舊資料被誤判成停用。
+                # 只有明確為 0 才算停用，None 視為啟用
                 "is_active": r[5] != 0,
                 "last_status": r[6],
                 "last_time": r[7],
@@ -57,7 +50,7 @@ def list_users():
 
 
 def set_active(user_id, active):
-    """停用/啟用一個員工帳號。回傳 (ok: bool, message: str)。"""
+    """停用或啟用一個員工帳號，回傳 (成功與否, 訊息)。"""
     try:
         conn = sqlite3.connect(database_mgr.DB_PATH, timeout=5)
         conn.execute("UPDATE Users SET is_active=? WHERE id=?", (1 if active else 0, user_id))
@@ -69,14 +62,7 @@ def set_active(user_id, active):
 
 
 def delete_user(user_id):
-    """
-    刪除一個員工帳號（連同人臉特徵一起刪除）。回傳 (ok: bool, message: str)。
-
-    【刻意保留】只刪除 Users 表的這一筆，不動 Attendance 打卡紀錄——打卡紀錄是用姓名
-    字串記錄，不是用 Users.id 關聯，就算把這個人的帳號刪掉，他過去的打卡歷史還是完整
-    保留在 Attendance 表裡，之後要查歷史紀錄還是查得到，只是這個人之後沒辦法再刷臉
-    打卡而已（1:N 比對的來源就是 Users 表，這筆刪掉了自然就比對不到）。
-    """
+    """刪除一個員工帳號與人臉特徵（打卡紀錄以姓名記錄，不受影響），回傳 (成功與否, 訊息)。"""
     try:
         conn = sqlite3.connect(database_mgr.DB_PATH, timeout=5)
         conn.execute("DELETE FROM Users WHERE id=?", (user_id,))

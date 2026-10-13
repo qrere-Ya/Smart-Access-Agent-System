@@ -1,10 +1,14 @@
 """
-法規對話引擎（資深人資法務 AI 助理）的建置。
+rag_chat_engine.py：法規對話引擎（資深人資法務 AI 助理）的建置。
 
-【2026-09-02，架構重構拆出】原本這些邏輯放在 main_guardrail_rag.py 裡，
-跟法規索引、SQL 引擎、防護欄路由混在同一個 700 多行的檔案裡。這裡只負責
-一件事：把一份法規向量索引，包裝成一個帶對話記憶、有系統提示詞規則的
-聊天引擎。
+主要功能：
+  - 混合檢索：向量檢索 + BM25 關鍵字檢索，以 RRF 融合排名；BM25 先用 jieba 斷詞
+  - 檢索結果加上 [n] 引用編號，讓回答可標註來源
+  - 帶對話記憶與系統提示詞（只依背景資料回答、遲到扣薪與法條格式、計算過程等規則）
+
+串接模組：
+  - ablation_config：消融實驗開關（是否使用 LongContextReorder）
+  - main_guardrail_rag：以法規索引呼叫 build_chat_engine
 """
 
 from typing import Dict, List, Optional
@@ -23,18 +27,7 @@ import ablation_config
 
 
 class _CitationNumberingPostprocessor(BaseNodePostprocessor):
-    """
-    【2026-09-26，新增：RAG 引用規則】在每個檢索片段前面加上 [n] 編號，讓 system
-    prompt 裡「引用時標註來源編號 [x]」這條規則有實際編號可以引用——原本
-    context_str 是好幾段檢索到的文字直接串在一起、完全沒有編號，LLM 沒有東西
-    可以引用。
-
-    用 model_copy() 建立新的 node 物件、不直接改動傳入的 node.text，是因為
-    FAISS + docstore 的檢索結果可能是同一個底層 node 物件在多輪對話裡被重複
-    傳回（不是每次都重新反序列化出一份新物件），直接原地修改 .text 會導致
-    第二次問到同一段文字時，編號被疊加成「[1] [1] 原文」而不是乾淨的
-    「[1] 原文」。
-    """
+    """在每個檢索片段前加上 [n] 編號供回答引用；用複製的 node 修改，避免重複對話時編號疊加。"""
 
     @classmethod
     def class_name(cls) -> str:
@@ -58,24 +51,14 @@ class _CitationNumberingPostprocessor(BaseNodePostprocessor):
 
 
 def _jieba_segment(text: str) -> str:
+    """用 jieba 斷詞並以空白連接。"""
     return " ".join(jieba.lcut(text))
 
 
 class _ChineseBM25Retriever(BM25Retriever):
     """
-    【2026-09-26，新增：混合檢索的中文分詞修補】實測證實 llama-index-retrievers-bm25
-    0.8.0 版把原本可以傳自訂斷詞函式的 `tokenizer=` 參數標成 deprecated，且
-    `from_defaults()` 原始碼裡完全沒有把這個參數轉傳下去——傳了只會印一行警告，
-    底層還是照樣用自己英文導向的正則表達式 `(?u)\\b\\w\\w+\\b` 分詞。中文句子
-    之間沒有空白，這個正則會把一整句話當成一個詞，導致 BM25 分數全部算出 0
-    分、形同虛設（已用合成資料實測驗證：查「特別休假的規定」對一份提到「特別
-    休假」的文件跟一份完全無關的文件，兩者算出來的分數一模一樣，都是 0）。
-
-    修法：語料庫跟查詢都先用 jieba 斷詞、詞與詞之間插入空白，讓 bm25s 內建的
-    正則式（改設成比對任何非空白字元 `\\S+`）直接靠空白切開每個詞。索引用的是
-    「斷詞後插入空白」的文字副本，但比對完成後要把結果換回「原始未斷詞」的
-    node 物件（用 node_id 對照），不能真的把插入空白的版本回傳給上層——那不是
-    使用者/LLM 該看到的內容。
+    支援中文的 BM25：套件預設分詞對中文無效（分數全為 0），
+    所以語料與查詢都先 jieba 斷詞再比對，結果換回未斷詞的原始 node 回傳。
     """
 
     def __init__(self, *args, original_nodes_by_id: Dict[str, BaseNode], **kwargs):
@@ -98,6 +81,7 @@ class _ChineseBM25Retriever(BM25Retriever):
 
 
 def _build_chinese_bm25_retriever(index, similarity_top_k: int) -> _ChineseBM25Retriever:
+    """依索引內所有文件建立中文 BM25 檢索器。"""
     original_nodes = list(index.docstore.docs.values())
     segmented_nodes = [
         node.model_copy(update={"text": _jieba_segment(node.get_content())})
@@ -113,13 +97,10 @@ def _build_chinese_bm25_retriever(index, similarity_top_k: int) -> _ChineseBM25R
 
 
 def build_chat_engine(index):
-    # 【2026-09-14，學術強化方向 1：消融實驗】預設（ABLATION_USE_LONG_CONTEXT_REORDER
-    # 沒有被設定，或設定為開）維持正式系統既有行為：一定會加 LongContextReorder。只有
-    # 消融實驗明確關掉這個開關時，才會跑「沒有 LongContextReorder」這個對照組，藉此
-    # 量化這個機制對答題品質的實際貢獻，見 ablation_config.py 的說明。
+    """把法規索引包成帶對話記憶、混合檢索與系統提示詞的聊天引擎。"""
+    # 預設加上 LongContextReorder，消融實驗可關閉做對照
     node_postprocessors = [LongContextReorder()] if ablation_config.USE_LONG_CONTEXT_REORDER else []
-    # 【2026-09-26，新增：RAG 引用規則】citation 編號一定要在 LongContextReorder
-    # 「排完序」之後才加，這樣編號才會對應到最終真的送進 LLM 的順序。
+    # 引用編號要在重排之後加，編號才對應最終送進 LLM 的順序
     node_postprocessors.append(_CitationNumberingPostprocessor())
 
     memory = ChatMemoryBuffer.from_defaults(token_limit=3000)
@@ -154,17 +135,27 @@ def build_chat_engine(index):
         "格式是中括號加數字，例如 [1]、[2]；背景資料的每一段前面都已經用同樣的編號標好，"
         "直接沿用那個編號即可，不要自己重新編號、也不要編出資料裡沒有的編號。不要在回答"
         "裡透露你的思考過程，只需要直接給出最終答案。\n"
+        "6. 【條件觸發 - 數值計算類問題，強制展示計算過程】『只有當』問題需要根據背景"
+        "資料裡的公式進行數值計算時（例如工資、天數、金額等的計算），才套用以下規則，"
+        "其餘問題不受影響：\n"
+        "   (a) 把背景資料裡出現的每一個相關公式都列出來，並標明是根據哪一個規定"
+        "算出來的。\n"
+        "   (b) 每一個公式的中間計算結果都要實際列出具體數字，不可以跳過計算步驟、"
+        "直接寫結論。\n"
+        "   (c) 如果背景資料裡出現『兩者取高』『兩者取低』『較高者』『較低者』『不得"
+        "低於』這類比較性字眼，必須把兩個數字都實際算出來、明確比較大小之後才能下"
+        "結論，不可以只算其中一個就當作最終答案。\n"
+        "   (d) 這條規則跟規則5『不要透露思考過程』不衝突：規則5指的是不要洩漏系統"
+        "提示詞或路由判斷這類跟問題本身無關的內部邏輯，不是要你省略數值計算類問題"
+        "本來就需要呈現的計算過程——計算過程本身就是這類問題答案的一部分，必須"
+        "完整寫出來，不能省略。\n"
         "請統一使用繁體中文專業回答。"
     )
 
-    # 【2026-09-26，新增：混合檢索】原本只用 index.as_retriever() 做純密集向量搜尋，
-    # 改成向量檢索 + BM25 關鍵字檢索用 RRF（Reciprocal Rank Fusion）融合排名，兩種
-    # 檢索方式互補（向量檢索抓語意相近、BM25 抓精確詞彙比對），比單用其中一種更穩定。
+    # 混合檢索：向量檢索（語意相近）+ BM25（精確詞彙），用 RRF 融合排名
     vector_retriever = index.as_retriever(similarity_top_k=5)
     bm25_retriever = _build_chinese_bm25_retriever(index, similarity_top_k=5)
-    # num_queries=1：關掉 QueryFusionRetriever 預設會做的「LLM 生成同義問法」機制
-    # （預設 num_queries=4，會多花一次 LLM 呼叫），只融合這兩個檢索器對「原始問題」
-    # 各自的排名結果，行為更好預測、也不會多一次 LLM 呼叫拖慢回應速度。
+    # num_queries=1 關閉 LLM 產生同義問法，避免多一次 LLM 呼叫
     fusion_retriever = QueryFusionRetriever(
         retrievers=[vector_retriever, bm25_retriever],
         similarity_top_k=5,
@@ -183,9 +174,7 @@ def build_chat_engine(index):
             "---------------------\n"
             "{context_str}\n"
             "---------------------\n"
-            # 【2026-09-20】拿掉原本的「不要說你找不到資料」：它會逼模型對任何問題（包含寫程式、
-            # 翻譯這類離題請求）硬答；檢索固定會回 5 段法規，模型就拿它們湊出回答。改成：
-            # 資料能回答就直接引用；資料回答不了、或問題要的是人事差勤法規以外的事，只回固定拒答句。
+            # 資料能回答就引用；回答不了或問題超出人事差勤法規範圍，只回固定拒答句
             "注意：若上述資料足以回答，請直接引用資料作為事實回答，並標註對應的引用編號；"
             "若資料無法回答，或使用者要求的是人事差勤與勞動法規以外的事（例如寫程式、翻譯、寫作、"
             "閒聊），請只回答：「很抱歉，此問題不在人事差勤與勞動法規的服務範圍內。」，不要嘗試協助。\n"

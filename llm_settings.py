@@ -1,18 +1,17 @@
 """
-出題官／裁判官 LLM 的彈性設定（雲端 API 或本機 Ollama 模型，API 失效自動改用本機）。
+llm_settings.py：評估用出題官/裁判官 LLM 的設定與呼叫層。
 
-【2026-09-20 新增】原本評估用的出題官／裁判官一律走 LiteLLM Proxy -> NVIDIA API，
-金鑰沒設或失效就整輪評估每一題都顯示 API 錯誤。改成：
-  1. 使用者在網頁右上角「⚙️ 設定」自己填 API 金鑰（或選「只用本機模型」），設定存在專案根目錄的
-     llm_settings.json（只存在你自己的電腦，請不要上傳到 GitHub）。
-  2. 按「Execute Evaluate」時先做一次快速連線檢查：API 不能用就自動改用本機 Ollama 模型，
-     只在畫面上用一行白話提示，不會再整輪噴 API 錯誤；評估途中 API 才壞掉也會自動切換。
-  3. 兩個測試按鈕（測試 API／測試本機模型）：結果同時顯示在設定面板與後台輸出（[LLM設定] 開頭），
-     失敗時用白話說明是什麼壞了、什麼沒裝、請使用者自己確認什麼。
+主要功能：
+  - 設定讀寫：存在專案根目錄的 llm_settings.json（含金鑰，已被 .gitignore 排除，不可上傳）
+  - 兩種 LLM 用戶端：OpenAI 相容的雲端 API、本機 Ollama
+  - FailoverLLM：雲端 API 失效時自動改用本機模型
+  - 連線檢查與測試、錯誤分類並轉成白話說明（金鑰不會印出）
+  - build_judge_llm：依設定組出評估用的 LLM
+  只用標準函式庫（urllib）直接呼叫雲端 API 與 Ollama，不需要額外的轉接服務。
 
-只用標準函式庫（urllib）呼叫「OpenAI 相容」介面與 Ollama 原生介面，不需要 LiteLLM，
-也不依賴 llama_index 的 OpenAI 類別（它會在本機先檢查模型名稱，NVIDIA 的模型名稱過不了）。
-金鑰不會被印到後台或任何錯誤訊息裡。
+串接模組：
+  - app：設定面板的讀寫與測試按鈕
+  - evaluate_rag：取得出題官/裁判官 LLM 與錯誤說明
 """
 import json
 import os
@@ -34,17 +33,16 @@ DEFAULTS = {
     "local_model": "qwen2:7b",
     "local_host": "",                      # 空白＝用環境變數 OLLAMA_HOST，再不然 http://127.0.0.1:11434
 }
-LOCAL_NUM_CTX = 8192  # 跟 main_guardrail_rag 的 Ollama(context_window=8192) 一致，避免 Ollama 為了不同 ctx 重新載入模型
+LOCAL_NUM_CTX = 8192  # 與 main_guardrail_rag 的 context_window 一致，避免 Ollama 重新載入模型
 
 
 def _log(msg):
     print(f"[LLM設定] {msg}", flush=True)
 
 
-# ----------------------------------------------------------------------------
-# 設定讀寫
-# ----------------------------------------------------------------------------
+# --- 設定讀寫 ---
 def load_settings():
+    """讀取設定，檔案不存在或損壞時用預設值；沒存過設定但有環境變數金鑰時預設用 API 模式"""
     s = dict(DEFAULTS)
     file_exists = os.path.isfile(SETTINGS_PATH)
     if file_exists:
@@ -56,12 +54,12 @@ def load_settings():
         except Exception as e:
             _log(f"讀取 llm_settings.json 失敗（檔案可能損壞），改用預設值：{e}")
     elif os.environ.get("NVIDIA_API_KEY"):
-        s["mode"] = "api"  # 沒存過設定、但環境變數有金鑰：沿用舊行為
+        s["mode"] = "api"
     return s
 
 
 def effective_api_key(s):
-    """設定檔的金鑰優先；沒填且是 NVIDIA 網址時才退回環境變數 NVIDIA_API_KEY。"""
+    """設定檔金鑰優先；沒填且是 NVIDIA 網址時才退回環境變數 NVIDIA_API_KEY"""
     key = (s.get("api_key") or "").strip()
     if not key and "nvidia" in (s.get("api_base") or "").lower():
         key = (os.environ.get("NVIDIA_API_KEY") or "").strip()
@@ -69,6 +67,7 @@ def effective_api_key(s):
 
 
 def local_host(s):
+    """回傳 Ollama 位址：設定 > 環境變數 OLLAMA_HOST > 預設本機"""
     host = (s.get("local_host") or os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").strip().rstrip("/")
     if not host.startswith("http"):
         host = "http://" + host
@@ -76,7 +75,7 @@ def local_host(s):
 
 
 def save_settings(new, clear_key=False):
-    """new 只需包含要改的欄位；api_key 留空表示保留原本已存的金鑰（clear_key=True 才清除）。"""
+    """儲存設定：只更新 new 內有的欄位；api_key 留空保留原本的，clear_key=True 才清除"""
     s = load_settings()
     old_key = s.get("api_key", "")
     for k in DEFAULTS:
@@ -88,6 +87,7 @@ def save_settings(new, clear_key=False):
         s["api_key"] = old_key
     if s["mode"] not in ("api", "local"):
         s["mode"] = "local"
+    # 先寫暫存檔再取代，避免寫到一半損壞
     tmp = SETTINGS_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(s, f, ensure_ascii=False, indent=2)
@@ -100,6 +100,7 @@ def save_settings(new, clear_key=False):
 
 
 def key_status_text(s):
+    """回傳金鑰狀態的說明文字（不顯示金鑰本身）"""
     if (s.get("api_key") or "").strip():
         return "已儲存金鑰（為了安全不顯示；留空代表沿用）"
     if effective_api_key(s):
@@ -107,9 +108,7 @@ def key_status_text(s):
     return "尚未設定金鑰"
 
 
-# ----------------------------------------------------------------------------
-# 錯誤分類與白話說明
-# ----------------------------------------------------------------------------
+# --- 錯誤分類與白話說明 ---
 class LLMCallError(Exception):
     def __init__(self, kind, source, detail="", status=None):
         super().__init__(f"{source}:{kind}:{status}:{detail[:200]}")
@@ -117,6 +116,7 @@ class LLMCallError(Exception):
 
 
 def _classify_http(status, body, source):
+    """依 HTTP 狀態碼與內容分類錯誤"""
     low = (body or "").lower()
     if source == "local":
         if status == 404 or "not found" in low:
@@ -136,7 +136,7 @@ def _classify_http(status, body, source):
 
 
 def _classify_exc(exc, source):
-    """把 urllib / socket 例外轉成 LLMCallError。"""
+    """把 urllib / socket 例外轉成 LLMCallError"""
     if isinstance(exc, LLMCallError):
         return exc
     if isinstance(exc, urllib.error.HTTPError):
@@ -158,7 +158,7 @@ def _classify_exc(exc, source):
 
 
 def explain(err, s=None):
-    """回傳 (一句話原因, [請使用者確認的事項])，全部白話。"""
+    """回傳 (一句話原因, [請使用者確認的事項])，全部用白話"""
     s = s or load_settings()
     k = err.kind
     model = s.get("local_model", "")
@@ -207,6 +207,7 @@ def explain(err, s=None):
 
 
 def format_error(err, s=None, markdown=True):
+    """把錯誤格式化成「原因 + 請確認事項」的文字"""
     what, todo = explain(err, s)
     if markdown:
         return f"❌ **{what}**\n\n請你自行確認：\n" + "\n".join(f"- {t}" for t in todo)
@@ -214,15 +215,13 @@ def format_error(err, s=None, markdown=True):
 
 
 def describe_exception(exc, source="api"):
-    """給 evaluate_rag 用：把任何例外變成一行白話原因。"""
+    """把任何例外轉成一行白話原因（給 evaluate_rag 使用）"""
     err = _classify_exc(exc, source)
     what, _ = explain(err)
     return what
 
 
-# ----------------------------------------------------------------------------
-# LLM 用戶端（stream_complete 介面跟 llama_index 一樣：迭代出來的物件有 .delta）
-# ----------------------------------------------------------------------------
+# --- LLM 用戶端：stream_complete 迭代出的物件有 .delta，與 llama_index 一致 ---
 class Delta:
     def __init__(self, text):
         self.delta = text
@@ -230,7 +229,7 @@ class Delta:
 
 
 class OpenAICompatLLM:
-    """OpenAI 相容的 /chat/completions（NVIDIA NIM、OpenAI、其他相容服務都可用）。"""
+    """OpenAI 相容的 /chat/completions（NVIDIA NIM、OpenAI 等相容服務都可用）"""
     source = "api"
 
     def __init__(self, base_url, api_key, model, timeout=120.0, temperature=0.0, max_tokens=None):
@@ -242,6 +241,7 @@ class OpenAICompatLLM:
         return f"雲端 API（{self.model}）"
 
     def stream_complete(self, prompt):
+        """串流呼叫，逐段產生 Delta；錯誤轉成 LLMCallError"""
         body = {"model": self.model, "stream": True, "temperature": self.temperature,
                 "messages": [{"role": "user", "content": prompt}]}
         if self.max_tokens:
@@ -283,7 +283,7 @@ class OpenAICompatLLM:
 
 
 class OllamaChatLLM:
-    """本機 Ollama 原生 /api/chat（可指定 num_ctx，跟考生模型用同一組設定，避免模型被重新載入）。"""
+    """本機 Ollama 的 /api/chat，使用與考生模型相同的 num_ctx，避免模型被重新載入"""
     source = "local"
 
     def __init__(self, host, model, timeout=600.0, temperature=0.0, max_tokens=None):
@@ -294,6 +294,7 @@ class OllamaChatLLM:
         return f"本機模型（{self.model}）"
 
     def stream_complete(self, prompt):
+        """串流呼叫，逐段產生 Delta；錯誤轉成 LLMCallError"""
         options = {"temperature": self.temperature, "num_ctx": LOCAL_NUM_CTX}
         if self.max_tokens:
             options["num_predict"] = self.max_tokens
@@ -338,10 +339,7 @@ class OllamaChatLLM:
 
 
 class FailoverLLM:
-    """
-    主要 LLM 失敗（API 壞了）就永久改用備援（本機模型），並記一則通知讓畫面用一行白話提示。
-    主要 LLM 的輸出會先整段收完才吐出（這樣中途失敗不會留下一半的內容混進答案）。
-    """
+    """主要 LLM（雲端 API）失敗就永久改用備援（本機模型）並記錄通知；主要 LLM 的輸出先整段收完才吐出，避免中途失敗混入半截內容"""
 
     def __init__(self, primary, fallback=None):
         self.primary, self.fallback = primary, fallback
@@ -352,6 +350,7 @@ class FailoverLLM:
         return (self.fallback if self.switched else self.primary).label()
 
     def pop_notices(self):
+        """取出並清空待顯示的切換通知"""
         n, self._notices = self._notices, []
         return n
 
@@ -378,15 +377,13 @@ class FailoverLLM:
         return "".join(d.delta for d in self.stream_complete(prompt))
 
 
-# ----------------------------------------------------------------------------
-# 連線檢查與測試按鈕
-# ----------------------------------------------------------------------------
+# --- 連線檢查與測試按鈕 ---
 def _tiny_prompt():
     return "請只回覆兩個字：OK"
 
 
 def check_api(s, timeout=20.0):
-    """回傳 (ok, LLMCallError|None, 回應文字, 秒數)。"""
+    """檢查雲端 API，回傳 (是否成功, LLMCallError 或 None, 回應文字, 秒數)"""
     key = effective_api_key(s)
     if not key:
         return False, LLMCallError("empty_key", "api"), "", 0.0
@@ -400,7 +397,7 @@ def check_api(s, timeout=20.0):
 
 
 def list_local_models(s, timeout=4.0):
-    """回傳 (ok, 模型名稱清單 或 LLMCallError)。"""
+    """列出 Ollama 已安裝的模型，回傳 (是否成功, 名稱清單 或 LLMCallError)"""
     try:
         with urllib.request.urlopen(f"{local_host(s)}/api/tags", timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
@@ -410,13 +407,14 @@ def list_local_models(s, timeout=4.0):
 
 
 def _model_installed(req, names):
+    """判斷模型是否已安裝（名稱可省略 :latest 或標籤）"""
     if req in names or f"{req}:latest" in names:
         return True
     return ":" not in req and any(n.split(":")[0] == req for n in names)
 
 
 def check_local(s, actually_generate=False, timeout=180.0):
-    """回傳 (ok, LLMCallError|None, 已安裝模型清單, 回應文字, 秒數)。"""
+    """檢查本機模型，回傳 (是否成功, LLMCallError 或 None, 已安裝模型清單, 回應文字, 秒數)；actually_generate=True 才實際生成一次"""
     ok, res = list_local_models(s)
     if not ok:
         return False, res, [], "", 0.0
@@ -435,7 +433,7 @@ def check_local(s, actually_generate=False, timeout=180.0):
 
 
 def test_api(s=None):
-    """「測試 API」按鈕。回傳 (ok, markdown)，同時把結果印到後台。"""
+    """「測試 API」按鈕：回傳 (是否成功, markdown 訊息)，結果同時印到後台"""
     s = s or load_settings()
     _log(f"開始測試雲端 API（{s['api_base']}，模型 {s['api_model']}）...")
     ok, err, text, sec = check_api(s)
@@ -449,7 +447,7 @@ def test_api(s=None):
 
 
 def test_local(s=None):
-    """「測試本機模型」按鈕。第一次可能要等模型載入。"""
+    """「測試本機模型」按鈕：第一次可能要等模型載入"""
     s = s or load_settings()
     _log(f"開始測試本機模型 {s['local_model']}（{local_host(s)}），第一次可能要等模型載入...")
     ok, err, names, text, sec = check_local(s, actually_generate=True)
@@ -466,14 +464,11 @@ def test_local(s=None):
     return ok, msg
 
 
-# ----------------------------------------------------------------------------
-# 給 evaluate_rag.py：組出出題官／裁判官
-# ----------------------------------------------------------------------------
+# --- 組出評估用的出題官/裁判官 ---
 def build_judge_llm(s=None):
     """
-    回傳 (llm 或 None, 給畫面看的一行說明)。llm 為 None 代表連本機模型也不能用，評估無法進行。
-    規則：模式＝api 且金鑰可用 -> 用 API（本機模型可用時當備援）；API 不能用 -> 自動改本機（一行白話提示，
-    不是錯誤）；模式＝local -> 直接本機。
+    回傳 (llm 或 None, 給畫面看的一行說明)；llm 為 None 代表連本機模型也不能用。
+    模式 api 且金鑰可用就用 API（本機可用時當備援）；API 不能用就自動改本機；模式 local 直接用本機。
     """
     s = s or load_settings()
     local_ok, local_err, _names, _t, _sec = check_local(s)
