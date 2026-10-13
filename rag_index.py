@@ -1,10 +1,12 @@
 """
-法規向量索引（FAISS）的建置與快取。
+rag_index.py：法規向量索引（FAISS）的建置與快取。
 
-【2026-09-02，架構重構拆出】原本這些邏輯放在 main_guardrail_rag.py 裡，
-跟 SQL 引擎、防護欄路由、對話引擎混在同一個 700 多行的檔案裡。這裡只負責
-一件事：把 data/laws/ 底下的法規文件，變成一份可以查詢的向量索引，並且
-自動判斷法規文件有沒有變動過、需不需要重建索引。
+主要功能：
+  - 讀取 data/laws/ 底下的法規文件，切塊、嵌入並存成 FAISS 索引（faiss_storage/）
+  - 用法規資料夾的檔名、大小、修改時間算出指紋，文件有變動就自動重建索引
+
+串接模組：
+  - main_guardrail_rag：初始化時呼叫 load_or_build_index
 """
 
 import os
@@ -22,14 +24,7 @@ from llama_index.vector_stores.faiss import FaissVectorStore
 
 
 def _compute_law_dir_fingerprint(law_dir: str) -> str:
-    """
-    【讓 faiss_storage 不再是「寫死」的，可以自動偵測法規文件有沒有變】
-    對 data/laws/ 資料夾底下所有檔案算一個「指紋」：把每個檔案的（相對檔名、大小、
-    最後修改時間）收集起來、排序後算一次 SHA256。只要資料夾裡的檔案有新增、刪除，
-    或是內容被改過（改過內容，大小或修改時間幾乎一定會跟著變），這個指紋就會跟著變。
-    之後拿現在算出來的指紋，跟「上次建立索引當下」存的指紋比對，就知道法規文件是不是
-    有變動過、要不要重新建立索引，不用每次都靠人手動砍掉 faiss_storage 資料夾。
-    """
+    """對法規資料夾所有檔案的（相對路徑、大小、修改時間）算 SHA256 指紋，用來偵測文件是否變動。"""
     if not os.path.exists(law_dir):
         return "no_law_dir"
     entries = []
@@ -47,31 +42,10 @@ def _compute_law_dir_fingerprint(law_dir: str) -> str:
 
 def load_or_build_index():
     """
-    建立/載入「法規」向量索引。
-
-    【重要變更】考勤資料不再讀取 data/attendance.csv 塞進向量索引了。
-    原因：門禁系統的打卡資料是即時、持續在變的，若跟法規一起做成一次性的靜態向量索引，
-    資料庫每多一筆新打卡紀錄，就必須整個刪掉 faiss_storage 重建，既慢又容易漏資料。
-    考勤類問題現在改成用 rag_sql_engine.build_sql_engine() 建立的即時 SQL 查詢引擎直接
-    查詢 database/database.db，永遠拿到最新資料。詳見 rag_guardrail.check_query_route()。
-
-    【2026-09-02：不用再手動刪 faiss_storage 了】以前這裡只看 faiss_storage 資料夾
-    「存不存在」來決定要不要重建索引——換句話說，data/laws/ 裡的法規文件不管後續怎麼
-    增刪改，只要 faiss_storage 這個資料夾還在，系統永遠只會用「第一次建立索引當下」的
-    舊內容回答問題，完全是寫死、不會自動更新的，每次要讓新文件生效都要手動刪資料夾才行。
-
-    現在改成額外算一份 data/laws/ 資料夾的「指紋」（見 _compute_law_dir_fingerprint()），
-    存在 faiss_storage 資料夾裡；每次啟動都拿「現在的指紋」跟「上次建立索引時存的
-    指紋」比對：
-      - 兩者不一樣（代表 data/laws/ 裡的文件有新增、刪除、或內容被改過），就自動整個
-        重新建立索引，不用再手動處理。
-      - 兩者一樣，才會走原本「直接載入已經建好的索引」這條快速路徑，不會每次啟動都
-        浪費時間重新嵌入沒有變過的文件。
-    這是折衷做法，不是「每次啟動都即時重新查詢」——法規文件通常不會每分每秒在變，
-    真的要做到那種「即時」，要嘛犧牲掉每次啟動的速度、要嘛要改用更複雜的增量索引
-    機制（只針對真的變動的檔案重新嵌入，不用整個重建）。以目前只有 3 份法規文件的
-    規模來說，整個重建也只需要幾秒鐘，用「偵測到變動才重建」這個折衷方式已經很夠用；
-    如果之後法規文件數量變得很多、重建開始感覺到明顯變慢，才需要再考慮做成增量索引。
+    載入或建立法規向量索引。
+    現在的指紋與上次建索引時存的不同（或沒有索引）就重建，相同就直接載入。
+    考勤資料不放進向量索引，改由 rag_sql_engine 即時查資料庫。
+    注意：只改切塊程式邏輯、法規檔沒變時指紋不會變，需要手動刪除 faiss_storage/ 才會重建。
     """
     STORAGE_DIR = "./faiss_storage"
     FINGERPRINT_FILE = os.path.join(STORAGE_DIR, "_law_dir_fingerprint.txt")

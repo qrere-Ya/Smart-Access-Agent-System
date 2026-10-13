@@ -1,11 +1,15 @@
 """
-戰情儀表板要顯示的統計數字：今日到職人數、最近打卡紀錄、異常件數，以及（尚未接到
-畫面上的）系統資源。
+dashboard_stats.py：戰情儀表板的統計查詢。
 
-【2026-09-12，P1 架構重構抽出】原本這些查詢是寫在 backend_main.py 的
-refresh_dashboard_data() 裡，直接混著 Tkinter 的 Treeview 更新一起做。這裡抽出來變成
-純粹「查資料、回傳結果」的函式，不碰任何畫面元件，backend_main.py 自己決定拿到資料
-後要怎麼顯示。
+主要功能：
+  - 今日到職人數與最近打卡紀錄
+  - 異常（尾隨證據）照片件數
+  - 系統 CPU / RAM 使用量
+  只查詢並回傳資料，不碰任何畫面元件。
+
+串接模組：
+  - database_mgr：取得資料庫路徑
+  - backend_main：取得資料後顯示在儀表板與底部狀態列
 """
 import os
 import sqlite3
@@ -18,12 +22,7 @@ ANOMALY_DIR = os.path.join(_PROJECT_ROOT, "anomaly_logs")
 
 
 def get_today_attendance_summary(limit=20):
-    """
-    回傳 (今日不重複到職人數, 最近 limit 筆打卡紀錄) 的 tuple；資料庫查詢失敗（例如
-    檔案剛好被鎖）時回傳 None，讓呼叫端知道「這次沒查到，維持畫面上原本的數字就好」，
-    跟原本 refresh_dashboard_data() 裡 `except: pass`（查詢失敗就整個跳過、不更新
-    畫面）的行為一致，不會因為偶爾查詢失敗就讓畫面顯示成「0 人」這種誤導的假數字。
-    """
+    """回傳 (今日不重複到職人數, 最近 limit 筆打卡紀錄)；查詢失敗回傳 None，讓畫面維持原本數字。"""
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     try:
         conn = sqlite3.connect(database_mgr.DB_PATH)
@@ -43,25 +42,14 @@ def get_today_attendance_summary(limit=20):
 
 
 def get_anomaly_count():
-    """回傳 anomaly_logs 資料夾裡的證據照片數量。跟原本邏輯一樣：資料夾不存在就直接
-    回傳 0，不特別當成錯誤處理。"""
+    """回傳 anomaly_logs 資料夾內的證據照片數量，資料夾不存在回傳 0。"""
     if not os.path.exists(ANOMALY_DIR):
         return 0
     return len([f for f in os.listdir(ANOMALY_DIR) if f.endswith(".jpg")])
 
 
 def get_system_resources():
-    """
-    【P1，2026-09-12 新增，目前尚未接到畫面上】系統資源（CPU/RAM）。對應 Syscom Cubi
-    截圖裡「即時系統效能」卡片的資料來源，之前只有業務數字（今日到職/異常）沒有系統
-    資源。這裡先把資料準備好，故意不動 backend_main.py 的畫面——按照說好的，P1 只搬
-    程式碼、不改畫面，要不要顯示、顯示在哪裡，等你決定的時候再接上。psutil 這個套件
-    專案裡已經在用（service_manager._find_pid_on_port 也靠它找 port 對應的 PID），
-    不算新增依賴。
-
-    回傳 dict：{"cpu_percent": ..., "ram_used_gb": ..., "ram_total_gb": ...}；
-    讀取失敗（例如這台電腦沒裝 psutil）回傳 None。
-    """
+    """回傳 {"cpu_percent", "ram_used_gb", "ram_total_gb"}；讀取失敗（例如沒裝 psutil）回傳 None。"""
     try:
         import psutil
         return {

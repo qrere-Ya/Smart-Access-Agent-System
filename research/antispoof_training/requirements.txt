@@ -25,6 +25,7 @@ onnxruntime
 onnxsim
 opencv-python
 numpy
+matplotlib  # scripts/plot_roc.py（見 README「重新產生 ROC 對照圖」）畫 roc_comparison.png 用
 
 # prepare_celeba_spoof.py 專用：從 Hugging Face 下載已裁切好的 CelebA-Spoof
 # 精簡版資料集（見該檔案開頭的完整說明與限制）
