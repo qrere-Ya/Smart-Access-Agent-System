@@ -30,6 +30,7 @@ from torch.utils.data import DataLoader
 from torchvision import models, transforms
 
 from celeba_spoof_dataset import build_split_dataset
+from augmentation import train_tf  # noqa: E402  見 augmentation.py 2026-09-28 的更新說明
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -46,7 +47,9 @@ NUM_CLASSES = 2
 BASE_MODEL_PATH = os.path.join(OUTPUT_DIR, "antispoof_best.pth")
 FINETUNED_MODEL_PATH = os.path.join(OUTPUT_DIR, "antispoof_finetuned_best.pth")
 
-train_tf = transforms.Compose([
+# 【2026-09-28】訓練集改用 augmentation.py 的 train_tf（見該檔案更新說明），
+# 驗證集維持無擴增版本，理由跟 train_antispoof.py 一致。
+val_tf = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -58,7 +61,7 @@ def main():
         raise SystemExit(f"找不到 {BASE_MODEL_PATH}，先跑 train_antispoof.py 訓練出第一階段的模型")
 
     train_ds = build_split_dataset("train", transform=train_tf)
-    val_ds = build_split_dataset("val", transform=train_tf)
+    val_ds = build_split_dataset("val", transform=val_tf)
     train_loader = DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True,
         num_workers=NUM_WORKERS, pin_memory=(DEVICE == "cuda"),

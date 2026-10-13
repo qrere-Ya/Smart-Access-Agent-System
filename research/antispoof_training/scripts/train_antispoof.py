@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 from torchvision import models, transforms
 
 from celeba_spoof_dataset import build_split_dataset
+from augmentation import train_tf  # noqa: E402  見 augmentation.py 2026-09-28 的更新說明
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -43,7 +44,12 @@ LOG_EVERY_N_STEPS = 200  # 訓練中途印一次進度，避免整個 epoch 跑�
 # 二分類：bona_fide vs. attack（三分類分析攻擊類型，把這裡改成 3）
 NUM_CLASSES = 2
 
-train_tf = transforms.Compose([
+# 【2026-09-28，接上 augmentation.py 的光線/雜訊擴增，解決真實環境誤判問題】
+# 訓練集改用 augmentation.py 的 train_tf（含 RandomGamma/Shadow/SunFlare/
+# GaussNoise 等擴增），驗證集維持原本的「無擴增」版本——驗證/測試集絕對不能做
+# 隨機擴增，否則 val_acc 會變成一個帶雜訊的數字，沒辦法真實反映模型效果，這是
+# 標準做法。
+val_tf = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -52,7 +58,7 @@ train_tf = transforms.Compose([
 
 def main():
     train_ds = build_split_dataset("train", transform=train_tf)
-    val_ds = build_split_dataset("val", transform=train_tf)
+    val_ds = build_split_dataset("val", transform=val_tf)
     train_loader = DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True,
         num_workers=NUM_WORKERS, pin_memory=(DEVICE == "cuda"),
