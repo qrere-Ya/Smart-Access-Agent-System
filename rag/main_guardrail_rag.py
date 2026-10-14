@@ -207,7 +207,7 @@ def _answer_mixed_question(message: str) -> str:
                 attendance_answer = ans
         except Exception as e:
             print(f"DEBUG: Mixed-Attendance Error: {e}")
-    print(f"  [Debug Mixed] 考勤側查詢結果: {attendance_answer!r}")
+    print(f"  [Debug Mixed] 考勤側查詢完成（{'有結果' if attendance_answer else '無結果'}）")
 
     law_answer = None
     law_node_ids = []

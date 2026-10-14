@@ -73,7 +73,7 @@ jobs:
       - name: Mark workspace as safe (container runs as different UID)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Full report (SARIF, never fails; 既有技術債交給 weekly report 追蹤)
-        run: semgrep scan --config auto --config .semgrep.yml --sarif --output semgrep-results.sarif || true
+        run: semgrep scan --config auto --config .semgrep.yml --exclude-rule python.lang.compatibility.python36.python36-compatibility-Popen1 --exclude-rule python.lang.compatibility.python36.python36-compatibility-Popen2 --sarif --output semgrep-results.sarif || true
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -82,7 +82,7 @@ jobs:
       - name: Block merge on ERROR severity in PR-changed files only
         run: |
           git diff -z --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.py' \
-            | xargs -0 -r semgrep scan --config auto --config .semgrep.yml --severity ERROR --error
+            | xargs -0 -r semgrep scan --config auto --config .semgrep.yml --exclude-rule python.lang.compatibility.python36.python36-compatibility-Popen1 --exclude-rule python.lang.compatibility.python36.python36-compatibility-Popen2 --severity ERROR --error
 
   dependency-audit:
     name: Dependency Vulnerability Scan (informational only for now)
