@@ -9,7 +9,9 @@ console_panel.py：後台內建的小終端機文字框元件。
   - backend_main：顯示 RAG、人臉辨識、註冊伺服器三組服務的即時輸出
 """
 import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
+from ttkbootstrap.constants import (
+    BOTH, DARK,
+)
 from ttkbootstrap.widgets.scrolled import ScrolledText
 
 
@@ -39,5 +41,5 @@ def append_line(widget, line):
         if total_lines > 500:
             widget.delete("1.0", f"{total_lines - 500}.0")
         widget.see("end")
-    except Exception:
+    except Exception:  # noqa: S110
         pass  # 視窗關閉瞬間可能還有殘留回呼，略過即可

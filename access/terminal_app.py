@@ -26,7 +26,6 @@ import queue
 from access import utils
 from access import security as sec
 from access.audio_player import SmartAudioPlayer
-import os
 import traceback
 
 # 標準輸出改為 UTF-8，避免不同電腦的系統字碼頁讓終端機中文變亂碼
@@ -164,7 +163,8 @@ def analyze_in_background(frame_copy, detector):
                     return
 
                 # 3. 身分比對
-                landmarks = [face_info['left_eye'], face_info['right_eye'], face_info['nose'], face_info['left_lip'], face_info['right_lip']]
+                landmarks = [face_info['left_eye'], face_info['right_eye'], face_info['nose'],
+                             face_info['left_lip'], face_info['right_lip']]
                 aligned_face = vc.face_align(rgb_img, landmarks)
                 face_DNA = vc.feature_extract(aligned_face)
 
@@ -183,7 +183,8 @@ def analyze_in_background(frame_copy, detector):
                         display_text = "打卡冷卻中..."
                         color_bgr = (200, 200, 200)
                     else:
-                        if db_name not in cooldown_dict or (current_time - cooldown_dict[db_name]['time']) > DB_QUERY_COOLDOWN:
+                        if (db_name not in cooldown_dict
+                                or (current_time - cooldown_dict[db_name]['time']) > DB_QUERY_COOLDOWN):
                             db_status_text = db.log_attendance(db_name)
                             # 只有上班、下班打卡成功才會播報問候語
                             audio_msg = None
@@ -272,7 +273,8 @@ def main():
 
     while True:
         ret, raw_frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
 
         canvas = np.zeros((720, 1280, 3), dtype=np.uint8)
         canvas[:] = (30, 30, 30)
@@ -333,18 +335,21 @@ def main():
         # 頂部橫幅：尾隨警示優先，其次是活體或安全性警告
         if latest_tailgate_ts is not None and (current_time - latest_tailgate_ts) < TAILGATE_BANNER_HOLD:
             cv2.rectangle(canvas, (0, 0), (1280, 60), (0, 140, 255), -1)
-            canvas = utils.put_chinese_text(canvas, "警示：偵測到尾隨，未打卡者已於背景拍照存證", (240, 15), (255, 255, 255), 25)
+            canvas = utils.put_chinese_text(canvas, "警示：偵測到尾隨，未打卡者已於背景拍照存證",
+                                            (240, 15), (255, 255, 255), 25)
         elif ui_cache and ui_cache.get('status') == 'single':
             _msg = str(ui_cache.get('text', ''))
             if "警告" in _msg or "拒絕" in _msg:
                 cv2.rectangle(canvas, (0, 0), (1280, 60), (0, 0, 255), -1)
-                canvas = utils.put_chinese_text(canvas, "SECURITY ALERT: HIGH RISK DETECTED", (350, 15), (255, 255, 255), 25)
+                canvas = utils.put_chinese_text(canvas, "SECURITY ALERT: HIGH RISK DETECTED",
+                                                (350, 15), (255, 255, 255), 25)
 
         now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         canvas = utils.put_chinese_text(canvas, now_str, (100, 600), (150, 150, 150), 24)
 
         cv2.imshow("Smart Access Terminal", canvas)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
     # 結束：釋放攝影機、視窗、執行緒與模型
     cap.release()

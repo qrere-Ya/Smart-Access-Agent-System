@@ -18,9 +18,6 @@ import io
 import os
 import numpy as np
 import datetime
-import queue
-import threading
-import time
 
 from shared import paths
 

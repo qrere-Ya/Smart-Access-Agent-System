@@ -28,11 +28,10 @@ import onnxruntime as ort
 # 先載入 CUDA 相依的 DLL，否則 CUDA provider 會建立失敗並靜默退回 CPU（沒有 GPU 時略過）
 try:
     ort.preload_dlls()
-except Exception:
+except Exception:  # noqa: S110
     pass
 from sklearn.preprocessing import normalize
 from types import SimpleNamespace
-from contextlib import contextmanager
 from shared.resource_manager import ManagedResource
 from shared import paths
 
@@ -82,7 +81,7 @@ class VisionEngine(ManagedResource):
         if tf is not None:
             try:
                 tf.keras.backend.clear_session()
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
 
 

@@ -23,8 +23,10 @@ def list_users():
         c = conn.cursor()
         c.execute("""
             SELECT u.id, u.employee_id, u.name, u.gender, u.role, u.is_active,
-                   COALESCE((SELECT status FROM Attendance a WHERE a.name = u.name ORDER BY timestamp DESC LIMIT 1), '待機'),
-                   COALESCE((SELECT timestamp FROM Attendance a WHERE a.name = u.name ORDER BY timestamp DESC LIMIT 1), '-')
+                   COALESCE((SELECT status FROM Attendance a WHERE a.name = u.name
+                             ORDER BY timestamp DESC LIMIT 1), '待機'),
+                   COALESCE((SELECT timestamp FROM Attendance a WHERE a.name = u.name
+                             ORDER BY timestamp DESC LIMIT 1), '-')
             FROM Users u
             ORDER BY u.id
         """)

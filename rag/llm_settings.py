@@ -95,7 +95,7 @@ def save_settings(new, clear_key=False):
     os.replace(tmp, SETTINGS_PATH)
     try:
         os.chmod(SETTINGS_PATH, 0o600)
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     return s
 
@@ -247,12 +247,12 @@ class OpenAICompatLLM:
                 "messages": [{"role": "user", "content": prompt}]}
         if self.max_tokens:
             body["max_tokens"] = self.max_tokens
-        req = urllib.request.Request(
+        req = urllib.request.Request(  # noqa: S310
             f"{self.base_url}/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
             headers={"Content-Type": "application/json", "Accept": "text/event-stream",
                      "Authorization": f"Bearer {self.api_key}"})
         try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout)
+            resp = urllib.request.urlopen(req, timeout=self.timeout)  # noqa: S310
         except Exception as e:
             raise _classify_exc(e, "api") from None
         try:
@@ -276,7 +276,7 @@ class OpenAICompatLLM:
         finally:
             try:
                 resp.close()
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
 
     def complete(self, prompt):
@@ -301,10 +301,10 @@ class OllamaChatLLM:
             options["num_predict"] = self.max_tokens
         body = {"model": self.model, "stream": True, "options": options,
                 "messages": [{"role": "user", "content": prompt}]}
-        req = urllib.request.Request(f"{self.host}/api/chat", data=json.dumps(body).encode("utf-8"),
+        req = urllib.request.Request(f"{self.host}/api/chat", data=json.dumps(body).encode("utf-8"),  # noqa: S310
                                      method="POST", headers={"Content-Type": "application/json"})
         try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout)
+            resp = urllib.request.urlopen(req, timeout=self.timeout)  # noqa: S310
         except Exception as e:
             raise _classify_exc(e, "local") from None
         try:
@@ -332,7 +332,7 @@ class OllamaChatLLM:
         finally:
             try:
                 resp.close()
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
 
     def complete(self, prompt):
@@ -400,7 +400,7 @@ def check_api(s, timeout=20.0):
 def list_local_models(s, timeout=4.0):
     """列出 Ollama 已安裝的模型，回傳 (是否成功, 名稱清單 或 LLMCallError)"""
     try:
-        with urllib.request.urlopen(f"{local_host(s)}/api/tags", timeout=timeout) as resp:
+        with urllib.request.urlopen(f"{local_host(s)}/api/tags", timeout=timeout) as resp:  # noqa: S310
             data = json.loads(resp.read().decode("utf-8", "replace"))
         return True, [m.get("name", "") for m in data.get("models", []) if m.get("name")]
     except Exception as e:

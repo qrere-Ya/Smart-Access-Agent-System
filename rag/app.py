@@ -41,7 +41,7 @@ else:
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 
 import gradio as gr
-from rag.main_guardrail_rag import get_chat_response, stream_chat_response, init_system
+from rag.main_guardrail_rag import stream_chat_response, init_system
 from rag.eval.evaluate_rag import run_dynamic_evaluation
 from rag import llm_settings
 
@@ -146,7 +146,8 @@ def main():
                 choices=[("雲端 API（失效時自動改用本機模型）", "api"), ("只用本機模型", "local")],
                 value=_s["mode"], label="出題官／裁判官使用哪種模型")
             api_key_box = gr.Textbox(label="API 金鑰", type="password",
-                                     placeholder="貼上你的 API 金鑰（NVIDIA 金鑰通常以 nvapi- 開頭）；留空＝沿用已儲存的")
+                                     placeholder=("貼上你的 API 金鑰（NVIDIA 金鑰通常以 nvapi- 開頭）；"
+                                                  "留空＝沿用已儲存的"))
             key_info = gr.Markdown(f"金鑰狀態：{llm_settings.key_status_text(_s)}")
             api_model_box = gr.Textbox(label="API 模型名稱", value=_s["api_model"])
             local_model_dd = gr.Dropdown(choices=[_s["local_model"]], value=_s["local_model"],
