@@ -25,6 +25,11 @@ if not hasattr(np, "bool"):
     np.bool = bool
 from skimage import transform as trans
 import onnxruntime as ort
+# 先載入 CUDA 相依的 DLL，否則 CUDA provider 會建立失敗並靜默退回 CPU（沒有 GPU 時略過）
+try:
+    ort.preload_dlls()
+except Exception:
+    pass
 from sklearn.preprocessing import normalize
 from types import SimpleNamespace
 from contextlib import contextmanager
@@ -60,12 +65,16 @@ class VisionEngine(ManagedResource):
 
     def _load(self):
         from retinaface import RetinaFace  # 延後 import，會帶入 TensorFlow
-        return SimpleNamespace(
+        impl = SimpleNamespace(
             detector=RetinaFace(quality='normal'),
             # RetinaFace 走 TensorFlow，Windows 原生版只能用 CPU
             liveness=ort.InferenceSession(liveness_model_path, providers=[_cuda_ep(256), 'CPUExecutionProvider']),
             arcface=ort.InferenceSession(onnx_path, providers=[_cuda_ep(768), 'CPUExecutionProvider']),
         )
+        # 印出實際使用的裝置，避免 CUDA 載入失敗卻靜默退回 CPU
+        print(f"[vision_core] 活體模型裝置：{impl.liveness.get_providers()[0]}；"
+              f"ArcFace 裝置：{impl.arcface.get_providers()[0]}")
+        return impl
 
     def _unload(self, impl):
         impl.detector = impl.liveness = impl.arcface = None
