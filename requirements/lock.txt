@@ -148,7 +148,7 @@ tiktoken==0.14.0
 tinytag==2.3.1
 tokenizers==0.23.2
 tomlkit==0.14.0
-torch==2.13.0+cu126
+torch==2.14.1
 torchvision==0.28.0+cu126
 tqdm==4.67.3
 transformers==5.16.1
