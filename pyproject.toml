@@ -21,6 +21,15 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "B", "S", "C4"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108", "S110", "S310", "S603", "S607"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning"]
+
 [tool.bandit]
 exclude_dirs = [
     ".venv",
