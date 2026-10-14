@@ -18,10 +18,3 @@ venv/
 .venv/
 .env
 .ruff_cache/
-
-# research 子專案：訓練環境、資料集與訓練產出
-research/antispoof_training/venv_antispoof/
-research/antispoof_training/data/*
-!research/antispoof_training/data/.gitkeep
-research/antispoof_training/outputs/*
-!research/antispoof_training/outputs/.gitkeep

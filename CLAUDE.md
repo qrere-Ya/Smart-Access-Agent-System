@@ -10,7 +10,7 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
   - `admin/`：Tkinter 管理後台（`backend_main`）與背景服務管理（`service_manager`）
   - `rag/`：RAG 法務/考勤助理，入口 `main_guardrail_rag`，拆為 `rag_index`（FAISS）、`rag_sql_engine`（Attendance 唯讀 SQL）、`rag_guardrail`（語意防護欄）、`rag_chat_engine`（對話記憶）；網頁入口 `app`
   - `rag/eval/`：自動化評估與消融實驗
-  - `research/antispoof_training/`：獨立的活體偵測訓練，與正式系統分離，尚未接入 `vision_core`
+  - 活體偵測模型的訓練已拆成獨立 repo：本機 `C:\Users\qrere\Downloads\Antispoof-Training`（尚未推送到 GitHub）。正式系統只使用它匯出的 ONNX 檔，放在 `models/`，不直接依賴那邊的程式
 - 啟動方式：一律在專案根目錄用 `python -m` 啟動，例如 `python -m admin.backend_main`、`python -m access.terminal_app`、`python -m rag.app`、`python -m access.web_server`，不要直接執行檔案路徑。
 - 路徑一律取自 `shared/paths.py`，不要在各檔自行用 `__file__` 推算。執行期資料放 `runtime/`（資料庫、向量索引、證據照片、LLM 設定、評估結果）。
 - 環境：Windows、Python 3.11（`.venv/`），依賴見 `requirements/main.txt`，完整版本鎖定在 `requirements/lock.txt`（安裝順序見 main.txt 檔頭；retinaface 要另外用 `--no-deps` 安裝）。
