@@ -8,8 +8,6 @@ llama-index-core==0.14.24
 llama-index-workflows==2.23.3
 llama-index-llms-ollama==0.11.0
 llama-index-embeddings-huggingface==0.8.0
-llama-index-embeddings-openai==0.7.0
-llama-index-llms-openai==0.8.0
 llama-index-vector-stores-faiss==0.7.0
 llama-index-readers-file==0.7.0
 llama-index-retrievers-bm25==0.8.0
@@ -17,8 +15,6 @@ bm25s==0.3.11
 PyStemmer==2.2.0.3
 jieba==0.42.1
 faiss-cpu==1.15.0
-openai==2.54.0
-python-dotenv==1.2.2
 pypdf==6.16.2
 gradio==6.26.0
 SQLAlchemy==2.0.35
@@ -31,7 +27,6 @@ scipy==1.15.3
 scikit-learn==1.7.2
 scikit-image==0.25.2
 opencv-python==4.13.0.92
-onnx==1.21.0
 onnxruntime==1.23.2
 ultralytics==8.4.59
 ultralytics-thop==2.0.19
@@ -68,14 +63,12 @@ flatbuffers==25.12.19
 fonttools==4.63.0
 fsspec==2026.4.0
 gast==0.7.0
-gdown==6.1.0
 google-pasta==0.2.0
 grpcio==1.81.0
 h5py==3.14.0
 humanfriendly==10.0
 idna==3.17
 ImageIO==2.37.3
-iso-639==0.4.5
 itsdangerous==2.2.0
 Jinja2==3.1.6
 joblib==1.5.3
@@ -99,7 +92,6 @@ pycparser==3.0
 Pygments==2.20.0
 pyparsing==3.3.2
 pyreadline3==3.5.6
-PySocks==1.7.1
 python-dateutil==2.9.0.post0
 rich==13.9.4
 six==1.17.0

@@ -30,13 +30,14 @@ from llama_index.core.query_engine import NLSQLTableQueryEngine
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.prompts.prompt_type import PromptType
 
-import ablation_config
-from fuzzy_match import min_edit_distance_in_text
+from rag import ablation_config
+from rag.fuzzy_match import min_edit_distance_in_text
+from shared import paths
 
 # 門禁系統資料庫位置，可用環境變數 ACCESS_SYSTEM_DB_PATH 覆蓋
 ACCESS_SYSTEM_DB_PATH = os.environ.get(
     "ACCESS_SYSTEM_DB_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "database", "database.db")
+    paths.DB_PATH
 )
 
 
@@ -209,7 +210,7 @@ def build_sql_engine():
     """
     if not os.path.exists(ACCESS_SYSTEM_DB_PATH):
         print(f"⚠️ [SQL Engine] 找不到門禁系統資料庫: {ACCESS_SYSTEM_DB_PATH}，考勤即時查詢功能將無法使用。")
-        print("    請確認 database/database.db 是否存在，或設定環境變數 ACCESS_SYSTEM_DB_PATH。")
+        print("    請確認 runtime/database.db 是否存在，或設定環境變數 ACCESS_SYSTEM_DB_PATH。")
         return None
 
     try:

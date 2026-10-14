@@ -28,9 +28,10 @@ import onnxruntime as ort
 from sklearn.preprocessing import normalize
 from types import SimpleNamespace
 from contextlib import contextmanager
-from resource_manager import ManagedResource
+from shared.resource_manager import ManagedResource
+from shared import paths
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = paths.PROJECT_ROOT
 
 img_path = os.path.join(_PROJECT_ROOT, 'images', 'simon.jpg')
 onnx_path = os.path.join(_PROJECT_ROOT, 'models', 'arcface_r100_v1.onnx')

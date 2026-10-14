@@ -33,7 +33,7 @@ jobs:
         continue-on-error: true
 
       - name: pip-audit report (JSON)
-        run: pip-audit -r requirements.txt -f json -o pip-audit-report.json
+        run: pip-audit -r requirements/main.txt -f json -o pip-audit-report.json
         continue-on-error: true
 
       - name: Secret scan (full git history)

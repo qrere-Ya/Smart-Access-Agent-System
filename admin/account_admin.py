@@ -13,7 +13,7 @@ account_admin.py：員工帳號管理的資料庫操作。
 """
 import sqlite3
 
-import database_mgr
+from shared import database_mgr
 
 
 def list_users():
