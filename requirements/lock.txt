@@ -105,7 +105,7 @@ pycparser==3.0
 pydantic==2.13.5
 pydantic_core==2.46.5
 pydub==0.25.1
-Pygments==2.20.0
+Pygments==2.21.0
 pyparsing==3.3.2
 pypdf==6.16.2
 pypng==0.20220715.0
