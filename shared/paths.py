@@ -25,6 +25,6 @@ ANOMALY_DIR = os.path.join(RUNTIME_DIR, "anomaly_logs")
 LLM_SETTINGS_PATH = os.path.join(RUNTIME_DIR, "llm_settings.json")
 EVAL_RESULTS_DIR = os.path.join(RUNTIME_DIR, "eval_results")
 
-VENV_PYTHON = os.environ.get("SMART_ACCESS_PYTHON") or os.path.join(PROJECT_ROOT, "venv", "Scripts", "python.exe")
+VENV_PYTHON = os.environ.get("SMART_ACCESS_PYTHON") or os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 
 os.makedirs(RUNTIME_DIR, exist_ok=True)
