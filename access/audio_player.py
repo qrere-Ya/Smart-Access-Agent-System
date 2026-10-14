@@ -18,7 +18,8 @@ import threading
 import sounddevice as sd
 import sherpa_onnx
 import numpy as np
-from resource_manager import ManagedResource
+from shared.resource_manager import ManagedResource
+from shared import paths
 
 
 class _TtsResource(ManagedResource):
@@ -27,8 +28,7 @@ class _TtsResource(ManagedResource):
         super().__init__("audio.sherpa-tts", est_ram_mb=300, idle_ttl=120)
 
     def _load(self):
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        model_dir = os.path.join(BASE_DIR, "models", "vits-piper-zh_CN-huayan-medium")
+        model_dir = os.path.join(paths.MODELS_DIR, "vits-piper-zh_CN-huayan-medium")
         print("[Audio] 正在載入 sherpa-onnx 本地端語音引擎...")
         tts_config = sherpa_onnx.OfflineTtsConfig(
             model=sherpa_onnx.OfflineTtsModelConfig(

@@ -7,8 +7,8 @@ guardrail_threshold_sweep.py：防護欄門檻掃描實驗（只跑 bge-m3 嵌�
       D、E、F 為多錨點差值（D 只看當句、E 短追問才併入上一句、F 再加意圖詞規則）
       G 為實際上線的 guardrail_policy.decide，並對三個門檻做網格掃描
   - 指標：突破率（該攔卻放行）、誤擋率（該放行卻攔）、AUC（好壞問題的可分離度）
-  - 輸出 guardrail_sweep_results/per_question.csv 與 summary.json，並在終端機印出摘要
-  用法：python guardrail_threshold_sweep.py
+  - 輸出 runtime/eval_results/guardrail_sweep/per_question.csv 與 summary.json，並在終端機印出摘要
+  用法：python -m rag.eval.guardrail_threshold_sweep
   環境變數：SWEEP_DEVICE=cpu|cuda（預設 cpu）、SWEEP_FAKE=1（假嵌入，只驗證流程，數字無意義）
   題庫取自 evaluate_rag，數字偏樂觀，要更可信請自行補充沒看過的題目到 EXTRA_* 清單。
 
@@ -24,8 +24,10 @@ import math
 import os
 import sys
 
+from shared import paths
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.join(HERE, "guardrail_sweep_results")
+OUT_DIR = os.path.join(paths.EVAL_RESULTS_DIR, "guardrail_sweep")
 
 # 舊版單一錨點（A、B、C 方法使用）
 CUR_POS = ("查詢員工打卡紀錄、上下班時間、遲到早退狀況、勞動基準法規、"
@@ -112,7 +114,7 @@ class Embedder:
             return
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-        local = os.path.join(HERE, "models", "bge-m3")
+        local = os.path.join(paths.MODELS_DIR, "bge-m3")
         source = local if os.path.isdir(local) else "BAAI/bge-m3"
         device = os.environ.get("SWEEP_DEVICE", "cpu")
         print(f"載入 bge-m3（{source}，device={device}）...")
@@ -280,7 +282,7 @@ def main():
         print("  （無）")
 
     # --- G：實際上線的策略（guardrail_policy.decide）---
-    import guardrail_policy as gp
+    from rag import guardrail_policy as gp
     pos_vecs = [E.vec(a) for a in gp.POS_ANCHORS]
     neg_vecs = [E.vec(a) for a in gp.NEG_ANCHORS]
 
