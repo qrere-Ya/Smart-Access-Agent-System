@@ -55,7 +55,7 @@ httpx==0.28.1
 huggingface_hub==1.21.0
 humanfriendly==10.0
 idna==3.17
-ImageIO==2.37.3
+ImageIO==2.38.1
 itsdangerous==2.2.0
 jieba==0.42.1
 Jinja2==3.1.6
