@@ -127,7 +127,7 @@ class Embedder:
         if self.fake:
             v = [0.0] * 256
             for i in range(len(text) - 1):
-                h = int(hashlib.md5(text[i:i + 2].encode()).hexdigest(), 16)
+                h = int(hashlib.md5(text[i:i + 2].encode(), usedforsecurity=False).hexdigest(), 16)
                 v[h % 256] += 1.0
         else:
             v = self.model.get_text_embedding(text)
@@ -138,7 +138,7 @@ class Embedder:
 
     def sim(self, a, b):
         """兩段文字的餘弦相似度"""
-        return sum(x * y for x, y in zip(self.vec(a), self.vec(b)))
+        return sum(x * y for x, y in zip(self.vec(a), self.vec(b), strict=True))
 
 
 # --- 判定 ---
@@ -185,7 +185,6 @@ def auc(pos_scores, neg_scores):
 def main():
     """跑完所有方法與門檻掃描，印出摘要並輸出 CSV 與 JSON"""
     good, bad = load_pools()
-    bad_all = list(bad) + EXTRA_BAD_ADJACENT
     E = Embedder()
 
     # 案例：(集合, 上一句或 None, 這一句, 是否該攔)
@@ -232,8 +231,8 @@ def main():
     print(f"{'方法':<18}{'單輪突破':>9}{'單輪誤擋':>9}{'多輪突破':>9}{'多輪誤擋':>9}")
     summary = {"current_rule": {}, "margin_sweep": [], "auc": {}}
     for name, key in (("A_current_raw", "A_blocked"), ("B_current_clean", "B_blocked"), ("C_query_only", "C_blocked")):
-        s = rate(single, lambda r: r[key])
-        m = rate(multi, lambda r: r[key])
+        s = rate(single, lambda r, key=key: r[key])
+        m = rate(multi, lambda r, key=key: r[key])
         summary["current_rule"][name] = {"single": s, "multi": m}
         print(f"{name:<18}{fmt(s[0]):>9}{fmt(s[1]):>9}{fmt(m[0]):>9}{fmt(m[1]):>9}")
 
@@ -252,10 +251,10 @@ def main():
           f" | {'F=規則+E 突破':>13}{'F 誤擋':>8}")
     best = None
     for mg in margins:
-        d = rate(everything, lambda r: r["D_margin"] < mg)
-        es = rate(single, lambda r: r["E_margin"] < mg)
-        em = rate(multi, lambda r: r["E_margin"] < mg)
-        f = rate(everything, lambda r: r["intent_blocked"] or r["E_margin"] < mg)
+        d = rate(everything, lambda r, mg=mg: r["D_margin"] < mg)
+        es = rate(single, lambda r, mg=mg: r["E_margin"] < mg)
+        em = rate(multi, lambda r, mg=mg: r["E_margin"] < mg)
+        f = rate(everything, lambda r, mg=mg: r["intent_blocked"] or r["E_margin"] < mg)
         summary["margin_sweep"].append({"margin": mg, "D": d, "E_single": es, "E_multi": em, "F_all": f})
         print(f"{mg:>7.2f} | {fmt(d[0]):>7}{fmt(d[1]):>8} | {fmt(es[0]):>10}{fmt(es[1]):>10}{fmt(em[0]):>10}{fmt(em[1]):>10}"
               f" | {fmt(f[0]):>13}{fmt(f[1]):>8}")
@@ -288,8 +287,8 @@ def main():
 
     def margin_fn(text):
         q = E.vec(text)
-        sp = max(sum(x * y for x, y in zip(q, v)) for v in pos_vecs)
-        sn = max(sum(x * y for x, y in zip(q, v)) for v in neg_vecs)
+        sp = max(sum(x * y for x, y in zip(q, v, strict=True)) for v in pos_vecs)
+        sn = max(sum(x * y for x, y in zip(q, v, strict=True)) for v in neg_vecs)
         return sp - sn, sp, sn
 
     def run_g(t_pass=None, t_floor=None, t_ctx=None):
@@ -328,7 +327,7 @@ def main():
         print("    （無）")
 
     print("\n  多輪逐題判定（看灰區救援有沒有被濫用）：")
-    for r, blocked, why, det in res:
+    for r, blocked, why, _det in res:
         if r["set"] == "multi_turn":
             print(f"    {'攔' if blocked else '放'}（{why}） [{r['prev']}] → {r['query']}")
 

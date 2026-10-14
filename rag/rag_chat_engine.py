@@ -90,7 +90,7 @@ def _build_chinese_bm25_retriever(index, similarity_top_k: int) -> _ChineseBM25R
     return _ChineseBM25Retriever(
         nodes=segmented_nodes,
         similarity_top_k=similarity_top_k,
-        token_pattern=r"\S+",
+        token_pattern=r"\S+",  # noqa: S106
         skip_stemming=True,
         original_nodes_by_id={node.node_id: node for node in original_nodes},
     )

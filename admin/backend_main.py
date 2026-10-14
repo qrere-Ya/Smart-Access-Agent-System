@@ -17,19 +17,17 @@ backend_main.py：門禁系統管理後台主程式（Tkinter / ttkbootstrap）�
   - database_mgr：初始化資料庫
 """
 import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
+from ttkbootstrap.constants import (
+    BOTH, DANGER, E, INFO, LEFT, LIGHT, LINK, OUTLINE, PRIMARY, RIGHT, SECONDARY, SUCCESS, W, WARNING, X, Y,
+)
 import tkinter as tk
 from tkinter import messagebox
 import os
 import datetime
 from shared import database_mgr as db
 import pyqrcode
-import png
-import random
-import string
 import io
 from PIL import Image, ImageTk
-from tkinter import PhotoImage
 
 from admin import service_manager
 from admin import console_panel
@@ -72,8 +70,10 @@ class BackendManagerApp:
 
         brand_col = ttk.Frame(header)
         brand_col.pack(side=LEFT)
-        ttk.Label(brand_col, text="🔐 Smart Access Hub", font=("Helvetica", 20, "bold"), bootstyle=PRIMARY).pack(anchor=W)
-        ttk.Label(brand_col, text="邊緣運算門禁後臺系統", font=("微軟正黑體", 10), bootstyle=SECONDARY).pack(anchor=W, pady=(2, 0))
+        ttk.Label(brand_col, text="🔐 Smart Access Hub", font=("Helvetica", 20, "bold"),
+                  bootstyle=PRIMARY).pack(anchor=W)
+        ttk.Label(brand_col, text="邊緣運算門禁後臺系統", font=("微軟正黑體", 10),
+                  bootstyle=SECONDARY).pack(anchor=W, pady=(2, 0))
         self._build_status_pill(brand_col, "🟢 系統運作中", SUCCESS)
 
         clock_col = ttk.Frame(header)
@@ -102,7 +102,8 @@ class BackendManagerApp:
             ("📊", "營運狀態與尾隨監控", "今日打卡統計、安全警報、人臉辨識即時輸出", SUCCESS, self.open_dashboard),
             ("👤", "員工帳號管理", "列出、停用、啟用、刪除員工帳號與角色", INFO, self.open_account_admin),
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", WARNING, self.open_qr_registration),
-            ("🤖", "AI 代理與個人化設定", "啟動 RAG 智慧問答服務（勞基法規＋員工資料庫）", PRIMARY, self.open_ai_agent_settings),
+            ("🤖", "AI 代理與個人化設定", "啟動 RAG 智慧問答服務（勞基法規＋員工資料庫）", PRIMARY,
+             self.open_ai_agent_settings),
         ]
         for idx, (icon, title, desc, style, cmd) in enumerate(modules):
             row, col = divmod(idx, 2)
@@ -217,7 +218,7 @@ class BackendManagerApp:
         try:
             if win is not None and win.winfo_exists():
                 return {"parent": win}
-        except Exception:
+        except Exception:  # noqa: S110
             pass
         return {}
 
@@ -347,7 +348,8 @@ class BackendManagerApp:
     def on_app_close(self):
         """關閉主視窗時，詢問是否一併停止還在背景跑的服務"""
         if service_manager.any_service_running():
-            if messagebox.askyesno("確認關閉", "偵測到有後端服務仍在執行中，要一併停止嗎？\n（選「否」會讓它們繼續在背景執行）"):
+            if messagebox.askyesno("確認關閉",
+                                   "偵測到有後端服務仍在執行中，要一併停止嗎？\n（選「否」會讓它們繼續在背景執行）"):
                 service_manager.stop_all_services()
         self.root.destroy()
 
@@ -403,7 +405,8 @@ class BackendManagerApp:
         list_frame = ttk.Frame(left_col, padding=20)
         list_frame.pack(fill=BOTH, expand=True)
 
-        self.tree = ttk.Treeview(list_frame, columns=("time", "name", "status", "note"), show="headings", bootstyle=INFO)
+        self.tree = ttk.Treeview(list_frame, columns=("time", "name", "status", "note"),
+                                 show="headings", bootstyle=INFO)
         self.tree.heading("time", text="記錄時間")
         self.tree.heading("name", text="員工姓名")
         self.tree.heading("status", text="系統判定結果")
@@ -437,7 +440,7 @@ class BackendManagerApp:
         target = os.path.abspath(ANOMALY_DIR)
         if not os.path.exists(target):
             os.makedirs(target)
-        os.startfile(target)
+        os.startfile(target)  # noqa: S606
 
     # --- 視窗 2：員工帳號管理 ---
     def open_account_admin(self):
@@ -450,7 +453,8 @@ class BackendManagerApp:
         frame = ttk.Frame(admin_win, padding=20)
         frame.pack(fill=BOTH, expand=True)
 
-        ttk.Label(frame, text="👤 員工帳號管理", font=("微軟正黑體", 16, "bold"), bootstyle=PRIMARY).pack(anchor=W, pady=(0, 5))
+        ttk.Label(frame, text="👤 員工帳號管理", font=("微軟正黑體", 16, "bold"),
+                  bootstyle=PRIMARY).pack(anchor=W, pady=(0, 5))
         ttk.Label(
             frame,
             text="停用的帳號會立刻無法再刷臉打卡（系統判定為查無資料）；刪除不會影響已經留存的打卡歷史紀錄。",
@@ -459,9 +463,12 @@ class BackendManagerApp:
 
         columns = ("emp_id", "name", "gender", "role", "active", "last_status", "last_time")
         tree = ttk.Treeview(frame, columns=columns, show="headings", bootstyle=PRIMARY, selectmode="extended")
-        tree.heading("emp_id", text="員工編號"); tree.heading("name", text="姓名")
-        tree.heading("gender", text="性別"); tree.heading("role", text="角色")
-        tree.heading("active", text="狀態"); tree.heading("last_status", text="最新打卡狀態")
+        tree.heading("emp_id", text="員工編號")
+        tree.heading("name", text="姓名")
+        tree.heading("gender", text="性別")
+        tree.heading("role", text="角色")
+        tree.heading("active", text="狀態")
+        tree.heading("last_status", text="最新打卡狀態")
         tree.heading("last_time", text="最後刷卡時間")
         tree.pack(fill=BOTH, expand=True, pady=(0, 10))
 
@@ -518,9 +525,12 @@ class BackendManagerApp:
 
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=X)
-        ttk.Button(btn_frame, text="🔄 重新整理", bootstyle=(SECONDARY, OUTLINE), command=refresh).pack(side=LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="⏸️ 停用所選", bootstyle=(WARNING, OUTLINE), command=do_deactivate).pack(side=LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="▶️ 啟用所選", bootstyle=(SUCCESS, OUTLINE), command=do_activate).pack(side=LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="🔄 重新整理", bootstyle=(SECONDARY, OUTLINE),
+                   command=refresh).pack(side=LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="⏸️ 停用所選", bootstyle=(WARNING, OUTLINE),
+                   command=do_deactivate).pack(side=LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="▶️ 啟用所選", bootstyle=(SUCCESS, OUTLINE),
+                   command=do_activate).pack(side=LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="🗑️ 刪除所選", bootstyle=(DANGER, OUTLINE), command=do_delete).pack(side=LEFT)
 
         refresh()
@@ -558,7 +568,8 @@ class BackendManagerApp:
         rag_ctrl_frame = ttk.Labelframe(left_col, text="RAG 智慧問答服務", padding=15, bootstyle=INFO)
         rag_ctrl_frame.pack(fill=X, padx=20, pady=20)
 
-        ttk.Label(rag_ctrl_frame, textvariable=self.rag_status_var, font=("微軟正黑體", 11)).pack(anchor=W, pady=(0, 10))
+        ttk.Label(rag_ctrl_frame, textvariable=self.rag_status_var,
+                  font=("微軟正黑體", 11)).pack(anchor=W, pady=(0, 10))
         self.rag_btn = ttk.Button(
             rag_ctrl_frame, text="🧠 啟動 RAG（Ollama + 助理網頁）",
             bootstyle=(INFO, OUTLINE), command=self.toggle_rag_services,

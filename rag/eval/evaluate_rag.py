@@ -15,12 +15,10 @@ evaluate_rag.py：RAG 系統的 LLM-as-a-Judge 自動化評估。
   - app：「Execute Evaluate」按鈕呼叫
   - run_single_ablation_eval：無介面執行並取得量化結果
 """
-import os
 import random
 import time
-from llama_index.core import PromptTemplate, Settings
+from llama_index.core import PromptTemplate
 from rag.main_guardrail_rag import (
-    get_chat_response,
     stream_chat_response,
     load_or_build_index,
     setup_environment,

@@ -188,13 +188,13 @@ def check_query_route(query: str, context: str = None) -> str:
 
     # 混合題要先判斷，避免被後面的快速通道搶走
     if _detect_mixed_question(query):
-        print(f"  [Debug Router] 偵測到「真實員工姓名 + 法規計算詞組」同時出現，判定為 mixed（同時查考勤與法規）")
+        print("  [Debug Router] 偵測到「真實員工姓名 + 法規計算詞組」同時出現，判定為 mixed（同時查考勤與法規）")
         database_mgr.log_llm_usage(event_type="route", question=query, route="mixed")
         return "mixed"
 
     # 員工姓名 + 遲到/早退，直接判為考勤；放在混合題判斷之後
     if _detect_attendance_status_question(query):
-        print(f"  [Debug Router] 偵測到「真實員工姓名 + 遲到/早退」同時出現，判定為 attendance")
+        print("  [Debug Router] 偵測到「真實員工姓名 + 遲到/早退」同時出現，判定為 attendance")
         database_mgr.log_llm_usage(event_type="route", question=query, route="attendance")
         return "attendance"
 
