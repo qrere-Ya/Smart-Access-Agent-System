@@ -1,33 +1,23 @@
-faiss_storage/
-database/*.db
+# 執行期資料（資料庫、向量索引、尾隨證據照片、含金鑰的 LLM 設定、評估結果）
+runtime/
 
-# 2026-09-17：anomaly_logs/ 含真實尾隨偵測畫面、data/ 是執行時放置的資料
-# （法規 PDF、考勤示範資料），兩個都整個資料夾不進版控
-anomaly_logs/
+# 輸入資料（法規文件等）
 data/
 
+# 模型（體積大，各台電腦自行放置）
 models/**/*.onnx
 models/**/*.pt
 models/**/*.tar.bz2
-
-# 2026-09-17：TTS 模型 vits-piper-zh_CN-huayan-medium 整個資料夾都不進版控——
-# 主模型檔 .onnx 已經被上面 models/**/*.onnx 擋掉，若只留底下的 espeak-ng-data/
-# 語言字典跟其他附屬檔案，會變成沒有主模型檔配套、單獨也跑不動的雜項檔案，乾脆整個排除
+models/bge-m3/
 models/vits-piper-zh_CN-huayan-medium/
+
+# Python 環境與快取
 __pycache__/
 *.pyc
 venv/
 .venv/
-venv_litellm/
 .env
-
-# 2026-09-17：research/antispoof_training/ 下自己的訓練虛擬環境，跟根目錄的 venv/
-# 一樣體積大且跟機器綁定，不進版控
-research/antispoof_training/venv_antispoof/
-
-# 2026-09-15：自訓練活體偵測模型（research/antispoof_training/）產出的資料集/訓練
-# 產物檔案都很大（影片、圖片、.pth、.onnx），不進版控；.gitkeep 讓空資料夾結構保留
-research/antispoof_training/data/*
-!research/antispoof_training/data/.gitkeep
-research/antispoof_training/outputs/*
-!research/antispoof_training/outputs/.gitkeep
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
