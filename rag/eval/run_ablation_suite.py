@@ -75,7 +75,7 @@ def _run_one(config, questions_per_category, script_dir, seed):
         cmd += ["--seed", str(seed)]
     print(f"\n{'=' * 70}\n▶ 開始跑：{config['name_zh']}（{config['label']}）\n{'=' * 70}", flush=True)
 
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603
         cmd, env=env, cwd=script_dir, capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
 
@@ -192,7 +192,6 @@ def main():
 
     # 如實回報成功與失敗的輪數
     failed = [r for r in all_results if r.get("error")]
-    ok_count = len(all_results) - len(failed)
     if failed:
         print(
             f"\n⚠️ 消融實驗 5 輪跑完，但有 {len(failed)}/{len(all_results)} 輪失敗"

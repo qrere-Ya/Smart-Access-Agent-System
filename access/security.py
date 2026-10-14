@@ -42,7 +42,7 @@ class _YoloResource(ManagedResource):
     def _unload(self, impl):
         try:
             impl.to("cpu")
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
 

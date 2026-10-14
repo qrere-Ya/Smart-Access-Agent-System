@@ -43,17 +43,17 @@ def _free_vram_mb():
     """取得整張顯卡的剩餘顯存（MB），優先用 nvidia-smi 以包含其他行程的占用，取不到回傳 None"""
     try:
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],  # noqa: S607
             capture_output=True, text=True, timeout=3,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return int(out.stdout.strip().splitlines()[0])
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     torch = sys.modules.get("torch")
     try:
         if torch is not None and torch.cuda.is_available():
             return torch.cuda.mem_get_info()[0] // 2**20
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     return None
 
@@ -73,7 +73,7 @@ def _purge():
     try:
         if torch is not None and torch.cuda.is_available():
             torch.cuda.empty_cache()
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     gc.collect()
 

@@ -51,7 +51,7 @@ class _EmbedResource(ManagedResource):
     def _unload(self, impl):
         try:
             impl._model.to("cpu")  # 先移回 CPU，確保顯存歸還
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
 
@@ -109,10 +109,10 @@ class OllamaModelResource(ManagedResource):
 
     def _unload(self, impl):
         try:
-            req = urllib.request.Request(
+            req = urllib.request.Request(  # noqa: S310
                 f"{self._host}/api/generate",
                 data=json.dumps({"model": self._model, "keep_alive": 0}).encode(),
                 headers={"Content-Type": "application/json"}, method="POST")
-            urllib.request.urlopen(req, timeout=10).read()
+            urllib.request.urlopen(req, timeout=10).read()  # noqa: S310
         except Exception as e:
             print(f"[rag_resources] 要求 Ollama 卸載 {self._model} 失敗（可能未啟動）：{e}")

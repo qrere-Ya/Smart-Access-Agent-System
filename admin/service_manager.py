@@ -122,7 +122,7 @@ def _read_process_output(proc, on_line):
     finally:
         try:
             proc.stdout.close()
-        except Exception:
+        except Exception:  # noqa: S110
             pass
         # 輸出停止通常代表行程已結束，結束碼非 0 代表異常關閉
         try:
@@ -222,7 +222,7 @@ def _start_rag_services_worker(on_output_line, on_finished):
                 _ollama_env.setdefault("OLLAMA_KEEP_ALIVE", "2m")
                 _ollama_env.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
                 _ollama_env.setdefault("OLLAMA_NUM_PARALLEL", "1")
-                proc = subprocess.Popen(
+                proc = subprocess.Popen(  # noqa: S603
                     [ollama_exe, "serve"],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
                     errors="replace", env=_ollama_env,
@@ -249,7 +249,7 @@ def _start_rag_services_worker(on_output_line, on_finished):
         emit("[RAG App] ", f"（使用的 Python 直譯器：{python_exe}）")
         try:
             # -u 不緩衝輸出；encoding 指定 UTF-8 讀取，避免中文讓讀取執行緒停擺
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # noqa: S603
                 [python_exe, "-u", "-m", rag_module], cwd=_PROJECT_ROOT,
                 env=_python_child_env(),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -288,7 +288,7 @@ def start_face_service(on_output_line):
     python_exe = _project_python_exe()
     on_output_line(f"（使用的 Python 直譯器：{python_exe}）")
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # noqa: S603
             [python_exe, "-u", "-m", terminal_module], cwd=_PROJECT_ROOT,
             env=_python_child_env(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -321,7 +321,7 @@ def start_reg_service(on_output_line):
     python_exe = _project_python_exe()
     on_output_line(f"（使用的 Python 直譯器：{python_exe}）")
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # noqa: S603
             [python_exe, "-u", "-m", web_module], cwd=_PROJECT_ROOT,
             env=_python_child_env(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -355,7 +355,7 @@ def stop_all_services():
 def _find_wifi_direct_adapter_ip():
     """用 `ipconfig /all` 找出描述含「Wi-Fi Direct」的網卡並回傳它的 IPv4，找不到或出錯回傳 None。"""
     try:
-        result = subprocess.run(["ipconfig", "/all"], capture_output=True, timeout=5)
+        result = subprocess.run(["ipconfig", "/all"], capture_output=True, timeout=5)  # noqa: S607
         raw = result.stdout
         # 繁體中文 Windows 常用 cp950，依序嘗試幾種編碼
         output = None
@@ -416,7 +416,8 @@ def get_local_ip_offline():
             if pip in ip_list:
                 return pip
 
-        private_ips = [ip for ip in ip_list if ip != '127.0.0.1' and (ip.startswith('192.168.') or ip.startswith('10.'))]
+        private_ips = [ip for ip in ip_list
+                       if ip != '127.0.0.1' and (ip.startswith('192.168.') or ip.startswith('10.'))]
         if private_ips:
             gateway_like = [ip for ip in private_ips if ip.endswith('.1')]
             return gateway_like[0] if gateway_like else private_ips[0]

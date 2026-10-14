@@ -18,10 +18,8 @@ import cv2
 import numpy as np
 from access import vision_core as vc
 from shared import database_mgr as db
-import os
 import socket
-import psutil
-import random
+import secrets
 import string
 import time
 
@@ -34,7 +32,7 @@ def _find_wifi_direct_adapter_ip():
     import re
     try:
         result = subprocess.run(
-            ["ipconfig", "/all"],
+            ["ipconfig", "/all"],  # noqa: S607
             capture_output=True,
             timeout=5,
         )
@@ -88,13 +86,14 @@ def get_local_ip_offline():
                 ip = s.getsockname()[0]
                 s.close()
                 return ip
-            except:
+            except Exception:
                 return '127.0.0.1'
         priority_ips = ['192.168.137.1', '192.168.5.1']
         for pip in priority_ips:
             if pip in ip_list:
                 return pip
-        private_ips = [ip for ip in ip_list if ip != '127.0.0.1' and (ip.startswith('192.168.') or ip.startswith('10.'))]
+        private_ips = [ip for ip in ip_list
+                       if ip != '127.0.0.1' and (ip.startswith('192.168.') or ip.startswith('10.'))]
         if private_ips:
             gateway_like = [ip for ip in private_ips if ip.endswith('.1')]
             return gateway_like[0] if gateway_like else private_ips[0]
@@ -125,7 +124,7 @@ def internal_generate_token():
     if request.remote_addr != '127.0.0.1':
         return jsonify({"error": "Forbidden"}), 403
 
-    token = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
     valid_tokens[token] = time.time() + 60
 
     # 順便清掉已過期的 Token
@@ -175,7 +174,8 @@ def api_register():
                 return jsonify({"status": "fail", "message": "註冊失敗:請確保照片中有一張清晰可辨的人臉"})
 
             face_info = detections[0]
-            landmarks = [face_info['left_eye'], face_info['right_eye'], face_info['nose'], face_info['left_lip'], face_info['right_lip']]
+            landmarks = [face_info['left_eye'], face_info['right_eye'], face_info['nose'],
+                         face_info['left_lip'], face_info['right_lip']]
             aligned_face = vc.face_align(rgb_img, landmarks)
             face_dna = vc.feature_extract(aligned_face)
 
@@ -202,4 +202,4 @@ if __name__ == '__main__':
     print(f"本地動態 IP: {local_ip}")
     print(f"請在手機瀏覽器輸入: http://{local_ip}:5000")
     print("="*40 + "\n")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)  # noqa: S104
