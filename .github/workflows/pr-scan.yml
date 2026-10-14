@@ -49,7 +49,7 @@ jobs:
       - name: Full report (SARIF, never fails; 既有技術債交給 weekly report 追蹤)
         run: bandit -c pyproject.toml -r . -f sarif -o bandit-results.sarif --exit-zero
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit-results.sarif
           category: bandit
@@ -75,7 +75,7 @@ jobs:
       - name: Full report (SARIF, never fails; 既有技術債交給 weekly report 追蹤)
         run: semgrep scan --config auto --config .semgrep.yml --exclude-rule python.lang.compatibility.python36.python36-compatibility-Popen1 --exclude-rule python.lang.compatibility.python36.python36-compatibility-Popen2 --sarif --output semgrep-results.sarif || true
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
