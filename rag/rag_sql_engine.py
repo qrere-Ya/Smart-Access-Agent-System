@@ -305,7 +305,7 @@ def _match_known_employee_name(message: str, known_names):
     ]
     if len(fuzzy_candidates) == 1:
         matched_name = fuzzy_candidates[0]
-        print(f"  [Debug SQL] 姓名模糊比對命中「{matched_name}」（訊息中沒有完全相符的姓名，判定為打字誤差）")
+        print("  [Debug SQL] 姓名模糊比對命中（訊息中沒有完全相符的姓名，判定為打字誤差）")
         return matched_name
     if len(fuzzy_candidates) > 1:
         print(f"  [Debug SQL] 姓名模糊比對有多個候選人 {fuzzy_candidates}，無法判斷是哪一位，放棄比對")
