@@ -71,7 +71,7 @@ grpcio==1.81.0
 h5py==3.14.0
 humanfriendly==10.0
 idna==3.17
-ImageIO==2.37.3
+ImageIO==2.38.1
 itsdangerous==2.2.0
 Jinja2==3.1.6
 joblib==1.5.3
