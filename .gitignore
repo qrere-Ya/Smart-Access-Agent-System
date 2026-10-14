@@ -1,13 +1,6 @@
 # 執行期資料（資料庫、向量索引、尾隨證據照片、含金鑰的 LLM 設定、評估結果）
 runtime/
 
-# 舊版存放位置（資料已搬到 runtime/，確認舊資料夾刪除後可移除這幾行）
-faiss_storage/
-database/*.db
-anomaly_logs/
-llm_settings.json
-llm_settings.json.tmp
-
 # 輸入資料（法規文件等）
 data/
 
@@ -23,7 +16,6 @@ __pycache__/
 *.pyc
 venv/
 .venv/
-venv_litellm/
 .env
 .ruff_cache/
 
