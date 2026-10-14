@@ -22,7 +22,7 @@ import tkinter as tk
 from tkinter import messagebox
 import os
 import datetime
-import database_mgr as db
+from shared import database_mgr as db
 import pyqrcode
 import png
 import random
@@ -31,13 +31,13 @@ import io
 from PIL import Image, ImageTk
 from tkinter import PhotoImage
 
-import service_manager
-import console_panel
-import dashboard_stats
-import account_admin
+from admin import service_manager
+from admin import console_panel
+from admin import dashboard_stats
+from admin import account_admin
+from shared import paths
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-ANOMALY_DIR = os.path.join(_PROJECT_ROOT, "anomaly_logs")
+ANOMALY_DIR = paths.ANOMALY_DIR
 
 
 class BackendManagerApp:

@@ -8,7 +8,7 @@ run_ablation_suite.py：消融實驗跑批主程式。
   - 5 輪使用同一個亂數種子，讓法規抽樣與正負例洗牌盡量一致（考勤抽樣不受種子影響）
   - 輸出帶時間戳記的 Markdown 比較表與 CSV
   執行前需啟動 Ollama（評估若用雲端 API，需先在設定面板填金鑰），且資料庫有打卡資料、data/laws/ 有法規文件。
-  執行方式：python run_ablation_suite.py --questions-per-category 10
+  執行方式：python -m rag.eval.run_ablation_suite --questions-per-category 10
 
 串接模組：
   - run_single_ablation_eval：單輪執行器
@@ -22,6 +22,8 @@ import os
 import subprocess
 import sys
 from datetime import datetime
+
+from shared import paths
 
 # 避免終端機或重導向的預設編碼印不出特殊符號而當掉
 if hasattr(sys.stdout, "reconfigure"):
@@ -65,7 +67,7 @@ def _run_one(config, questions_per_category, script_dir, seed):
     env["PYTHONIOENCODING"] = "utf-8"
     cmd = [
         sys.executable,
-        os.path.join(script_dir, "run_single_ablation_eval.py"),
+        "-m", "rag.eval.run_single_ablation_eval",
         "--questions-per-category", str(questions_per_category),
         "--label", config["label"],
     ]
@@ -173,7 +175,7 @@ def main():
     args = parser.parse_args()
     seed = None if args.seed is not None and args.seed < 0 else args.seed
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = paths.PROJECT_ROOT
     all_results = []
     for config in CONFIGS:
         metrics = _run_one(config, args.questions_per_category, script_dir, seed)
@@ -181,8 +183,9 @@ def main():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     prefix = args.output_prefix or f"ablation_results_{timestamp}"
-    md_path = os.path.join(script_dir, f"{prefix}.md")
-    csv_path = os.path.join(script_dir, f"{prefix}.csv")
+    os.makedirs(paths.EVAL_RESULTS_DIR, exist_ok=True)
+    md_path = os.path.join(paths.EVAL_RESULTS_DIR, f"{prefix}.md")
+    csv_path = os.path.join(paths.EVAL_RESULTS_DIR, f"{prefix}.csv")
 
     _write_markdown(all_results, md_path, args.questions_per_category)
     _write_csv(all_results, csv_path)

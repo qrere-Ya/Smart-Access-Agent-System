@@ -41,9 +41,9 @@ else:
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 
 import gradio as gr
-from main_guardrail_rag import get_chat_response, stream_chat_response, init_system
-from evaluate_rag import run_dynamic_evaluation
-import llm_settings
+from rag.main_guardrail_rag import get_chat_response, stream_chat_response, init_system
+from rag.eval.evaluate_rag import run_dynamic_evaluation
+from rag import llm_settings
 
 def chat_interface(message, history, route):
     """處理一則使用者訊息：新版 Gradio 的 messages 格式，逐字更新最後一則 assistant 訊息"""

@@ -2,7 +2,7 @@
 llm_settings.py：評估用出題官/裁判官 LLM 的設定與呼叫層。
 
 主要功能：
-  - 設定讀寫：存在專案根目錄的 llm_settings.json（含金鑰，已被 .gitignore 排除，不可上傳）
+  - 設定讀寫：存在 runtime/llm_settings.json（含金鑰，已被 .gitignore 排除，不可上傳）
   - 兩種 LLM 用戶端：OpenAI 相容的雲端 API、本機 Ollama
   - FailoverLLM：雲端 API 失效時自動改用本機模型
   - 連線檢查與測試、錯誤分類並轉成白話說明（金鑰不會印出）
@@ -21,8 +21,9 @@ import time
 import urllib.error
 import urllib.request
 
-_ROOT = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_PATH = os.path.join(_ROOT, "llm_settings.json")
+from shared import paths
+
+SETTINGS_PATH = paths.LLM_SETTINGS_PATH
 
 NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 DEFAULTS = {

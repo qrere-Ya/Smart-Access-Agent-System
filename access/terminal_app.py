@@ -18,14 +18,14 @@ terminal_app.py：門禁現場即時人臉辨識主程式。
 import sys
 import cv2
 import numpy as np
-import vision_core as vc
-import database_mgr as db
+from access import vision_core as vc
+from shared import database_mgr as db
 import time
 import threading
 import queue
-import utils
-import security as sec
-from audio_player import SmartAudioPlayer
+from access import utils
+from access import security as sec
+from access.audio_player import SmartAudioPlayer
 import os
 import traceback
 

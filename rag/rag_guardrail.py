@@ -23,11 +23,11 @@ import threading
 from scipy.spatial.distance import cosine
 from llama_index.core import Settings
 
-import database_mgr
-import rag_sql_engine
-import ablation_config
-import guardrail_policy
-from fuzzy_match import min_edit_distance_in_text
+from shared import database_mgr
+from rag import rag_sql_engine
+from rag import ablation_config
+from rag import guardrail_policy
+from rag.fuzzy_match import min_edit_distance_in_text
 
 
 # --- 嵌入快取：同一個 embed_model 與同一段文字只算一次，結果與未快取時完全相同 ---

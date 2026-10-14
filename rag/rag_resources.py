@@ -17,7 +17,7 @@ import urllib.request
 from pydantic import PrivateAttr
 from llama_index.core.base.embeddings.base import BaseEmbedding
 
-from resource_manager import ManagedResource, cuda_available
+from shared.resource_manager import ManagedResource, cuda_available
 
 # 預設 bge-m3 走 GPU 並轉 fp16 省顯存；沒有 CUDA 時自動退回 CPU
 EMBED_DEVICE = os.environ.get("RAG_EMBED_DEVICE", "cuda")

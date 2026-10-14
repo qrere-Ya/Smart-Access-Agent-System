@@ -3,7 +3,7 @@ security.py：防尾隨安防模組。
 
 主要功能：
   - 用 YOLOv8s 統計畫面中的人數（只算面積超過畫面 10% 的人，過濾遠景路過者）
-  - 偵測到尾隨時，產生證據拼圖（全圖 + 可疑者全身 + 頭部）存到 anomaly_logs/
+  - 偵測到尾隨時，產生證據拼圖（全圖 + 可疑者全身 + 頭部）存到 runtime/anomaly_logs/
   - YOLO 模型首次偵測才載入，閒置逾時或被驅逐時釋放；裝置可用環境變數 YOLO_DEVICE 指定
 
 串接模組：
@@ -14,9 +14,10 @@ import cv2
 import numpy as np
 import os
 import datetime
-from resource_manager import ManagedResource, cuda_available
+from shared.resource_manager import ManagedResource, cuda_available
+from shared import paths
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = paths.PROJECT_ROOT
 
 # 預設用 GPU，無 CUDA 時自動退回 CPU
 _YOLO_PREF = os.environ.get("YOLO_DEVICE", "cuda:0")
@@ -78,7 +79,7 @@ def count_persons(frame):
 def generate_evidence(full_frame, suspicious_box):
     """產生尾隨證據拼圖（上：全圖，左下：可疑者全身，右下：頭部）並存檔，回傳檔案路徑。"""
     now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = os.path.join(_PROJECT_ROOT, 'anomaly_logs', f"tailgate_{now_str}.jpg")
+    save_path = os.path.join(paths.ANOMALY_DIR, f"tailgate_{now_str}.jpg")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     H, W = full_frame.shape[:2]

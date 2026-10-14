@@ -18,6 +18,8 @@ main_guardrail_rag.py：RAG 法務/考勤助理的統籌層。
 
 import os
 
+from shared import paths
+
 # HF_HUB_OFFLINE 在 huggingface_hub 第一次被 import 時就讀取並固定，
 # 所以必須在下面 import llama_index 之前判斷：本機有 bge-m3 快取就設為離線模式
 _hf_home = os.environ.get("HF_HOME") or os.path.join(
@@ -29,7 +31,7 @@ if os.path.isdir(os.path.join(_hf_hub_cache, "models--BAAI--bge-m3")):
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 # 優先用專案 models/bge-m3 的本機完整模型，完全不連網
-_LOCAL_BGE_M3_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "bge-m3")
+_LOCAL_BGE_M3_DIR = os.path.join(paths.MODELS_DIR, "bge-m3")
 
 
 def _resolve_bge_m3_model_source():
@@ -47,10 +49,10 @@ def _resolve_bge_m3_model_source():
         return _LOCAL_BGE_M3_DIR
     else:
         print(f"⚠️ [BAAI/bge-m3] 本機 {_LOCAL_BGE_M3_DIR} 還沒有完整的模型檔案"
-              f"（還沒執行過 download_bge_m3_local.py，或上次下載不完整），"
+              f"（models/bge-m3 還沒放入完整模型，或檔案不完整），"
               f"暫時改用連網方式從 Hugging Face Hub 直接讀取 repo id \"BAAI/bge-m3\""
-              f"——這種方式在完全沒有網路的環境下會失敗。建議先在有網路的地方執行"
-              f"一次「python download_bge_m3_local.py」，之後就不用再連網了。")
+              f"——這種方式在完全沒有網路的環境下會失敗。建議把完整的 bge-m3 模型"
+              f"放到上述資料夾，之後就不用再連網了。")
         return "BAAI/bge-m3"
 
 
@@ -59,13 +61,13 @@ import re
 from llama_index.core import Settings
 from llama_index.core.node_parser import SemanticSplitterNodeParser
 from llama_index.llms.ollama import Ollama
-import rag_resources
+from rag import rag_resources
 
-import rag_index
-import rag_sql_engine
-import rag_guardrail
-import rag_chat_engine
-import database_mgr
+from rag import rag_index
+from rag import rag_sql_engine
+from rag import rag_guardrail
+from rag import rag_chat_engine
+from shared import database_mgr
 
 # 對外相容：app.py、evaluate_rag.py 直接從本模組 import 這兩個函式
 load_or_build_index = rag_index.load_or_build_index
@@ -136,7 +138,7 @@ def setup_environment():
               f"代表雖然上面沒有在載入階段丟例外，但這個模型實際上不能用，"
               f"需要再往下查真正原因。")
 
-    # 依語意相似度切塊（取代固定字數切塊）。切塊邏輯改變後，需手動刪除 faiss_storage/ 才會重建索引
+    # 依語意相似度切塊（取代固定字數切塊）。切塊邏輯改變後，需手動刪除 runtime/faiss_storage/ 才會重建索引
     Settings.text_splitter = SemanticSplitterNodeParser.from_defaults(
         embed_model=Settings.embed_model,
         breakpoint_percentile_threshold=95,
@@ -316,8 +318,8 @@ def _stream_chat_response_impl(message: str, route: str, history: list = None):
             source_nodes = list(getattr(response, "source_nodes", []))
             if not source_nodes:
                 print(f"⚠️ [Debug RAG] 法規向量索引檢索到 0 筆相關知識塊（問題：{message!r}）——"
-                      f"請確認 data/laws/ 資料夾底下有放法規文件（.pdf/.txt），且 faiss_storage/ "
-                      f"索引已經根據目前的 data/laws/ 內容重新建立過（可以先刪除 faiss_storage/ "
+                      f"請確認 data/laws/ 資料夾底下有放法規文件（.pdf/.txt），且 runtime/faiss_storage/ "
+                      f"索引已經根據目前的 data/laws/ 內容重新建立過（可以先刪除 runtime/faiss_storage/ "
                       f"資料夾，下次啟動程式會自動偵測並重建）。")
                 _LAST_SOURCE_NODE_IDS = []
                 yield "⚠️ 系統提示：知識庫中找不到與此問題相關的法規資料（目前 data/laws/ 索引可能是空的，請確認法規文件是否已正確放置並重建索引）。"

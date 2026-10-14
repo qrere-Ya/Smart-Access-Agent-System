@@ -10,7 +10,7 @@ service_manager.py：背景服務管理層。
 
 串接模組：
   - backend_main：管理後台視窗呼叫這裡的函式並更新畫面
-  - app.py、terminal_app.py、web_server.py：被當成子行程啟動
+  - rag.app、access.terminal_app、access.web_server：以 python -m 的方式當成子行程啟動
 """
 import os
 import re
@@ -21,7 +21,9 @@ import subprocess
 import threading
 import time
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+from shared import paths
+
+_PROJECT_ROOT = paths.PROJECT_ROOT
 
 # 各服務使用的 port，用來判斷服務是否已在執行
 PORT_OLLAMA = 11434
@@ -166,7 +168,7 @@ def _hidden_console_popen_kwargs():
 
 def _project_python_exe():
     """回傳專案自己 venv 的 python.exe（子服務需要裡面的套件），找不到才用 sys.executable。"""
-    venv_python = os.path.join(_PROJECT_ROOT, "venv", "Scripts", "python.exe")
+    venv_python = paths.VENV_PYTHON
     if os.path.exists(venv_python):
         return venv_python
     return sys.executable
@@ -242,13 +244,13 @@ def _start_rag_services_worker(on_output_line, on_finished):
         started.append("RAG 助理網頁（本來就已經在跑，沒有重複啟動）")
         emit("[RAG App] ", "（本來就已經在背景執行，不是本程式啟動的，看不到它的輸出）")
     else:
-        rag_script = os.path.join(_PROJECT_ROOT, "app.py")
+        rag_module = "rag.app"
         python_exe = _project_python_exe()
         emit("[RAG App] ", f"（使用的 Python 直譯器：{python_exe}）")
         try:
             # -u 不緩衝輸出；encoding 指定 UTF-8 讀取，避免中文讓讀取執行緒停擺
             proc = subprocess.Popen(
-                [python_exe, "-u", rag_script], cwd=_PROJECT_ROOT,
+                [python_exe, "-u", "-m", rag_module], cwd=_PROJECT_ROOT,
                 env=_python_child_env(),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
                 encoding="utf-8", errors="replace",
@@ -282,12 +284,12 @@ def face_service_running():
 
 def start_face_service(on_output_line):
     """啟動人臉辨識終端機，輸出透過 pipe 交給 on_output_line。回傳 (成功與否, 訊息)。"""
-    terminal_script = os.path.join(_PROJECT_ROOT, "terminal_app.py")
+    terminal_module = "access.terminal_app"
     python_exe = _project_python_exe()
     on_output_line(f"（使用的 Python 直譯器：{python_exe}）")
     try:
         proc = subprocess.Popen(
-            [python_exe, "-u", terminal_script], cwd=_PROJECT_ROOT,
+            [python_exe, "-u", "-m", terminal_module], cwd=_PROJECT_ROOT,
             env=_python_child_env(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             encoding="utf-8", errors="replace",
@@ -315,12 +317,12 @@ def reg_server_running():
 
 def start_reg_service(on_output_line):
     """啟動 QR 註冊伺服器。回傳 (成功與否, 訊息)。"""
-    web_script = os.path.join(_PROJECT_ROOT, "web_server.py")
+    web_module = "access.web_server"
     python_exe = _project_python_exe()
     on_output_line(f"（使用的 Python 直譯器：{python_exe}）")
     try:
         proc = subprocess.Popen(
-            [python_exe, "-u", web_script], cwd=_PROJECT_ROOT,
+            [python_exe, "-u", "-m", web_module], cwd=_PROJECT_ROOT,
             env=_python_child_env(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             encoding="utf-8", errors="replace",

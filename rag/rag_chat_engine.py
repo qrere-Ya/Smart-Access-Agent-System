@@ -23,7 +23,7 @@ from llama_index.core.retrievers.fusion_retriever import FUSION_MODES
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.chat_engine import CondensePlusContextChatEngine
 
-import ablation_config
+from rag import ablation_config
 
 
 class _CitationNumberingPostprocessor(BaseNodePostprocessor):

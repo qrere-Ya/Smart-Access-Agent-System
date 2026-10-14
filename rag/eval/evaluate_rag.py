@@ -19,7 +19,7 @@ import os
 import random
 import time
 from llama_index.core import PromptTemplate, Settings
-from main_guardrail_rag import (
+from rag.main_guardrail_rag import (
     get_chat_response,
     stream_chat_response,
     load_or_build_index,
@@ -28,8 +28,8 @@ from main_guardrail_rag import (
     get_last_query_route,
     sample_random_attendance_record,
 )
-import ablation_config
-import llm_settings
+from rag import ablation_config
+from rag import llm_settings
 
 # 正負例測試的固定問題池，涵蓋防護欄的正向與負向範圍
 GOOD_SAMPLE_QUESTIONS = [

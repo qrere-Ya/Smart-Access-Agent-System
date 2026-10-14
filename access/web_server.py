@@ -16,8 +16,8 @@ web_server.py：手機 QR Code 遠端註冊伺服器（Flask，port 5000）。
 from flask import Flask, render_template, request, jsonify
 import cv2
 import numpy as np
-import vision_core as vc
-import database_mgr as db
+from access import vision_core as vc
+from shared import database_mgr as db
 import os
 import socket
 import psutil

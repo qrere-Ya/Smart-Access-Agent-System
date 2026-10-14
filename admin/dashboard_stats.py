@@ -15,10 +15,10 @@ import os
 import sqlite3
 import datetime
 
-import database_mgr
+from shared import database_mgr
+from shared import paths
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-ANOMALY_DIR = os.path.join(_PROJECT_ROOT, "anomaly_logs")
+ANOMALY_DIR = paths.ANOMALY_DIR
 
 
 def get_today_attendance_summary(limit=20):

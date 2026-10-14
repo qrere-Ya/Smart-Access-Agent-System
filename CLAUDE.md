@@ -4,9 +4,17 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
 
 ## 1. 專案要點
 
-- 主環境為 Windows、Python 3.10（`venv/`）；活體偵測訓練在 `research/antispoof_training/` 自有環境，與正式系統分離，尚未接入 `vision_core.py`。
-- RAG 入口 `main_guardrail_rag.py`，拆為 `rag_index.py`（FAISS）、`rag_sql_engine.py`（Attendance 唯讀 SQL）、`rag_guardrail.py`（語意防護欄）、`rag_chat_engine.py`（對話記憶）。
-- 金鑰一律走環境變數（如 `NVIDIA_API_KEY`），不寫進檔案。`models/`、`data/`、`anomaly_logs/` 不進版控。
+- 專案結構：
+  - `shared/`：資料庫（`database_mgr`）、資源管理器（`resource_manager`）、統一路徑（`paths`）
+  - `access/`：門禁，包含人臉辨識與活體（`vision_core`）、尾隨偵測（`security`）、語音（`audio_player`）、QR 註冊伺服器（`web_server`）、現場主程式（`terminal_app`）
+  - `admin/`：Tkinter 管理後台（`backend_main`）與背景服務管理（`service_manager`）
+  - `rag/`：RAG 法務/考勤助理，入口 `main_guardrail_rag`，拆為 `rag_index`（FAISS）、`rag_sql_engine`（Attendance 唯讀 SQL）、`rag_guardrail`（語意防護欄）、`rag_chat_engine`（對話記憶）；網頁入口 `app`
+  - `rag/eval/`：自動化評估與消融實驗
+  - `research/antispoof_training/`：獨立的活體偵測訓練，與正式系統分離，尚未接入 `vision_core`
+- 啟動方式：一律在專案根目錄用 `python -m` 啟動，例如 `python -m admin.backend_main`、`python -m access.terminal_app`、`python -m rag.app`、`python -m access.web_server`，不要直接執行檔案路徑。
+- 路徑一律取自 `shared/paths.py`，不要在各檔自行用 `__file__` 推算。執行期資料放 `runtime/`（資料庫、向量索引、證據照片、LLM 設定、評估結果）。
+- 環境：Windows、Python 3.10（`venv/`），依賴見 `requirements/main.txt`（retinaface 要另外用 `--no-deps` 安裝）。
+- 金鑰一律走環境變數（如 `NVIDIA_API_KEY`），不寫進檔案。`models/`、`data/`、`runtime/` 不進版控。
 - 目前已知未解的資安缺口：系統無身分驗證層、各使用者共用聊天記憶。在真正的 auth 層建立前，不要宣稱這兩點已安全。
 
 ## 2. 修改程式碼的流程

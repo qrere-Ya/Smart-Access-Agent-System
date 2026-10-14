@@ -2,7 +2,7 @@
 rag_index.py：法規向量索引（FAISS）的建置與快取。
 
 主要功能：
-  - 讀取 data/laws/ 底下的法規文件，切塊、嵌入並存成 FAISS 索引（faiss_storage/）
+  - 讀取 data/laws/ 底下的法規文件，切塊、嵌入並存成 FAISS 索引（runtime/faiss_storage/）
   - 用法規資料夾的檔名、大小、修改時間算出指紋，文件有變動就自動重建索引
 
 串接模組：
@@ -21,6 +21,8 @@ from llama_index.core import (
     load_index_from_storage,
 )
 from llama_index.vector_stores.faiss import FaissVectorStore
+
+from shared import paths
 
 
 def _compute_law_dir_fingerprint(law_dir: str) -> str:
@@ -45,12 +47,12 @@ def load_or_build_index():
     載入或建立法規向量索引。
     現在的指紋與上次建索引時存的不同（或沒有索引）就重建，相同就直接載入。
     考勤資料不放進向量索引，改由 rag_sql_engine 即時查資料庫。
-    注意：只改切塊程式邏輯、法規檔沒變時指紋不會變，需要手動刪除 faiss_storage/ 才會重建。
+    注意：只改切塊程式邏輯、法規檔沒變時指紋不會變，需要手動刪除 runtime/faiss_storage/ 才會重建。
     """
-    STORAGE_DIR = "./faiss_storage"
+    STORAGE_DIR = paths.FAISS_DIR
     FINGERPRINT_FILE = os.path.join(STORAGE_DIR, "_law_dir_fingerprint.txt")
     EMBEDDING_DIM = 1024
-    law_dir = "data/laws/"
+    law_dir = paths.LAWS_DIR
 
     current_fingerprint = _compute_law_dir_fingerprint(law_dir)
     stored_fingerprint = None

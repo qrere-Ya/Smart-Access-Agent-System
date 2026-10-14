@@ -5,7 +5,7 @@ run_single_ablation_eval.py：消融實驗的單輪執行器（由 run_ablation_
   - 依目前環境變數的開關設定，無介面地跑一次 evaluate_rag 的自動化評估
   - 把量化結果以 ABLATION_RESULT_JSON_START / END 標記包住的 JSON 印出，供父程序擷取
   手動測試單一設定：先設好環境變數再執行，例如
-    ABLATION_USE_DETERMINISTIC_SQL=0 python run_single_ablation_eval.py --questions-per-category 5
+    ABLATION_USE_DETERMINISTIC_SQL=0 python -m rag.eval.run_single_ablation_eval --questions-per-category 5
 
 串接模組：
   - evaluate_rag：run_dynamic_evaluation
@@ -22,7 +22,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from evaluate_rag import run_dynamic_evaluation
+from rag.eval.evaluate_rag import run_dynamic_evaluation
 
 
 def _drain(gen):

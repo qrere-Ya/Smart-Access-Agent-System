@@ -22,6 +22,8 @@ import queue
 import threading
 import time
 
+from shared import paths
+
 # --- Numpy 陣列與資料庫轉換 ---
 
 def adapt_array(arr):
@@ -40,8 +42,7 @@ def convert_array(text):
 sqlite3.register_adapter(np.ndarray, adapt_array)
 sqlite3.register_converter("ARRAY", convert_array)
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(_PROJECT_ROOT, "database", "database.db")
+DB_PATH = paths.DB_PATH
 
 # --- 考勤時間窗 ---
 # 準時上班時間窗（含頭尾）
