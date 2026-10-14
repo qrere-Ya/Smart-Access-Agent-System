@@ -14,6 +14,7 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
 - 啟動方式：一律在專案根目錄用 `python -m` 啟動，例如 `python -m admin.backend_main`、`python -m access.terminal_app`、`python -m rag.app`、`python -m access.web_server`，不要直接執行檔案路徑。
 - 路徑一律取自 `shared/paths.py`，不要在各檔自行用 `__file__` 推算。執行期資料放 `runtime/`（資料庫、向量索引、證據照片、LLM 設定、評估結果）。
 - 環境：Windows、Python 3.11（`.venv/`），依賴見 `requirements/main.txt`，完整版本鎖定在 `requirements/lock.txt`（安裝順序見 main.txt 檔頭；retinaface 要另外用 `--no-deps` 安裝）。
+- 測試：`python -m pytest tests`（單元測試，不需要模型、GPU、攝影機或任何服務；用臨時的 `runtime/`，不會碰真實資料）。CI 使用較輕量的 `requirements/test.txt`。
 - 金鑰一律走環境變數（如 `NVIDIA_API_KEY`），不寫進檔案。`models/`、`data/`、`runtime/` 不進版控。
 - 目前已知未解的資安缺口：系統無身分驗證層、各使用者共用聊天記憶。在真正的 auth 層建立前，不要宣稱這兩點已安全。
 
@@ -21,7 +22,7 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
 
 1. **先讀後改**：改動前先讀相關檔案與呼叫端，不憑記憶推測。
 2. **先草稿**：非瑣碎的變更先在對話中說明方案與影響範圍，再動手寫檔。
-3. **驗證**：改完要實際執行驗證（測試、語法檢查或實跑），回報真實結果；失敗就如實說失敗，不得宣稱完成。
+3. **驗證**：改完要實際執行驗證（先跑 `python -m pytest tests`，再視需要語法檢查或實跑），回報真實結果；失敗就如實說失敗，不得宣稱完成。改動純邏輯時，同步補上對應的測試。
 4. **審查**：較大的變更完成後，用 `/code-review`（內建）或 `mattpocock-skills:code-review` 審查 diff；涉及認證、SQL、檔案、網路、模型輸入的變更，另跑 `/security-review`。
 5. **風險即停**：審查或驗證發現風險時，先回報並等我指示，不得以「僅供本地測試」、「風險很低」為由自行放行。
 
