@@ -299,7 +299,7 @@ class OllamaChatLLM:
         options = {"temperature": self.temperature, "num_ctx": LOCAL_NUM_CTX}
         if self.max_tokens:
             options["num_predict"] = self.max_tokens
-        body = {"model": self.model, "stream": True, "options": options,
+        body = {"model": self.model, "stream": True, "think": False, "options": options,  # 關閉思考模式（qwen3 等）
                 "messages": [{"role": "user", "content": prompt}]}
         req = urllib.request.Request(f"{self.host}/api/chat", data=json.dumps(body).encode("utf-8"),  # noqa: S310
                                      method="POST", headers={"Content-Type": "application/json"})
