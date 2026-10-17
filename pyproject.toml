@@ -37,7 +37,11 @@ select = ["E", "F", "B", "S", "C4"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-ra"
+addopts = "-ra -m \"not integration and not regression\""
+markers = [
+    "integration: 用真的模型與服務的整合測試，只在本機執行（python -m pytest -m integration）",
+    "regression: 辨識結果回歸測試，對照 tests/regression/baseline.json（python -m pytest -m regression）",
+]
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.bandit]
