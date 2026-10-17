@@ -11,9 +11,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("require_models")
 
 @pytest.fixture(scope="module")
 def retrieval(tmp_path_factory):
-    from assistant.doc_store import DocStore
-    from assistant.rerank import Reranker
-    from assistant.embedding import ManagedEmbedder
+    from rag.doc_store import DocStore
+    from rag.rerank import Reranker
+    from rag.embedding import ManagedEmbedder
     from shared import paths
 
     rerank_dir = os.path.join(paths.MODELS_DIR, "bge-reranker-v2-m3")
@@ -43,7 +43,7 @@ def test_question_without_basis_gets_a_near_zero_relevance(retrieval):
 
 
 def test_question_bank_quality_does_not_regress(retrieval):
-    from assistant.evaluation import retrieval_eval as ev
+    from rag.evaluation import retrieval_eval as ev
 
     store, reranker = retrieval
 

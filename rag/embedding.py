@@ -29,7 +29,7 @@ class _EmbedResource(ManagedResource):
             print("[embedding] ⚠️ 找不到可用的 CUDA（torch 可能是 CPU 版），bge-m3 退回 CPU。"
                   "要用 GPU 請安裝 CUDA 版 torch。")
             device = "cpu"
-        super().__init__("assistant.embed.bge-m3",
+        super().__init__("rag.embed.bge-m3",
                          est_ram_mb=2600 if device == "cpu" else 1200,
                          est_vram_mb=0 if device == "cpu" else 1300,
                          idle_ttl=EMBED_IDLE_TTL)

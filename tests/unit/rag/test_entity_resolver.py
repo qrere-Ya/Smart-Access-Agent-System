@@ -4,7 +4,7 @@ entity_resolver 單元測試：完全一致、分數門檻（直接採用／請�
 """
 import numpy as np
 
-from assistant.entity_resolver import NameResolver
+from rag.entity_resolver import NameResolver
 
 AXIS_X = np.array([1.0, 0.0, 0.0])
 AXIS_Y = np.array([0.0, 1.0, 0.0])

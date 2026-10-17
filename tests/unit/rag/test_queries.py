@@ -7,7 +7,7 @@ from contextlib import closing
 
 import pytest
 
-from assistant import queries
+from rag import queries
 
 
 @pytest.fixture

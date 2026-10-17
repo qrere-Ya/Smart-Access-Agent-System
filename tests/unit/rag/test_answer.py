@@ -10,10 +10,10 @@ import zlib
 import numpy as np
 import pytest
 
-from assistant import answer
-from assistant.doc_store import DocStore
-from assistant.entity_resolver import NameResolver
-from assistant.rerank import Reranker
+from rag import answer
+from rag.doc_store import DocStore
+from rag.entity_resolver import NameResolver
+from rag.rerank import Reranker
 
 TODAY = datetime.date(2026, 10, 17)
 DIM = 64
@@ -301,7 +301,7 @@ def test_failed_intent_detection_falls_back_to_keywords(store, people):
 
 
 def test_llm_failure_while_answering_becomes_a_message(store):
-    from assistant import llm_settings
+    from rag import llm_settings
 
     llm = FakeLLM({"病假": {"docs": True}}, error=llm_settings.LLMCallError("local_down", "local", "x"))
     a = make(store, llm)

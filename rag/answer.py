@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 
-from assistant import dates, queries, router
+from rag import dates, queries, router
 
 TOP_K = 5
 CANDIDATES = 20
@@ -220,7 +220,7 @@ class Assistant:
             for delta in self.llm.stream_complete(prompt):
                 yield delta.delta
         except Exception as e:
-            from assistant import llm_settings
+            from rag import llm_settings
 
             self.last.outcome = "error"
             detail = llm_settings.format_error(e, markdown=False) if isinstance(e, llm_settings.LLMCallError) \

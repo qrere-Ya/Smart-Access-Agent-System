@@ -7,7 +7,7 @@ retrieval_eval.py：檢索品質評估（不需要 LLM 當評審）。
   - 法規裡沒有答案的題目（in_scope 為 false）不算命中，改記最高分數，用來決定「找不到依據」的門檻
   - 可比較「只用混合檢索」與「混合檢索加重排」兩種做法
 
-執行：python -m assistant.evaluation.retrieval_eval（需要 models/ 內的 bge-m3 與重排模型）
+執行：python -m rag.evaluation.retrieval_eval（需要 models/ 內的 bge-m3 與重排模型）
 
 串接模組：
   - doc_store、rerank：被評估的檢索流程
@@ -97,9 +97,9 @@ def main():
     import tempfile
 
 
-    from assistant.doc_store import DocStore
-    from assistant.rerank import Reranker
-    from assistant.embedding import ManagedEmbedder
+    from rag.doc_store import DocStore
+    from rag.rerank import Reranker
+    from rag.embedding import ManagedEmbedder
     from shared import paths
 
     embedding = ManagedEmbedder(os.path.join(paths.MODELS_DIR, "bge-m3"), device="cuda")

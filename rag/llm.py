@@ -12,7 +12,7 @@ llm.py：助理用的 LLM 取得（本機 Ollama 或雲端 API，雲端失效自
 """
 from typing import Optional, Tuple
 
-from assistant import llm_settings as ls
+from rag import llm_settings as ls
 
 
 def build_llm(settings: Optional[dict] = None, max_tokens: Optional[int] = None) -> Tuple[Optional[object], str]:

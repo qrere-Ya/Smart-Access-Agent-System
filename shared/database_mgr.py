@@ -12,7 +12,7 @@ database_mgr.py：SQLite 資料層。
   - terminal_app：人臉比對、打卡、行事曆、記錄異常事件
   - web_server：員工註冊
   - backend_main、account_admin、dashboard_stats：管理後台查詢與帳號管理
-  - assistant.queries：唯讀查詢考勤與異常事件
+  - rag.queries：唯讀查詢考勤與異常事件
 """
 import sqlite3
 import io

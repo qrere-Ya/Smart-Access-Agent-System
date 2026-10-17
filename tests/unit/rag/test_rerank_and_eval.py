@@ -6,10 +6,10 @@ import os
 
 import pytest
 
-from assistant import ingest
-from assistant.doc_store import Hit
-from assistant.evaluation import retrieval_eval as ev
-from assistant.rerank import Reranker
+from rag import ingest
+from rag.doc_store import Hit
+from rag.evaluation import retrieval_eval as ev
+from rag.rerank import Reranker
 from shared import paths
 
 

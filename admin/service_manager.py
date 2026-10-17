@@ -10,7 +10,7 @@ service_manager.py：背景服務管理層。
 
 串接模組：
   - backend_main：管理後台視窗呼叫這裡的函式並更新畫面
-  - admin.assistant_window、access.terminal_app、access.web_server：以 python -m 的方式當成子行程啟動
+  - rag.chat_window、access.terminal_app、access.web_server：以 python -m 的方式當成子行程啟動
 """
 import os
 import re
@@ -202,7 +202,7 @@ def start_ollama(on_output_line):
         return None, f"Ollama 啟動失敗：{e}"
 
 
-# --- 管理者助理聊天視窗：admin.assistant_window ---
+# --- 管理者助理聊天視窗：rag.chat_window ---
 def assistant_window_running():
     """聊天視窗行程是否還活著，已結束的殘留 Popen 順便清掉。"""
     proc = _service_procs.get("assistant")
@@ -219,7 +219,7 @@ def start_assistant_window(on_output_line):
     python_exe = _project_python_exe()
     try:
         proc = subprocess.Popen(  # noqa: S603
-            [python_exe, "-u", "-m", "admin.assistant_window"], cwd=_PROJECT_ROOT,
+            [python_exe, "-u", "-m", "rag.chat_window"], cwd=_PROJECT_ROOT,
             env=_python_child_env(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             encoding="utf-8", errors="replace",

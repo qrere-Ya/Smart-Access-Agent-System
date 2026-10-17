@@ -3,8 +3,8 @@ llm 單元測試：依設定選擇本機或雲端 API（雲端失效改本機、
 """
 import pytest
 
-from assistant import llm
-from assistant import llm_settings as ls
+from rag import llm
+from rag import llm_settings as ls
 
 SETTINGS = {"mode": "local", "api_base": "http://x", "api_key": "k", "api_model": "m",
             "local_model": "qwen2:7b", "local_host": ""}
