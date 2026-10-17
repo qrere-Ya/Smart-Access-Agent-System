@@ -20,29 +20,26 @@ def stack(tmp_path_factory):
     from assistant import llm as llm_mod
     from assistant.doc_store import DocStore
     from assistant.rerank import Reranker
-    from rag import llm_settings as ls
-    from rag.rag_resources import ManagedHFEmbedding
+    from assistant import llm_settings as ls
+    from assistant.embedding import ManagedEmbedder
     from shared import paths
 
     rerank_dir = os.path.join(paths.MODELS_DIR, "bge-reranker-v2-m3")
-    docs = os.path.join(paths.PROJECT_ROOT, "data", "laws")
+    docs = os.path.join(paths.PROJECT_ROOT, "data", "docs")
     if not os.path.isdir(rerank_dir) or not os.path.isdir(docs) or not os.listdir(docs):
         pytest.skip("缺少重排模型或文件資料夾")
     model, note = llm_mod.build_llm({**ls.DEFAULTS, "mode": "local"})
     router_llm, _ = llm_mod.build_llm({**ls.DEFAULTS, "mode": "local"}, max_tokens=200)
     if model is None:
         pytest.skip("本機 Ollama 沒有在執行：" + note)
-    embedding = ManagedHFEmbedding(os.path.join(paths.MODELS_DIR, "bge-m3"), device="cuda")
-
-    def embed(texts):
-        return np.array(embedding.get_text_embedding_batch(list(texts)))
+    embed = ManagedEmbedder(os.path.join(paths.MODELS_DIR, "bge-m3"), device="cuda")
 
     store = DocStore(docs, str(tmp_path_factory.mktemp("store")), embed)
     store.sync()
     reranker = Reranker.from_model_dir(rerank_dir)
     yield {"store": store, "reranker": reranker, "llm": model, "router_llm": router_llm, "embed": embed}
     reranker.release()
-    embedding.release()
+    embed.release()
 
 
 @pytest.fixture

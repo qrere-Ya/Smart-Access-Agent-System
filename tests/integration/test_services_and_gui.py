@@ -47,6 +47,6 @@ def test_admin_window_builds_and_shows_service_status():
 
         app = BackendManagerApp(root)
         root.update()
-        assert app.rag_status_var.get().startswith("⚪ RAG")
+        assert app.face_status_var.get().startswith("⚪")
     finally:
         root.destroy()

@@ -6,7 +6,6 @@ import io
 import socket
 import subprocess
 import sys
-import threading
 import time
 import types
 
@@ -98,50 +97,12 @@ def test_start_failures_are_reported_not_raised(monkeypatch):
     assert not ok and "找不到檔案" in message
 
 
-def test_rag_group_is_only_ollama_and_the_assistant_page():
-    assert sm._RAG_GROUP == ["ollama", "rag_app"]
-    assert not hasattr(sm, "PORT_LITELLM")
-
-
-def run_rag_start(on_output=None):
-    done, result = threading.Event(), {}
-
-    def finished(started, warnings):
-        result.update(started=started, warnings=warnings)
-        done.set()
-
-    sm.start_rag_services_async(on_output or (lambda prefix, line: None), finished)
-    assert done.wait(5)
-    return result
-
-
-def test_rag_start_launches_the_app_module_and_reports_a_missing_ollama(monkeypatch, fake_popen):
-    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
-    monkeypatch.setattr(sm.shutil, "which", lambda name: None)
-    result = run_rag_start()
-    assert result["started"] == ["RAG 助理網頁"]
-    assert len(result["warnings"]) == 1 and "找不到 ollama" in result["warnings"][0]
-    assert fake_popen.instances[0].args == [sm._project_python_exe(), "-u", "-m", "rag.app"]
-    assert sm.is_rag_busy() is False
-
-
-def test_rag_start_does_not_duplicate_services_that_already_run(monkeypatch, fake_popen):
-    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: True)
-    lines = []
-    result = run_rag_start(lambda prefix, line: lines.append((prefix, line)))
-    assert len(result["started"]) == 2 and all("本來就已經在跑" in s for s in result["started"])
-    assert result["warnings"] == [] and fake_popen.instances == []
-    assert {prefix for prefix, _ in lines} == {"[Ollama] ", "[RAG App] "}
-
-
-def test_stopping_rag_never_touches_litellm(monkeypatch):
+def test_stopping_everything_stops_ollama_terminal_web_server_and_the_assistant(monkeypatch):
     calls = []
     monkeypatch.setattr(sm, "stop_service", lambda key, port=None: calls.append((key, port)) or True)
-    assert sm.stop_rag_services() == [True, True]
-    assert calls == [("ollama", sm.PORT_OLLAMA), ("rag_app", sm.PORT_RAG_APP)]
-    calls.clear()
+    assert not hasattr(sm, "PORT_LITELLM") and not hasattr(sm, "PORT_RAG_APP")
     sm.stop_all_services()
-    assert [key for key, _ in calls] == ["ollama", "rag_app", "terminal", "web_server", "assistant"]
+    assert [key for key, _ in calls] == ["ollama", "terminal", "web_server", "assistant"]
 
 
 # ---------- 本機 LLM 與管理者助理視窗 ----------
@@ -239,10 +200,10 @@ def test_face_service_state_cleans_up_dead_processes(monkeypatch):
 def test_service_state_combines_ports_and_process_objects(monkeypatch):
     monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
     monkeypatch.setattr(sm, "_service_procs", {})
-    assert not sm.rag_group_running() and not sm.reg_server_running() and not sm.any_service_running()
+    assert not sm.reg_server_running() and not sm.any_service_running()
     sm._service_procs["ollama"] = ALIVE
     sm._service_procs["web_server"] = DEAD
-    assert sm.rag_group_running() and not sm.reg_server_running() and sm.any_service_running()
+    assert not sm.reg_server_running() and sm.any_service_running()
     monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: port == sm.PORT_WEB_SERVER)
     assert sm.reg_server_running()
 

@@ -1,4 +1,4 @@
-# 單元測試用的輕量依賴（供 CI 使用，不含 TensorFlow、PyTorch、Gradio 等大型套件）。
+# 單元測試用的輕量依賴（供 CI 使用，不含 TensorFlow、PyTorch 等大型套件）。
 # 安裝：pip install -r requirements/test.txt -c requirements/lock.txt
 pytest==9.1.1
 numpy==2.2.6
@@ -8,13 +8,8 @@ scikit-image==0.25.2
 pillow==12.2.0
 psutil==7.2.2
 RapidFuzz==3.14.5
-sqlglot==30.19.0
-SQLAlchemy==2.0.35
 llama-index-core==0.14.24
-llama-index-llms-ollama==0.11.0
-llama-index-vector-stores-faiss==0.7.0
 faiss-cpu==1.15.0
-llama-index-retrievers-bm25==0.8.0
 llama-index-readers-file==0.7.0
 pypdf==6.16.2
 docx2txt==0.9
