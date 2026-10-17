@@ -199,6 +199,10 @@ class DocStore:
     def documents(self) -> List[str]:
         return sorted(self._manifest)
 
+    def titles(self) -> List[str]:
+        """已收錄文件的標題清單。"""
+        return sorted({chunk["title"] for chunk in self._chunks.values()})
+
     def __len__(self):
         return len(self._chunks)
 
