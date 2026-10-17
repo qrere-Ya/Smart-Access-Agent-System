@@ -31,7 +31,8 @@ def closed_port_url():
 
 
 def make_settings(base, **overrides):
-    s = dict(ls.DEFAULTS, api_base=base, api_key="good-key", api_model="m", local_host=base, mode="api")
+    s = dict(ls.DEFAULTS, api_base=base, api_key="good-key", api_model="m", local_model="qwen2:7b",
+             local_host=base, mode="api")
     s.update(overrides)
     return s
 
