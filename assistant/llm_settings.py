@@ -30,7 +30,7 @@ DEFAULTS = {
     "api_base": NVIDIA_BASE,
     "api_key": "",
     "api_model": "google/gemma-4-31b-it",
-    "local_model": "qwen2:7b",
+    "local_model": "qwen3:8b",
     "local_host": "",                      # 空白＝用環境變數 OLLAMA_HOST，再不然 http://127.0.0.1:11434
 }
 LOCAL_NUM_CTX = 8192  # 固定的上下文長度，每次呼叫都用同一個值，避免 Ollama 重新載入模型
