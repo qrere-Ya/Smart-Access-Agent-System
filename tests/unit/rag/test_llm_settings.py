@@ -182,6 +182,7 @@ def test_ollama_streams_and_sends_the_shared_context_size(fake_llm_server):
     path, body = requests[-1]
     assert path == "/api/chat" and body["model"] == "qwen2:7b"
     assert body["options"]["num_ctx"] == ls.LOCAL_NUM_CTX and body["options"]["num_predict"] == 8
+    assert body["think"] is False  # 關閉思考模式，qwen3 的推理過程才不會混進回答
 
 
 def test_ollama_missing_model_and_unreachable_server(fake_llm_server):
