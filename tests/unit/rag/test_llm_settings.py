@@ -10,7 +10,7 @@ import urllib.error
 
 import pytest
 
-from assistant import llm_settings as ls
+from rag import llm_settings as ls
 
 
 @pytest.fixture

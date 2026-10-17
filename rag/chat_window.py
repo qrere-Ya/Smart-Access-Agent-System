@@ -1,5 +1,5 @@
 """
-assistant_window.py：管理者助理的聊天視窗（CustomTkinter，深色現代風格）。
+chat_window.py：管理者助理的聊天視窗（CustomTkinter，深色現代風格）。
 
 主要功能：
   - 氣泡式對話：你的問題靠右、助理的回答靠左，回答逐字串流顯示；文字可以選取複製
@@ -9,9 +9,9 @@ assistant_window.py：管理者助理的聊天視窗（CustomTkinter，深色現
   畫面只負責顯示；問答、模型組裝、對話控制都在 assistant 套件，這裡不放邏輯。
 
 串接模組：
-  - assistant.bootstrap：組裝模型與助理；assistant.chat_session：背景執行緒與事件佇列
-  - service_manager：自動啟動 Ollama；assistant.llm_settings：語言模型設定的讀寫與測試
-  - backend_main：用 service_manager.start_assistant_window 另開這個行程；單獨執行：python -m admin.assistant_window
+  - rag.bootstrap：組裝模型與助理；rag.chat_session：背景執行緒與事件佇列
+  - service_manager：自動啟動 Ollama；rag.llm_settings：語言模型設定的讀寫與測試
+  - backend_main：用 service_manager.start_assistant_window 另開這個行程；單獨執行：python -m rag.chat_window
 """
 import queue
 import threading
@@ -19,8 +19,8 @@ import tkinter.font as tkfont
 
 import customtkinter as ctk
 
-from assistant import bootstrap
-from assistant.chat_session import ChatController, plain_text
+from rag import bootstrap
+from rag.chat_session import ChatController, plain_text
 
 APP_TITLE = "管理者助理"
 FONT_FAMILY = "微軟正黑體"
@@ -114,7 +114,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def __init__(self, master, on_saved):
         super().__init__(master)
-        from assistant import llm_settings
+        from rag import llm_settings
 
         self.ls, self.on_saved = llm_settings, on_saved
         self.title("語言模型設定")

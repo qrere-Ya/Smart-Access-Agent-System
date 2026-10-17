@@ -6,8 +6,8 @@ import zipfile
 
 import pytest
 
-from assistant import ingest
-from assistant.ingest import Segment, chunk_document
+from rag import ingest
+from rag.ingest import Segment, chunk_document
 
 LAW = """某某辦法
 （說明文字）

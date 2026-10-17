@@ -7,7 +7,7 @@ import zlib
 import numpy as np
 import pytest
 
-from assistant.doc_store import DocStore
+from rag.doc_store import DocStore
 
 DIM = 64
 

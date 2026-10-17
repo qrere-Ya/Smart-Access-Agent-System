@@ -10,7 +10,7 @@ llm_settings.py：語言模型（雲端 API 與本機 Ollama）的設定與呼�
 
 串接模組：
   - llm：依設定組出助理使用的 LLM
-  - admin.assistant_window：設定面板的讀寫與測試按鈕
+  - rag.chat_window：設定面板的讀寫與測試按鈕
 """
 import json
 import os
