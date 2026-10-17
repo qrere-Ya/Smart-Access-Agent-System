@@ -159,7 +159,7 @@ def test_init_db_creates_all_tables_and_is_idempotent(db):
     con = sqlite3.connect(db)
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     con.close()
-    assert {"Users", "Attendance", "calendar", "llm_usage_log"} <= tables
+    assert {"Users", "Attendance", "calendar", "AnomalyEvents"} <= tables
 
 
 def test_init_db_upgrades_an_old_users_table(tmp_path, monkeypatch):
@@ -178,24 +178,3 @@ def test_init_db_upgrades_an_old_users_table(tmp_path, monkeypatch):
     assert con.execute("SELECT role, is_active FROM Users").fetchone() == ("employee", 1)
     con.close()
     assert dbm.recognize_face(np.zeros(4, dtype=np.float32))[0] == "舊員工"
-
-
-def test_log_llm_usage_records_events(db):
-    dbm.log_llm_usage("guardrail", "問題一", guardrail_pass=True, similarity_score=0.42)
-    dbm.log_llm_usage("route", "問題二", route="law")
-    dbm.log_llm_usage("basic", "問題三")
-    con = sqlite3.connect(db)
-    rows = con.execute("SELECT event_type, question, route, guardrail_pass, similarity_score, source "
-                       "FROM llm_usage_log ORDER BY id").fetchall()
-    con.close()
-    assert rows == [
-        ("guardrail", "問題一", None, 1, 0.42, "gradio"),
-        ("route", "問題二", "law", None, None, "gradio"),
-        ("basic", "問題三", None, None, None, "gradio"),
-    ]
-
-
-def test_log_llm_usage_never_raises(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(dbm, "DB_PATH", str(tmp_path))  # 資料夾不是資料庫檔，寫入會失敗
-    dbm.log_llm_usage("basic", "會失敗的寫入")
-    assert "WARN" in capsys.readouterr().out

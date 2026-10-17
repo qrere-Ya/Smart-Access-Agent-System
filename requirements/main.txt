@@ -8,23 +8,17 @@
 # lock.txt 是驗證通過的完整版本清單（含間接依賴），用 -c 限制版本，讓環境可以重現。
 
 llama-index-core==0.14.24
-llama-index-workflows==2.23.3
-llama-index-llms-ollama==0.11.0
-llama-index-embeddings-huggingface==0.8.0
-llama-index-vector-stores-faiss==0.7.0
 llama-index-readers-file==0.7.0
-llama-index-retrievers-bm25==0.8.0
+sentence-transformers==6.0.1
+transformers==5.16.1
 bm25s==0.3.11
 PyStemmer==2.2.0.3
 jieba==0.42.1
 faiss-cpu==1.15.0
 pypdf==6.16.2
 docx2txt==0.9
-gradio==6.26.0
 customtkinter==6.0.0
 darkdetect==0.8.0
-SQLAlchemy==2.0.35
-sqlglot==30.19.0
 rapidfuzz==3.14.5
 numpy==2.2.6
 torch==2.13.0

@@ -23,16 +23,8 @@ select = ["E", "F", "B", "S", "C4"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S108", "S110", "S310", "S603", "S607"]
-# 啟動時要先設定環境變數再載入套件，import 因此不在檔案最上方
-"rag/app.py" = ["E402"]
-"rag/main_guardrail_rag.py" = ["E402", "E501"]
-"rag/eval/evaluate_rag.py" = ["E402", "E501"]
 # 內含大量中文提示詞與訊息字串，拆行會改變內容或降低可讀性
-"rag/eval/guardrail_threshold_sweep.py" = ["E501"]
-"rag/guardrail_policy.py" = ["E501"]
-"rag/llm_settings.py" = ["E501"]
-"rag/rag_chat_engine.py" = ["E501"]
-"rag/rag_guardrail.py" = ["E501"]
+"assistant/llm_settings.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

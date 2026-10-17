@@ -301,7 +301,7 @@ def test_failed_intent_detection_falls_back_to_keywords(store, people):
 
 
 def test_llm_failure_while_answering_becomes_a_message(store):
-    from rag import llm_settings
+    from assistant import llm_settings
 
     llm = FakeLLM({"病假": {"docs": True}}, error=llm_settings.LLMCallError("local_down", "local", "x"))
     a = make(store, llm)
@@ -422,12 +422,50 @@ def test_prompt_and_sources_use_relative_floors(store, docs):
         f"第{i}條" + chr(10) + f"補充規定{i}。" for i in range(1, 5)), encoding="utf-8")
     store.sync()
     scores = iter([0.9, 0.5, 0.1, 0.06, 0.01] + [0.001] * 50)
-    llm = FakeLLM({"病假": {"docs": True}})
+    llm = FakeLLM({"病假": {"docs": True}}, reply="沒有標註編號的回答。")
     text = ask(make(store, llm, score_fn=lambda pairs: [next(scores) for _ in pairs]), "病假")
     prompt = llm.answer_prompts[0]
     assert "[4] " in prompt and "[5] " not in prompt        # 給模型：至少第一名的 5%（0.045）
     sources = text.split("📎 出處")[1]
-    assert sources.count("] ") == 2 and "[3] " not in sources  # 出處：至少第一名的 20%（0.18）
+    assert sources.count("] ") == 2 and "[3] " not in sources  # 沒標編號時用分數門檻：第一名的 20%（0.18）
+
+
+def test_sources_list_only_the_passages_the_answer_cites(store, docs):
+    (docs / "補充.txt").write_text("補充辦法" + chr(10) * 2 + chr(10).join(
+        f"第{i}條" + chr(10) + f"補充規定{i}。" for i in range(1, 5)), encoding="utf-8")
+    store.sync()
+    llm = FakeLLM({"病假": {"docs": True}}, reply="依規定辦理 [2]。")
+    def flat(pairs):  # 籠統問題：分數幾乎一樣，門檻濾不掉任何段落
+        return [0.05 - 0.001 * i for i, _ in enumerate(pairs)]
+    text = ask(make(store, llm, score_fn=flat), "病假")
+    sources = text.split("📎 出處")[1]
+    assert sources.count("] ") == 1 and "[2] " in sources
+
+
+def test_without_citation_numbers_sources_are_the_passages_the_answer_overlaps_with(store, docs):
+    (docs / "補充.txt").write_text("補充辦法" + chr(10) * 2 + chr(10).join(
+        f"第{i}條" + chr(10) + f"補充規定{i}完全無關的內容。" for i in range(1, 4)), encoding="utf-8")
+    store.sync()
+    reply = "每年給予七天特別休假，由勞工自行排定日期，雇主不得拒絕勞工依規定請休的特別休假申請。"
+    llm = FakeLLM({"特休": {"docs": True}}, reply=reply)
+
+    def flat(pairs):  # 分數幾乎一樣：只靠分數門檻會全部列出
+        return [0.05 if "七天" in pair[1] else 0.04 for pair in pairs]
+
+    text = ask(make(store, llm, score_fn=flat), "特休")
+    sources = text.split("📎 出處")[1]
+    assert sources.count("] ") == 1 and "請假辦法 第1條" in sources  # 其他段落都沒有被回答用到
+
+
+def test_a_very_short_answer_falls_back_to_the_score_floor(store):
+    llm = FakeLLM({"特休": {"docs": True}}, reply="七天。")
+    assert "📎 出處" in ask(make(store, llm), "特休")
+
+
+def test_document_prompt_explains_how_to_read_ranges(store):
+    llm = FakeLLM({"特休": {"docs": True}})
+    ask(make(store, llm), "特休")
+    assert "以上」包含該數值" in llm.answer_prompts[0] and "未滿」不包含" in llm.answer_prompts[0]
 
 
 # --- 問題指名某人 ---

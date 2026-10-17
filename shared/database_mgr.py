@@ -2,18 +2,17 @@
 database_mgr.py：SQLite 資料層。
 
 主要功能：
-  - 建立與升級資料表：Users（員工與人臉特徵）、Attendance（打卡）、calendar（行事曆）、llm_usage_log（RAG 稽核）、
+  - 建立與升級資料表：Users（員工與人臉特徵）、Attendance（打卡）、calendar（行事曆）、
     AnomalyEvents（異常事件，如尾隨；只存照片路徑，不存照片）
   - 員工註冊（姓名或員工編號重複即拒絕）、1:N 人臉比對
   - 打卡邏輯：依時間窗判斷上班、遲到、早退、下班、加班
-  - 寫入 RAG 問答稽核紀錄
   - 異常事件的寫入、查詢，以及把舊的證據照片一次匯入事件表
 
 串接模組：
   - terminal_app：人臉比對、打卡、行事曆、記錄異常事件
   - web_server：員工註冊
   - backend_main、account_admin、dashboard_stats：管理後台查詢與帳號管理
-  - rag_guardrail、main_guardrail_rag：寫入 llm_usage_log
+  - assistant.queries：唯讀查詢考勤與異常事件
 """
 import sqlite3
 import io
@@ -91,18 +90,6 @@ def init_db():
                     emp_id TEXT NOT NULL,
                     event_time TEXT NOT NULL,
                     event_title TEXT NOT NULL)""")
-
-    # RAG 稽核表：一筆代表一個決策事件（防護欄判斷、路由判斷、直接對話），以 event_type 區分
-    conn_db.execute("""CREATE TABLE IF NOT EXISTS llm_usage_log
-                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp DATETIME NOT NULL,
-                    question TEXT,
-                    event_type TEXT NOT NULL,
-                    route TEXT,
-                    guardrail_pass INTEGER,
-                    similarity_score REAL,
-                    is_pass INTEGER,
-                    source TEXT DEFAULT 'gradio')""")
 
     # 異常事件表（尾隨等）：只存證據照片的路徑
     anomaly_table_existed = conn_db.execute(
@@ -282,35 +269,6 @@ def recognize_face(target_embedding, threshold=1.0):
         return ("Empty DB", 99.9)
 
     return (best_name, best_dist) if best_dist < threshold else ("Unknown", best_dist)
-
-
-def log_llm_usage(event_type, question, route=None, guardrail_pass=None, similarity_score=None, source="gradio"):
-    """
-    寫入一筆 RAG 問答稽核紀錄。
-    event_type：guardrail（防護欄判斷）、route（law/attendance 路由判斷）、basic（Basic 模式直接問 LLM）。
-    寫入失敗只印警告，不拋出例外，避免影響問答流程。
-    """
-    try:
-        conn_db = sqlite3.connect(DB_PATH, timeout=5)
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        conn_db.execute(
-            """INSERT INTO llm_usage_log
-               (timestamp, question, event_type, route, guardrail_pass, similarity_score, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                now,
-                question,
-                event_type,
-                route,
-                None if guardrail_pass is None else int(guardrail_pass),
-                similarity_score,
-                source,
-            ),
-        )
-        conn_db.commit()
-        conn_db.close()
-    except Exception as e:
-        print(f"[Database][WARN] llm_usage_log 寫入失敗（不影響本次問答結果）: {e}")
 
 
 # --- 異常事件 ---

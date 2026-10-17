@@ -9,14 +9,13 @@ bootstrap.py：把助理需要的所有零件組起來（文件向量庫、重�
 
 串接模組：
   - doc_store、rerank、entity_resolver、llm、queries、answer：各個零件
-  - rag.rag_resources：bge-m3 的資源包裝（舊 rag 移除後這個檔案會搬到 assistant）
+  - embedding：bge-m3 的資源包裝
   - admin.assistant_window：呼叫 create_runtime 並顯示進度
 """
 import os
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
-import numpy as np
 
 from assistant import answer, llm as llm_mod, queries
 from assistant.doc_store import DocStore, SyncReport
@@ -47,17 +46,13 @@ class Runtime:
 
 def _default_embedder():
     """正式環境的向量化：bge-m3（本機資料夾）。回傳 (embed_fn, 釋放函式)。"""
-    from rag.rag_resources import ManagedHFEmbedding
+    from assistant.embedding import ManagedEmbedder
 
     model_dir = os.path.join(paths.MODELS_DIR, "bge-m3")
     if not os.path.isdir(model_dir):
         raise FileNotFoundError(f"找不到向量模型資料夾：{model_dir}")
-    embedding = ManagedHFEmbedding(model_dir, device="cuda")
-
-    def embed(texts):
-        return np.array(embedding.get_text_embedding_batch(list(texts)))
-
-    return embed, embedding.release
+    embedder = ManagedEmbedder(model_dir, device="cuda")
+    return embedder, embedder.release
 
 
 def _default_reranker():
@@ -74,7 +69,7 @@ def create_runtime(progress: Progress = print, docs_dir: Optional[str] = None, s
                    settings: Optional[dict] = None, embedder=None, reranker_factory=None, llm_builder=None,
                    roster=roster_names) -> Runtime:
     """依序準備所有零件並組成 Assistant；任何一步失敗都會丟出例外，由呼叫端顯示原因。"""
-    docs_dir = docs_dir or paths.LAWS_DIR
+    docs_dir = docs_dir or paths.DOCS_DIR
     store_dir = store_dir or paths.ASSISTANT_DIR
     closers: List[Callable[[], None]] = []
 
