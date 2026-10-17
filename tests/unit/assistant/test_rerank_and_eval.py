@@ -44,6 +44,12 @@ def test_rerank_with_nothing_to_do_returns_empty():
     assert reranker.rerank("問題", []) == [] and reranker.rerank("  ", [hit("第1條")]) == []
 
 
+def test_missing_model_folder_is_reported_instead_of_downloading(tmp_path):
+    reranker = Reranker.from_model_dir(str(tmp_path / "no_such_model"), device="cpu")
+    with pytest.raises(FileNotFoundError, match="找不到重排模型資料夾"):
+        reranker.rerank("問題", [hit("第1條")])
+
+
 # --- 評估指標 ---
 
 def ranking(*articles):

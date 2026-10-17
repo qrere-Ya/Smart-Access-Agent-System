@@ -37,11 +37,13 @@ class _RerankResource(ManagedResource):
         self._dir, self._device = model_dir, device
 
     def _load(self):
+        if not os.path.isdir(self._dir):  # 否則 from_pretrained 會把路徑當成線上的模型名稱去下載
+            raise FileNotFoundError(f"找不到重排模型資料夾：{self._dir}")
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(self._dir)
-        model = AutoModelForSequenceClassification.from_pretrained(self._dir)
+        tokenizer = AutoTokenizer.from_pretrained(self._dir, local_files_only=True)
+        model = AutoModelForSequenceClassification.from_pretrained(self._dir, local_files_only=True)
         if self._device.startswith("cuda"):
             model = model.half()
         model.to(self._device).eval()
