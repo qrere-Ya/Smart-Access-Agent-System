@@ -113,6 +113,16 @@ def people_with_status(day: str, status: str) -> List[Dict]:
     return [{"name": r[0], "timestamp": r[1]} for r in rows]
 
 
+def status_events(start: str, end: str, status: str, limit: int = 200) -> List[Dict]:
+    """區間內出現指定狀態的紀錄（誰、什麼時候），時間由早到晚，例如這週的遲到名單。"""
+    since, until = _range(start, end)
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT name, timestamp FROM Attendance WHERE timestamp >= ? AND timestamp < ? AND status = ? "
+            "ORDER BY timestamp LIMIT ?", (since, until, status, _limit(limit))).fetchall()
+    return [{"name": r[0], "timestamp": r[1]} for r in rows]
+
+
 def daily_summary(day: str) -> Dict:
     """
     某一天的出勤摘要：有打卡的人數、遲到、早退、加班名單，以及在職但當天沒有任何打卡紀錄的人。
