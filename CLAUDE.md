@@ -14,7 +14,7 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
 - 啟動方式：一律在專案根目錄用 `python -m` 啟動，例如 `python -m admin.backend_main`、`python -m access.terminal_app`、`python -m rag.app`、`python -m access.web_server`，不要直接執行檔案路徑。
 - 路徑一律取自 `shared/paths.py`，不要在各檔自行用 `__file__` 推算。執行期資料放 `runtime/`（資料庫、向量索引、證據照片、LLM 設定、評估結果）。
 - 環境：Windows、Python 3.11（`.venv/`），依賴見 `requirements/main.txt`，完整版本鎖定在 `requirements/lock.txt`（安裝順序見 main.txt 檔頭；retinaface 要另外用 `--no-deps` 安裝）。
-- 測試：`python -m pytest tests`（單元測試，不需要模型、GPU、攝影機或任何服務；用臨時的 `runtime/`，不會碰真實資料）。CI 使用較輕量的 `requirements/test.txt`。
+- 測試：`python -m pytest tests`（單元測試，不需要模型、GPU、攝影機或任何服務；用臨時的 `runtime/`，不會碰真實資料）。CI 使用較輕量的 `requirements/test.txt`。另有只在本機跑的整合測試 `python -m pytest -m integration`（真模型、真法規、真服務）與回歸測試 `python -m pytest -m regression`（對照 `tests/regression/baseline.json`；有意更新模型後用 `UPDATE_BASELINE=1` 重產）；兩者預設不執行。
 - 金鑰一律走環境變數（如 `NVIDIA_API_KEY`），不寫進檔案。`models/`、`data/`、`runtime/` 不進版控。
 - 目前已知未解的資安缺口：系統無身分驗證層、各使用者共用聊天記憶。在真正的 auth 層建立前，不要宣稱這兩點已安全。
 
