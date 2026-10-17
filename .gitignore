@@ -5,11 +5,7 @@ runtime/
 data/
 
 # 模型（體積大，各台電腦自行放置）
-models/**/*.onnx
-models/**/*.pt
-models/**/*.tar.bz2
-models/bge-m3/
-models/vits-piper-zh_CN-huayan-medium/
+models/
 
 # Python 環境與快取
 __pycache__/

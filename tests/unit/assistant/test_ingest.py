@@ -101,6 +101,156 @@ def test_sentence_longer_than_the_limit_is_cut_by_length_instead_of_dropped():
     assert "".join(c.body for c in parts) == long_sentence
 
 
+def test_heading_glued_to_the_end_of_the_previous_paragraph_is_split_off():
+    text = "第1條\n甲。\n第2條\n乙乙。#### 第3條\n丙。\n第4條\n丁。"
+    assert [(c.article, c.body) for c in law_chunks(text)] == [
+        ("第1條", "甲。"), ("第2條", "乙乙。"), ("第3條", "丙。"), ("第4條", "丁。")]
+
+
+def test_a_normal_heading_line_is_not_split():
+    chunks = law_chunks("#### 第1條\n甲。\n#### 第2條\n乙。\n#### 第3條\n丙。")
+    assert [c.article for c in chunks] == ["第1條", "第2條", "第3條"]
+
+
+def test_repeated_article_with_identical_text_keeps_only_the_last_copy():
+    text = ("## 第一章 甲\n第1條\n壹。\n第2條\n貳。\n第3條\n參。\n"
+            "## 第二章 乙\n第2條\n貳。\n第4條\n肆。")
+    assert [(c.section, c.article) for c in law_chunks(text)] == [
+        ("第一章 甲", "第1條"), ("第一章 甲", "第3條"), ("第二章 乙", "第2條"), ("第二章 乙", "第4條")]
+
+
+def test_same_article_number_with_different_text_is_kept():
+    text = "第1條\n甲。\n第2條\n乙。\n第3條\n丙。\n第2條\n不同的內容。"
+    assert [c.body for c in law_chunks(text) if c.article == "第2條"] == ["乙。", "不同的內容。"]
+
+
+def test_chapter_headings_spaced_out_by_pdf_extraction_are_tidied():
+    text = "第 二 章 勞動契約\n第 1 條\n甲。\n第 2 條\n乙。\n第 3 條\n丙。"
+    assert {c.section for c in law_chunks(text) if c.article} == {"第二章 勞動契約"}
+
+
+# --- 要點型（一、二、三、） ---
+
+POINTS = """某某作業要點
+105年5月11日系務會議
+
+一、為辦理實習，特訂定本要點。
+二、本系設立委員會。
+（一）委員由主任擔任。
+（二）委員均為無給職。
+三、實習機構須經評估合格。
+十、本要點經會議通過後實施。
+"""
+
+
+def point_chunks(text=POINTS):
+    return chunk_document("要點.txt", [Segment(text)])
+
+
+def test_each_top_level_point_becomes_a_chunk_labelled_with_its_number():
+    chunks = point_chunks()
+    assert [c.article for c in chunks] == ["", "第一點", "第二點", "第三點", "第十點"]
+    assert chunks[0].body.startswith("某某作業要點")
+
+
+def test_sub_items_stay_with_their_point_and_the_heading_line_is_kept():
+    second = point_chunks()[2]
+    assert second.body.startswith("二、本系設立委員會。") and "委員均為無給職" in second.body
+
+
+def test_points_need_to_start_from_one_two_three():
+    text = "標題\n五、甲。\n六、乙。\n七、丙。"
+    assert all(c.article == "" for c in point_chunks(text))
+
+
+def test_a_form_with_numbered_declarations_is_not_split_into_points():
+    text = "聲明書\n\n一．依規定完成課程。\n\n二．遵守規範。\n\n三．謹言慎行。"
+    assert len(point_chunks(text)) == 1
+
+
+# --- PDF 斷行還原 ---
+
+def wrapped_pdf_lines(extra=""):
+    long_a = "政府為使各級機關及公、私立學校在天然災害發生或有發生之虞時，停止上班及上課作業有所依"
+    return ("第 1 條\n" + long_a + "\n據，特訂定本辦法。\n"
+            "第 2 條\n本辦法適用範圍為政府各級機關及公、私立學校。\n"
+            "第 3 條\n本辦法所稱天然災害，指下列因素致交通、水電供應中斷或供應困難，影響通行、上班上課安全\n"
+            "或有致災之虞者：\n一、風災。\n二、水災。\n" + extra)
+
+
+def pdf_chunks(text, name="辦法.pdf"):
+    return chunk_document(name, [Segment(text, 1)])
+
+
+def test_pdf_line_broken_in_the_middle_of_a_word_is_joined_back():
+    first = next(c for c in pdf_chunks(wrapped_pdf_lines()) if c.article == "第1條")
+    assert first.body == ("政府為使各級機關及公、私立學校在天然災害發生或有發生之虞時，停止上班及上課作業有所依據，"
+                          "特訂定本辦法。")
+
+
+def test_pdf_wrapped_sentence_is_joined_but_list_items_stay_separate():
+    third = next(c for c in pdf_chunks(wrapped_pdf_lines()) if c.article == "第3條")
+    assert "上班上課安全或有致災之虞者：" in third.body
+    assert third.body.endswith("一、風災。\n二、水災。")
+
+
+def test_pdf_wrapped_lines_continue_across_pages():
+    text = wrapped_pdf_lines()
+    head, tail = text.split("第 3 條\n")
+    first, rest = tail.split("\n", 1)
+    segs = [Segment(head + "第 3 條\n" + first, 1), Segment(rest, 2)]
+    third = next(c for c in chunk_document("辦法.pdf", segs) if c.article == "第3條")
+    assert "上班上課安全或有致災之虞者：" in third.body
+
+
+def test_text_files_are_not_unwrapped():
+    third = next(c for c in pdf_chunks(wrapped_pdf_lines(), name="辦法.txt") if c.article == "第3條")
+    assert "上班上課安全\n或有致災之虞者：" in third.body
+
+
+def test_short_lines_without_punctuation_are_not_joined_in_pdfs():
+    text = wrapped_pdf_lines("附則\n本辦法自發布日施行。")
+    last = next(c for c in pdf_chunks(text) if c.article == "第3條")
+    assert "二、水災。\n附則\n本辦法自發布日施行。" in last.body
+
+
+def test_pdf_lines_that_start_a_new_item_are_never_joined_to_the_previous_line():
+    long_line = "本辦法所稱天然災害，指下列因素致交通、水電供應中斷或供應困難，影響通行、上班上課安全與致災"
+    for starter in ("一、風災。", "（一）風災。", "(二)水災。", "1. 風災。", "第 4 條"):
+        text = f"第 1 條\n甲。\n第 2 條\n乙。\n第 3 條\n{long_line}\n{starter}\n" + "\n".join(["丙。"] * 8)
+        third = next(c for c in pdf_chunks(text) if c.article == "第3條")
+        assert long_line + "\n" in third.body or starter == "第 4 條", starter
+
+
+@pytest.mark.parametrize("text, number", [("一", 1), ("九", 9), ("十", 10), ("十一", 11), ("二十", 20), ("二十三", 23),
+                                          ("九十九", 99)])
+def test_chinese_numerals_are_converted(text, number):
+    assert ingest._cn_to_int(text) == number
+
+
+# --- 文件標題 ---
+
+def test_numeric_file_name_takes_the_first_line_as_title():
+    text = "某大學學生校外實習作業要點\n105年5月11日\n\n一、甲。\n二、乙。\n三、丙。"
+    chunks = chunk_document("484864023.pdf", [Segment(text)])
+    assert {c.title for c in chunks} == {"某大學學生校外實習作業要點"}
+
+
+def test_title_prefix_of_official_law_pdfs_is_removed():
+    text = "法規名稱：勞動基準法\n修正日期：民國 113 年\n第 1 條\n甲。\n第 2 條\n乙。\n第 3 條\n丙。"
+    chunks = chunk_document("12345.pdf", [Segment(text)])
+    assert {c.title for c in chunks} == {"勞動基準法"}
+
+
+def test_descriptive_file_name_is_kept_as_title():
+    assert chunk_document("請假辦法.docx", [Segment("完全不同的第一行標題")])[0].title == "請假辦法"
+
+
+def test_a_sentence_is_not_mistaken_for_a_title():
+    chunk = chunk_document("12345.docx", [Segment("本人於某年某月起參加實習，願意遵守規定。")])[0]
+    assert chunk.title == "12345"
+
+
 # --- Markdown 型 ---
 
 MD = """# 員工手冊
