@@ -1,17 +1,16 @@
 """
-llm_settings.py：評估用出題官/裁判官 LLM 的設定與呼叫層。
+llm_settings.py：語言模型（雲端 API 與本機 Ollama）的設定與呼叫層。
 
 主要功能：
   - 設定讀寫：存在 runtime/llm_settings.json（含金鑰，已被 .gitignore 排除，不可上傳）
   - 兩種 LLM 用戶端：OpenAI 相容的雲端 API、本機 Ollama
   - FailoverLLM：雲端 API 失效時自動改用本機模型
   - 連線檢查與測試、錯誤分類並轉成白話說明（金鑰不會印出）
-  - build_judge_llm：依設定組出評估用的 LLM
   只用標準函式庫（urllib）直接呼叫雲端 API 與 Ollama，不需要額外的轉接服務。
 
 串接模組：
-  - app：設定面板的讀寫與測試按鈕
-  - evaluate_rag：取得出題官/裁判官 LLM 與錯誤說明
+  - llm：依設定組出助理使用的 LLM
+  - admin.assistant_window：設定面板的讀寫與測試按鈕
 """
 import json
 import os
@@ -34,7 +33,7 @@ DEFAULTS = {
     "local_model": "qwen2:7b",
     "local_host": "",                      # 空白＝用環境變數 OLLAMA_HOST，再不然 http://127.0.0.1:11434
 }
-LOCAL_NUM_CTX = 8192  # 與 main_guardrail_rag 的 context_window 一致，避免 Ollama 重新載入模型
+LOCAL_NUM_CTX = 8192  # 固定的上下文長度，每次呼叫都用同一個值，避免 Ollama 重新載入模型
 
 
 def _log(msg):
@@ -216,7 +215,7 @@ def format_error(err, s=None, markdown=True):
 
 
 def describe_exception(exc, source="api"):
-    """把任何例外轉成一行白話原因（給 evaluate_rag 使用）"""
+    """把任何例外轉成一行白話原因"""
     err = _classify_exc(exc, source)
     what, _ = explain(err)
     return what
@@ -463,39 +462,3 @@ def test_local(s=None):
         _log("本機模型測試失敗：\n" + format_error(err, s, markdown=False)
              + (("\n  已安裝的模型：" + "、".join(names)) if extra else ""))
     return ok, msg
-
-
-# --- 組出評估用的出題官/裁判官 ---
-def build_judge_llm(s=None):
-    """
-    回傳 (llm 或 None, 給畫面看的一行說明)；llm 為 None 代表連本機模型也不能用。
-    模式 api 且金鑰可用就用 API（本機可用時當備援）；API 不能用就自動改本機；模式 local 直接用本機。
-    """
-    s = s or load_settings()
-    local_ok, local_err, _names, _t, _sec = check_local(s)
-    local_llm = OllamaChatLLM(local_host(s), s["local_model"]) if local_ok else None
-
-    note_prefix = ""
-    if s["mode"] == "api":
-        ok, err, _text, _sec2 = check_api(s, timeout=15.0)
-        if ok:
-            api_llm = OpenAICompatLLM(s["api_base"], effective_api_key(s), s["api_model"])
-            _log(f"評估使用雲端 API（{s['api_model']}）" + ("，本機模型待命當備援。" if local_llm else "，沒有可用的本機備援。"))
-            return FailoverLLM(api_llm, local_llm), f"出題官／裁判官：{api_llm.label()}" + (
-                "（API 失效時自動改用本機模型）" if local_llm else "")
-        what, _ = explain(err, s)
-        note_prefix = f"雲端 API 目前無法使用（{what}）。"
-        _log(note_prefix + "自動改用本機模型。")
-
-    if local_llm is None:
-        _log("本機模型也無法使用，評估無法進行：\n" + format_error(local_err, s, markdown=False))
-        return None, (f"{note_prefix}\n\n" if note_prefix else "") + "🛑 **本機模型也無法使用，評估無法進行。**\n\n" \
-            + format_error(local_err, s) + "\n\n（右上角 ⚙️ 設定可以測試與修改）"
-    if note_prefix:
-        text = f"ℹ️ {note_prefix}已自動改用{local_llm.label()}當出題官／裁判官（不影響評估進行）。"
-    elif s["mode"] == "api":
-        text = f"出題官／裁判官：{local_llm.label()}"
-    else:
-        text = f"出題官／裁判官：{local_llm.label()}（設定為「只用本機模型」）"
-    text += "\n\n⚠️ 出題、答題、評分都是同一顆本機模型，評分會偏寬鬆；要正式的評估數字，建議用雲端 API。"
-    return local_llm, text

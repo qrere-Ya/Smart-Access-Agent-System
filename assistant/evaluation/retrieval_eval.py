@@ -96,16 +96,14 @@ def format_table(title: str, summary: Dict[str, dict]) -> str:
 def main():
     import tempfile
 
-    import numpy as np
 
     from assistant.doc_store import DocStore
     from assistant.rerank import Reranker
-    from rag.rag_resources import ManagedHFEmbedding
+    from assistant.embedding import ManagedEmbedder
     from shared import paths
 
-    embedding = ManagedHFEmbedding(os.path.join(paths.MODELS_DIR, "bge-m3"), device="cuda")
-    store = DocStore(paths.LAWS_DIR, tempfile.mkdtemp(prefix="eval_store_"),
-                     lambda texts: np.array(embedding.get_text_embedding_batch(list(texts))))
+    embedding = ManagedEmbedder(os.path.join(paths.MODELS_DIR, "bge-m3"), device="cuda")
+    store = DocStore(paths.DOCS_DIR, tempfile.mkdtemp(prefix="eval_store_"), embedding)
     store.sync()
     reranker = Reranker.from_model_dir(os.path.join(paths.MODELS_DIR, "bge-reranker-v2-m3"))
     candidates = 20

@@ -10,7 +10,7 @@ assistant_window.py：管理者助理的聊天視窗（CustomTkinter，深色現
 
 串接模組：
   - assistant.bootstrap：組裝模型與助理；assistant.chat_session：背景執行緒與事件佇列
-  - service_manager：自動啟動 Ollama；rag.llm_settings：語言模型設定的讀寫與測試
+  - service_manager：自動啟動 Ollama；assistant.llm_settings：語言模型設定的讀寫與測試
   - backend_main：用 service_manager.start_assistant_window 另開這個行程；單獨執行：python -m admin.assistant_window
 """
 import queue
@@ -114,7 +114,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def __init__(self, master, on_saved):
         super().__init__(master)
-        from rag import llm_settings
+        from assistant import llm_settings
 
         self.ls, self.on_saved = llm_settings, on_saved
         self.title("語言模型設定")

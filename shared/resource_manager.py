@@ -8,7 +8,7 @@ resource_manager.py：中央資源協調器，管理高耗能模型的載入與�
   - 每個 Python 行程一個單例（get_manager），不做跨行程協調
 
 串接模組：
-  - vision_core、security、audio_player、rag_resources：各自的模型繼承 ManagedResource
+  - vision_core、security、audio_player、assistant.embedding：各自的模型繼承 ManagedResource
 """
 import gc
 import subprocess

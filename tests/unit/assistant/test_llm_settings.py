@@ -10,7 +10,7 @@ import urllib.error
 
 import pytest
 
-from rag import llm_settings as ls
+from assistant import llm_settings as ls
 
 
 @pytest.fixture
@@ -272,26 +272,3 @@ def test_failover_does_not_switch_while_the_primary_works():
     primary = _Working()
     llm = ls.FailoverLLM(primary, _Failing())
     assert llm.complete("嗨") == "備援的答案" and not llm.switched and llm.label() == "本機備援"
-
-
-def test_judge_uses_the_cloud_api_with_local_fallback(fake_llm_server, settings_file):
-    base, _ = fake_llm_server
-    llm, note = ls.build_judge_llm(make_settings(base))
-    assert isinstance(llm, ls.FailoverLLM) and "雲端 API" in note
-
-
-def test_judge_falls_back_to_local_when_the_cloud_key_is_bad(fake_llm_server, settings_file):
-    base, _ = fake_llm_server
-    llm, note = ls.build_judge_llm(make_settings(base, api_key="bad-key"))
-    assert isinstance(llm, ls.OllamaChatLLM) and "已自動改用" in note
-
-
-def test_judge_in_local_mode(fake_llm_server, settings_file):
-    base, _ = fake_llm_server
-    llm, note = ls.build_judge_llm(make_settings(base, mode="local"))
-    assert isinstance(llm, ls.OllamaChatLLM) and "只用本機模型" in note
-
-
-def test_judge_is_unavailable_when_nothing_works(settings_file):
-    llm, note = ls.build_judge_llm(make_settings(closed_port_url(), mode="local"))
-    assert llm is None and "評估無法進行" in note

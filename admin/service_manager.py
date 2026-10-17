@@ -2,7 +2,7 @@
 service_manager.py：背景服務管理層。
 
 主要功能：
-  - 啟動、停止、監控三組子服務：RAG（Ollama + app.py）、人臉辨識（terminal_app.py）、QR 註冊（web_server.py）
+  - 啟動、停止、監控子服務：人臉辨識（terminal_app.py）、QR 註冊（web_server.py）、管理者助理視窗與它用到的 Ollama
   - 以 port 判斷服務是否已在執行，避免重複啟動；只停止自己啟動的行程，外部啟動的改用 port 找 PID
   - 在背景執行緒讀取子行程輸出，以 callback 交給呼叫端
   - 偵測本機區網 IP，供 QR Code 網址使用
@@ -10,7 +10,7 @@ service_manager.py：背景服務管理層。
 
 串接模組：
   - backend_main：管理後台視窗呼叫這裡的函式並更新畫面
-  - rag.app、access.terminal_app、access.web_server：以 python -m 的方式當成子行程啟動
+  - admin.assistant_window、access.terminal_app、access.web_server：以 python -m 的方式當成子行程啟動
 """
 import os
 import re
@@ -27,15 +27,10 @@ _PROJECT_ROOT = paths.PROJECT_ROOT
 
 # 各服務使用的 port，用來判斷服務是否已在執行
 PORT_OLLAMA = 11434
-PORT_RAG_APP = 7860
 PORT_WEB_SERVER = 5000
-
-_RAG_GROUP = ["ollama", "rag_app"]
 
 # 本程式自己啟動的行程 {服務名稱: Popen}；port 已被外部占用時不會存進來，避免停止時誤殺
 _service_procs = {}
-# RAG 啟動中的旗標，避免重複啟動
-_rag_busy = False
 
 
 # --- 共用小工具 ---
@@ -241,81 +236,6 @@ def stop_assistant_window():
     return stop_service("assistant")
 
 
-# --- RAG 服務：Ollama + app.py ---
-def rag_group_running():
-    """判斷 RAG 這組服務是否真的在執行（port 已開，或自己啟動的行程還活著）。"""
-    if is_port_open("127.0.0.1", PORT_RAG_APP):
-        return True
-    for k in _RAG_GROUP:
-        proc = _service_procs.get(k)
-        if proc is not None and proc.poll() is None:
-            return True
-    return False
-
-
-def is_rag_busy():
-    return _rag_busy
-
-
-def start_rag_services_async(on_output_line, on_finished):
-    """
-    在背景執行緒依序啟動 Ollama → app.py，立刻回傳。
-    on_output_line(prefix, line)：子行程每印一行呼叫一次，prefix 為 "[Ollama] " 或 "[RAG App] "。
-    on_finished(started, warnings)：全部處理完呼叫一次，兩者都是字串清單。
-    """
-    global _rag_busy
-    _rag_busy = True
-    threading.Thread(target=_start_rag_services_worker, args=(on_output_line, on_finished), daemon=True).start()
-
-
-def _start_rag_services_worker(on_output_line, on_finished):
-    global _rag_busy
-    warnings = []
-    started = []
-
-    def emit(prefix, line):
-        on_output_line(prefix, line)
-
-    # 1. Ollama：port 沒開才啟動，並等到 port 就緒
-    ollama_started, ollama_warning = start_ollama(lambda line: emit("[Ollama] ", line))
-    if ollama_started:
-        started.append(ollama_started)
-    if ollama_warning:
-        warnings.append(ollama_warning)
-
-    # 2. RAG 助理網頁（app.py）
-    if is_port_open("127.0.0.1", PORT_RAG_APP):
-        started.append("RAG 助理網頁（本來就已經在跑，沒有重複啟動）")
-        emit("[RAG App] ", "（本來就已經在背景執行，不是本程式啟動的，看不到它的輸出）")
-    else:
-        rag_module = "rag.app"
-        python_exe = _project_python_exe()
-        emit("[RAG App] ", f"（使用的 Python 直譯器：{python_exe}）")
-        try:
-            # -u 不緩衝輸出；encoding 指定 UTF-8 讀取，避免中文讓讀取執行緒停擺
-            proc = subprocess.Popen(  # noqa: S603
-                [python_exe, "-u", "-m", rag_module], cwd=_PROJECT_ROOT,
-                env=_python_child_env(),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                encoding="utf-8", errors="replace",
-                **_hidden_console_popen_kwargs(),
-            )
-            _service_procs["rag_app"] = proc
-            _start_output_reader_thread(proc, lambda line: emit("[RAG App] ", line))
-            started.append("RAG 助理網頁")
-        except Exception as e:
-            warnings.append(f"RAG 助理網頁啟動失敗：{e}")
-
-    _rag_busy = False
-    on_finished(started, warnings)
-
-
-def stop_rag_services():
-    """停止 RAG 這組服務，回傳每個服務是否成功處理的布林清單。"""
-    return [stop_service(k, p) for k, p in
-            [("ollama", PORT_OLLAMA), ("rag_app", PORT_RAG_APP)]]
-
-
 # --- 人臉辨識終端機：terminal_app.py ---
 def face_service_running():
     """判斷人臉辨識行程是否還活著，已死掉的殘留 Popen 順便清掉。"""
@@ -385,12 +305,11 @@ def stop_reg_service():
 
 # --- 關閉主視窗時停止所有服務 ---
 def any_service_running():
-    return bool(_service_procs) or is_port_open("127.0.0.1", PORT_RAG_APP) or is_port_open("127.0.0.1", PORT_WEB_SERVER)
+    return bool(_service_procs) or is_port_open("127.0.0.1", PORT_WEB_SERVER)
 
 
 def stop_all_services():
     stop_service("ollama", PORT_OLLAMA)
-    stop_service("rag_app", PORT_RAG_APP)
     stop_service("terminal")
     stop_service("web_server", PORT_WEB_SERVER)
     stop_service("assistant")

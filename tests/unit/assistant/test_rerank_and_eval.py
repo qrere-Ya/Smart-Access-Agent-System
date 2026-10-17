@@ -1,6 +1,6 @@
 """
 rerank 與檢索評估單元測試：重排依分數排序並保留來源資訊、評估指標（名次、hit@k、MRR、無依據題）、
-題庫格式正確，且題庫標的條號在真實法規檔裡都存在（有 data/laws 時才檢查）。
+題庫格式正確，且題庫標的條號在真實法規檔裡都存在（有 data/docs 時才檢查）。
 """
 import os
 
@@ -137,11 +137,11 @@ def test_chunk_key_is_document_title_plus_article_without_the_segment_suffix():
 
 
 def test_gold_answers_exist_in_the_real_documents():
-    folder = paths.LAWS_DIR if os.path.isdir(paths.LAWS_DIR) else None
-    real = os.path.join(paths.PROJECT_ROOT, "data", "laws")
+    folder = paths.DOCS_DIR if os.path.isdir(paths.DOCS_DIR) else None
+    real = os.path.join(paths.PROJECT_ROOT, "data", "docs")
     folder = real if os.path.isdir(real) and os.listdir(real) else folder
     if not folder or not os.listdir(folder):
-        pytest.skip("沒有 data/laws 文件")
+        pytest.skip("沒有 data/docs 文件")
     keys = set()
     for name in os.listdir(folder):
         if name.lower().endswith(ingest.SUPPORTED_EXTENSIONS):

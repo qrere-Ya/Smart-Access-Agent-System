@@ -10,7 +10,7 @@ doc_store.py：文件知識庫（逐份文件追蹤的向量庫）。
 
 串接模組：
   - ingest：文件讀取與切塊
-  - rag.rag_resources：正式環境的 embed_fn 來自 bge-m3 的資源包裝
+  - embedding：正式環境的 embed_fn 來自 bge-m3 的資源包裝
   - answer（之後）：取得檢索結果交給 LLM
 """
 import json

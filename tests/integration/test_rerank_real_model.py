@@ -4,7 +4,6 @@
 """
 import os
 
-import numpy as np
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("require_models")]
@@ -14,16 +13,15 @@ pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("require_models")
 def retrieval(tmp_path_factory):
     from assistant.doc_store import DocStore
     from assistant.rerank import Reranker
-    from rag.rag_resources import ManagedHFEmbedding
+    from assistant.embedding import ManagedEmbedder
     from shared import paths
 
     rerank_dir = os.path.join(paths.MODELS_DIR, "bge-reranker-v2-m3")
-    laws = os.path.join(paths.PROJECT_ROOT, "data", "laws")
-    if not os.path.isdir(rerank_dir) or not os.path.isdir(laws) or not os.listdir(laws):
+    docs = os.path.join(paths.PROJECT_ROOT, "data", "docs")
+    if not os.path.isdir(rerank_dir) or not os.path.isdir(docs) or not os.listdir(docs):
         pytest.skip("缺少重排模型或法規文件")
-    embedding = ManagedHFEmbedding(os.path.join(paths.MODELS_DIR, "bge-m3"), device="cuda")
-    store = DocStore(laws, str(tmp_path_factory.mktemp("store")),
-                     lambda texts: np.array(embedding.get_text_embedding_batch(list(texts))))
+    embedding = ManagedEmbedder(os.path.join(paths.MODELS_DIR, "bge-m3"), device="cuda")
+    store = DocStore(docs, str(tmp_path_factory.mktemp("store")), embedding)
     store.sync()
     reranker = Reranker.from_model_dir(rerank_dir)
     yield store, reranker

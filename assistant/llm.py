@@ -7,12 +7,12 @@ llm.py：助理用的 LLM 取得（本機 Ollama 或雲端 API，雲端失效自
   - 兩個都不能用時回傳 None 與白話說明，由呼叫端顯示
 
 串接模組：
-  - rag.llm_settings：設定讀寫、兩種用戶端與失敗備援（舊 rag 移除後這個檔案會搬到 assistant）
+  - llm_settings：設定讀寫、兩種用戶端與失敗備援
   - answer：回答與意圖判斷各取一個 LLM
 """
 from typing import Optional, Tuple
 
-from rag import llm_settings as ls
+from assistant import llm_settings as ls
 
 
 def build_llm(settings: Optional[dict] = None, max_tokens: Optional[int] = None) -> Tuple[Optional[object], str]:
