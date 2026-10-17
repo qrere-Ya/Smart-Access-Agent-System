@@ -180,3 +180,26 @@ def fake_llm_server():
         os.environ.pop("NO_PROXY", None)
     else:
         os.environ["NO_PROXY"] = old_no_proxy
+
+
+# --- 整合測試與回歸測試共用（需要真的模型，預設不執行）---
+
+
+@pytest.fixture(scope="session")
+def face_bgr():
+    """內建的測試人臉（scikit-image 附的公有領域照片），不需要另外放圖檔。"""
+    import cv2
+    from skimage import data
+
+    return cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
+
+
+@pytest.fixture(scope="session")
+def require_models():
+    """缺少模型檔就跳過整合測試。"""
+    from shared import paths
+
+    needed = ["arcface_r100_v1.onnx", "MiniFASNetV2.onnx", "yolov8s.pt", os.path.join("bge-m3", "config.json")]
+    missing = [name for name in needed if not os.path.exists(os.path.join(paths.MODELS_DIR, name))]
+    if missing:
+        pytest.skip(f"缺少模型檔：{missing}")
