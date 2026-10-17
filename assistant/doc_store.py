@@ -51,6 +51,7 @@ class Hit:
     chunk: dict
     score: float
     dense: Optional[float]
+    rerank: Optional[float] = None
 
     @property
     def label(self) -> str:
