@@ -22,7 +22,9 @@ click==8.4.1
 colorama==0.4.6
 coloredlogs==15.0.1
 contourpy==1.3.2
+customtkinter==6.0.0
 cycler==0.12.1
+darkdetect==0.8.0
 dataclasses-json==0.6.7
 defusedxml==0.7.1
 Deprecated==1.3.1

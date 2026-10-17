@@ -174,6 +174,73 @@ def _project_python_exe():
     return sys.executable
 
 
+# --- 本機 LLM 服務：Ollama ---
+def start_ollama(on_output_line):
+    """
+    確保本機 Ollama 在執行：port 沒開才啟動，並等到 port 就緒。
+    回傳 (啟動結果說明或 None, 警告說明或 None)；on_output_line(line) 接 Ollama 的輸出。
+    """
+    if is_port_open("127.0.0.1", PORT_OLLAMA):
+        on_output_line("（本來就已經在背景執行，不是本程式啟動的，看不到它的輸出）")
+        return "Ollama（本來就已經在跑，沒有重複啟動）", None
+    ollama_exe = shutil.which("ollama")
+    if not ollama_exe:
+        return None, "找不到 ollama 指令，請確認 Ollama 已安裝並加入系統 PATH。"
+    try:
+        # 限制 Ollama 資源：閒置 2 分鐘卸載模型、同時只載入 1 個模型、不並行（使用者已設定的值優先）
+        env = _python_child_env()
+        env.setdefault("OLLAMA_KEEP_ALIVE", "2m")
+        env.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
+        env.setdefault("OLLAMA_NUM_PARALLEL", "1")
+        proc = subprocess.Popen(  # noqa: S603
+            [ollama_exe, "serve"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            errors="replace", env=env,
+            **_hidden_console_popen_kwargs(),
+        )
+        _service_procs["ollama"] = proc
+        _start_output_reader_thread(proc, on_output_line)
+        if wait_port_open("127.0.0.1", PORT_OLLAMA, timeout=20):
+            return "Ollama", None
+        return None, "Ollama 已啟動，但等了 20 秒 port 11434 還沒開，可能還在載入、或啟動異常。"
+    except Exception as e:
+        return None, f"Ollama 啟動失敗：{e}"
+
+
+# --- 管理者助理聊天視窗：admin.assistant_window ---
+def assistant_window_running():
+    """聊天視窗行程是否還活著，已結束的殘留 Popen 順便清掉。"""
+    proc = _service_procs.get("assistant")
+    if proc is not None and proc.poll() is None:
+        return True
+    _service_procs.pop("assistant", None)
+    return False
+
+
+def start_assistant_window(on_output_line):
+    """另開一個行程顯示管理者助理聊天視窗（模型在那個行程裡載入，不拖慢後台）。回傳 (成功與否, 訊息)。"""
+    if assistant_window_running():
+        return False, "管理者助理視窗已經開著了，請到工作列找它。"
+    python_exe = _project_python_exe()
+    try:
+        proc = subprocess.Popen(  # noqa: S603
+            [python_exe, "-u", "-m", "admin.assistant_window"], cwd=_PROJECT_ROOT,
+            env=_python_child_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            encoding="utf-8", errors="replace",
+            **_hidden_console_popen_kwargs(),
+        )
+        _service_procs["assistant"] = proc
+        _start_output_reader_thread(proc, on_output_line)
+        return True, "管理者助理視窗已開啟，第一次載入模型需要一點時間。"
+    except Exception as e:
+        return False, f"管理者助理視窗開啟失敗：{e}"
+
+
+def stop_assistant_window():
+    return stop_service("assistant")
+
+
 # --- RAG 服務：Ollama + app.py ---
 def rag_group_running():
     """判斷 RAG 這組服務是否真的在執行（port 已開，或自己啟動的行程還活著）。"""
@@ -210,34 +277,11 @@ def _start_rag_services_worker(on_output_line, on_finished):
         on_output_line(prefix, line)
 
     # 1. Ollama：port 沒開才啟動，並等到 port 就緒
-    if is_port_open("127.0.0.1", PORT_OLLAMA):
-        started.append("Ollama（本來就已經在跑，沒有重複啟動）")
-        emit("[Ollama] ", "（本來就已經在背景執行，不是本程式啟動的，看不到它的輸出）")
-    else:
-        ollama_exe = shutil.which("ollama")
-        if ollama_exe:
-            try:
-                # 限制 Ollama 資源：閒置 2 分鐘卸載模型、同時只載入 1 個模型、不並行（使用者已設定的值優先）
-                _ollama_env = _python_child_env()
-                _ollama_env.setdefault("OLLAMA_KEEP_ALIVE", "2m")
-                _ollama_env.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
-                _ollama_env.setdefault("OLLAMA_NUM_PARALLEL", "1")
-                proc = subprocess.Popen(  # noqa: S603
-                    [ollama_exe, "serve"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                    errors="replace", env=_ollama_env,
-                    **_hidden_console_popen_kwargs(),
-                )
-                _service_procs["ollama"] = proc
-                _start_output_reader_thread(proc, lambda line: emit("[Ollama] ", line))
-                if wait_port_open("127.0.0.1", PORT_OLLAMA, timeout=20):
-                    started.append("Ollama")
-                else:
-                    warnings.append("Ollama 已啟動，但等了 20 秒 port 11434 還沒開，可能還在載入、或啟動異常。")
-            except Exception as e:
-                warnings.append(f"Ollama 啟動失敗：{e}")
-        else:
-            warnings.append("找不到 ollama 指令，請確認 Ollama 已安裝並加入系統 PATH。")
+    ollama_started, ollama_warning = start_ollama(lambda line: emit("[Ollama] ", line))
+    if ollama_started:
+        started.append(ollama_started)
+    if ollama_warning:
+        warnings.append(ollama_warning)
 
     # 2. RAG 助理網頁（app.py）
     if is_port_open("127.0.0.1", PORT_RAG_APP):
@@ -349,6 +393,7 @@ def stop_all_services():
     stop_service("rag_app", PORT_RAG_APP)
     stop_service("terminal")
     stop_service("web_server", PORT_WEB_SERVER)
+    stop_service("assistant")
 
 
 # --- 本機 IP 偵測：QR Code 網址使用 ---
