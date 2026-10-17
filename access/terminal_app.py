@@ -9,7 +9,7 @@ terminal_app.py：門禁現場即時人臉辨識主程式。
 
 串接模組：
   - vision_core：人臉偵測、對齊、特徵萃取、活體偵測
-  - database_mgr：特徵比對、打卡紀錄、行事曆查詢
+  - database_mgr：特徵比對、打卡紀錄、行事曆查詢、異常事件記錄
   - security：YOLO 人數統計與尾隨證據圖
   - audio_player：TTS 語音播報
   - utils：畫面中文字繪製
@@ -233,7 +233,12 @@ def analyze_in_background(frame_copy, detector):
             # 5. 尾隨偵測（YOLO）：只拍照存證並記錄時間，不覆蓋當事人的打卡結果
             person_count, person_boxes = sec.count_persons(frame_copy)
             if person_count >= 2:
-                sec.generate_evidence(frame_copy, person_boxes[-1])
+                evidence_path = sec.generate_evidence(frame_copy, person_boxes[-1])
+                try:
+                    db.add_anomaly_event("tailgate", evidence_path,
+                                         f"畫面有 {person_count} 人，只辨識到 {len(detections)} 張臉")
+                except Exception as e:
+                    print(f"[terminal_app][WARN] 異常事件寫入失敗（不影響警示與證據照片）: {e}")
                 _publish_tailgate_alert(current_time)
 
             _publish_face_data(result_packet)

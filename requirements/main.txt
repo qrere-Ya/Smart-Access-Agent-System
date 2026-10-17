@@ -19,6 +19,7 @@ PyStemmer==2.2.0.3
 jieba==0.42.1
 faiss-cpu==1.15.0
 pypdf==6.16.2
+docx2txt==0.9
 gradio==6.26.0
 SQLAlchemy==2.0.35
 sqlglot==30.19.0

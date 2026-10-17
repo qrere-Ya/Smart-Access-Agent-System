@@ -15,6 +15,9 @@ llama-index-llms-ollama==0.11.0
 llama-index-vector-stores-faiss==0.7.0
 faiss-cpu==1.15.0
 llama-index-retrievers-bm25==0.8.0
+llama-index-readers-file==0.7.0
+pypdf==6.16.2
+docx2txt==0.9
 bm25s==0.3.11
 PyStemmer==2.2.0.3
 jieba==0.42.1

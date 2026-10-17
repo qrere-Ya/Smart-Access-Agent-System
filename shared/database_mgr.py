@@ -2,13 +2,15 @@
 database_mgr.py：SQLite 資料層。
 
 主要功能：
-  - 建立與升級資料表：Users（員工與人臉特徵）、Attendance（打卡）、calendar（行事曆）、llm_usage_log（RAG 稽核）
+  - 建立與升級資料表：Users（員工與人臉特徵）、Attendance（打卡）、calendar（行事曆）、llm_usage_log（RAG 稽核）、
+    AnomalyEvents（異常事件，如尾隨；只存照片路徑，不存照片）
   - 員工註冊（姓名或員工編號重複即拒絕）、1:N 人臉比對
   - 打卡邏輯：依時間窗判斷上班、遲到、早退、下班、加班
   - 寫入 RAG 問答稽核紀錄
+  - 異常事件的寫入、查詢，以及把舊的證據照片一次匯入事件表
 
 串接模組：
-  - terminal_app：人臉比對、打卡、行事曆
+  - terminal_app：人臉比對、打卡、行事曆、記錄異常事件
   - web_server：員工註冊
   - backend_main、account_admin、dashboard_stats：管理後台查詢與帳號管理
   - rag_guardrail、main_guardrail_rag：寫入 llm_usage_log
@@ -16,6 +18,7 @@ database_mgr.py：SQLite 資料層。
 import sqlite3
 import io
 import os
+import re
 import numpy as np
 import datetime
 
@@ -101,8 +104,22 @@ def init_db():
                     is_pass INTEGER,
                     source TEXT DEFAULT 'gradio')""")
 
+    # 異常事件表（尾隨等）：只存證據照片的路徑
+    anomaly_table_existed = conn_db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='AnomalyEvents'").fetchone() is not None
+    conn_db.execute("""CREATE TABLE IF NOT EXISTS AnomalyEvents
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME NOT NULL,
+                    event_type TEXT NOT NULL,
+                    detail TEXT,
+                    evidence_path TEXT)""")
+    conn_db.execute("CREATE INDEX IF NOT EXISTS idx_anomaly_timestamp ON AnomalyEvents(timestamp)")
+
     conn_db.commit()
     conn_db.close()
+    # 第一次建立事件表時，把資料夾裡已有的舊證據照片匯入
+    if not anomaly_table_existed:
+        import_anomaly_photos()
     print("資料庫初始化完成!")
 
 def insert_mock_calendar(emp_id):
@@ -294,3 +311,81 @@ def log_llm_usage(event_type, question, route=None, guardrail_pass=None, similar
         conn_db.close()
     except Exception as e:
         print(f"[Database][WARN] llm_usage_log 寫入失敗（不影響本次問答結果）: {e}")
+
+
+# --- 異常事件 ---
+
+_EVIDENCE_NAME = re.compile(r"^(?P<type>[a-z]+)_(?P<d>\d{8})_(?P<t>\d{6})\.jpg$")
+
+
+def add_anomaly_event(event_type, evidence_path=None, detail="", timestamp=None):
+    """新增一筆異常事件（如 tailgate），回傳事件編號；timestamp 預設為現在。"""
+    when = timestamp or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn_db = sqlite3.connect(DB_PATH, timeout=5)
+    try:
+        cur = conn_db.execute(
+            "INSERT INTO AnomalyEvents (timestamp, event_type, detail, evidence_path) VALUES (?, ?, ?, ?)",
+            (when, event_type, detail, evidence_path))
+        conn_db.commit()
+        return cur.lastrowid
+    finally:
+        conn_db.close()
+
+
+def list_anomaly_events(start=None, end=None, event_type=None, limit=200):
+    """
+    查詢異常事件，新的在前，回傳字典清單。
+    start、end 為 "YYYY-MM-DD" 或完整時間字串（含頭尾；只給日期時 end 涵蓋當天整天）。
+    """
+    clauses, params = [], []
+    if start:
+        clauses.append("timestamp >= ?")
+        params.append(start)
+    if end:
+        clauses.append("timestamp <= ?")
+        params.append(end + " 23:59:59" if len(end) == 10 else end)
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    conn_db = sqlite3.connect(DB_PATH, timeout=5)
+    try:
+        rows = conn_db.execute(
+            f"SELECT id, timestamp, event_type, detail, evidence_path FROM AnomalyEvents {where} "  # noqa: S608
+            "ORDER BY timestamp DESC, id DESC LIMIT ?", (*params, limit)).fetchall()
+    finally:
+        conn_db.close()
+    return [{"id": r[0], "timestamp": r[1], "event_type": r[2], "detail": r[3], "evidence_path": r[4]}
+            for r in rows]
+
+
+def import_anomaly_photos(folder=None):
+    """
+    把證據資料夾內尚未登記的照片（檔名如 tailgate_20261014_091500.jpg）匯入事件表，時間取自檔名。
+    已登記過的檔案（以檔名判斷）會跳過，重複執行不會重複匯入；回傳這次匯入的筆數。
+    """
+    folder = folder or paths.ANOMALY_DIR
+    if not os.path.isdir(folder):
+        return 0
+    conn_db = sqlite3.connect(DB_PATH, timeout=5)
+    try:
+        known = {os.path.basename(r[0]) for r in conn_db.execute(
+            "SELECT evidence_path FROM AnomalyEvents WHERE evidence_path IS NOT NULL")}
+        added = 0
+        for fname in sorted(os.listdir(folder)):
+            m = _EVIDENCE_NAME.match(fname)
+            if not m or fname in known:
+                continue
+            try:
+                when = datetime.datetime.strptime(m["d"] + m["t"], "%Y%m%d%H%M%S")
+            except ValueError:
+                continue
+            conn_db.execute(
+                "INSERT INTO AnomalyEvents (timestamp, event_type, detail, evidence_path) VALUES (?, ?, ?, ?)",
+                (when.strftime("%Y-%m-%d %H:%M:%S"), m["type"], "由既有證據照片匯入（當時的人數未記錄）",
+                 os.path.join(folder, fname)))
+            added += 1
+        conn_db.commit()
+        return added
+    finally:
+        conn_db.close()
