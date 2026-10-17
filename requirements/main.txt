@@ -21,6 +21,8 @@ faiss-cpu==1.15.0
 pypdf==6.16.2
 docx2txt==0.9
 gradio==6.26.0
+customtkinter==6.0.0
+darkdetect==0.8.0
 SQLAlchemy==2.0.35
 sqlglot==30.19.0
 rapidfuzz==3.14.5

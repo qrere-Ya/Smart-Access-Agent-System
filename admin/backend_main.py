@@ -6,7 +6,7 @@ backend_main.py：門禁系統管理後台主程式（Tkinter / ttkbootstrap）�
   - 營運狀態與尾隨監控：今日打卡統計、異常件數、人臉辨識終端機開關與即時輸出
   - 員工帳號管理：列出、停用、啟用、刪除員工
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
-  - AI 代理設定：RAG 服務（Ollama + 助理網頁）開關與即時輸出
+  - 管理者助理：另開聊天視窗（admin.assistant_window），查公司文件與考勤、異常紀錄
   只負責畫面，實際工作轉發給其他模組。
 
 串接模組：
@@ -102,8 +102,8 @@ class BackendManagerApp:
             ("📊", "營運狀態與尾隨監控", "今日打卡統計、安全警報、人臉辨識即時輸出", SUCCESS, self.open_dashboard),
             ("👤", "員工帳號管理", "列出、停用、啟用、刪除員工帳號與角色", INFO, self.open_account_admin),
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", WARNING, self.open_qr_registration),
-            ("🤖", "AI 代理與個人化設定", "啟動 RAG 智慧問答服務（勞基法規＋員工資料庫）", PRIMARY,
-             self.open_ai_agent_settings),
+            ("🤖", "管理者助理", "用聊天查公司文件與法規、考勤紀錄、異常事件", PRIMARY,
+             self.open_assistant_window),
         ]
         for idx, (icon, title, desc, style, cmd) in enumerate(modules):
             row, col = divmod(idx, 2)
@@ -538,7 +538,16 @@ class BackendManagerApp:
     def open_future_module(self, module_name):
         messagebox.showinfo("開發中", f"🚀 【{module_name}】模組正同步開發中！\n此介面已與核心資料庫連結成功。")
 
-    # --- 視窗 3：AI 代理與個人化設定 ---
+    # --- 視窗 3：管理者助理（另開行程的聊天視窗） ---
+    def open_assistant_window(self):
+        """開啟管理者助理聊天視窗；模型在那個行程裡載入，這裡只負責啟動與提示。"""
+        ok, message = service_manager.start_assistant_window(lambda line: print(f"[管理者助理] {line}"))
+        if ok:
+            messagebox.showinfo("管理者助理", message, parent=self.root)
+        else:
+            messagebox.showwarning("管理者助理", message, parent=self.root)
+
+    # --- 舊的視窗：AI 代理與個人化設定（新助理驗收後會移除） ---
     def open_ai_agent_settings(self):
         """開啟 AI 代理設定視窗：RAG 服務開關在左，三個子服務的即時輸出在右"""
         agent_win = ttk.Toplevel(self.root)

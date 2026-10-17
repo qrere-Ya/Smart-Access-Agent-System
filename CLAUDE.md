@@ -10,6 +10,7 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
   - `admin/`：Tkinter 管理後台（`backend_main`）與背景服務管理（`service_manager`）
   - `rag/`：RAG 法務/考勤助理，入口 `main_guardrail_rag`，拆為 `rag_index`（FAISS）、`rag_sql_engine`（Attendance 唯讀 SQL）、`rag_guardrail`（語意防護欄）、`rag_chat_engine`（對話記憶）；網頁入口 `app`
   - `rag/eval/`：自動化評估與消融實驗
+  - `assistant/`：新的管理者助理（取代上面的 `rag/`，驗收後會刪掉舊的）。文件讀取與切塊 `ingest`、向量庫 `doc_store`、重排 `rerank`、意圖判斷 `router`、日期解析 `dates`、人名比對 `entity_resolver`、唯讀固定查詢 `queries`、問答流程 `answer`、組裝 `bootstrap`、對話控制 `chat_session`、題庫與評估 `evaluation/`。聊天視窗是 `admin/assistant_window`（CustomTkinter，`python -m admin.assistant_window`，後台按「管理者助理」另開行程）
   - 活體偵測模型的訓練已拆成獨立 repo：本機與本專案並列的 `Antispoof-Training` 資料夾（尚未推送到 GitHub）。正式系統只使用它匯出的 ONNX 檔，放在 `models/`，不直接依賴那邊的程式
 - 啟動方式：一律在專案根目錄用 `python -m` 啟動，例如 `python -m admin.backend_main`、`python -m access.terminal_app`、`python -m rag.app`、`python -m access.web_server`，不要直接執行檔案路徑。
 - 路徑一律取自 `shared/paths.py`，不要在各檔自行用 `__file__` 推算。執行期資料放 `runtime/`（資料庫、向量索引、證據照片、LLM 設定、評估結果）。

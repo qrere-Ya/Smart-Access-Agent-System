@@ -21,6 +21,7 @@ LAWS_DIR = os.environ.get("SMART_ACCESS_LAWS_DIR") or os.path.join(PROJECT_ROOT,
 RUNTIME_DIR = os.environ.get("SMART_ACCESS_RUNTIME_DIR") or os.path.join(PROJECT_ROOT, "runtime")
 DB_PATH = os.path.join(RUNTIME_DIR, "database.db")
 FAISS_DIR = os.path.join(RUNTIME_DIR, "faiss_storage")
+ASSISTANT_DIR = os.path.join(RUNTIME_DIR, "assistant")
 ANOMALY_DIR = os.path.join(RUNTIME_DIR, "anomaly_logs")
 LLM_SETTINGS_PATH = os.path.join(RUNTIME_DIR, "llm_settings.json")
 EVAL_RESULTS_DIR = os.path.join(RUNTIME_DIR, "eval_results")

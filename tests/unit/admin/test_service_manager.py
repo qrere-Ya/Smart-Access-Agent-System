@@ -141,7 +141,73 @@ def test_stopping_rag_never_touches_litellm(monkeypatch):
     assert calls == [("ollama", sm.PORT_OLLAMA), ("rag_app", sm.PORT_RAG_APP)]
     calls.clear()
     sm.stop_all_services()
-    assert [key for key, _ in calls] == ["ollama", "rag_app", "terminal", "web_server"]
+    assert [key for key, _ in calls] == ["ollama", "rag_app", "terminal", "web_server", "assistant"]
+
+
+# ---------- 本機 LLM 與管理者助理視窗 ----------
+
+def test_ollama_already_running_is_not_started_twice(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: True)
+    lines = []
+    started, warning = sm.start_ollama(lines.append)
+    assert "本來就已經在跑" in started and warning is None and fake_popen.instances == [] and lines
+
+
+def test_ollama_start_limits_its_resources_and_waits_for_the_port(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
+    monkeypatch.setattr(sm, "wait_port_open", lambda host, port, timeout=20, interval=0.5: True)
+    monkeypatch.setattr(sm.shutil, "which", lambda name: "C:/ollama.exe")
+    monkeypatch.setattr(sm, "_service_procs", {})
+    started, warning = sm.start_ollama(lambda line: None)
+    popen = fake_popen.instances[0]
+    assert (started, warning) == ("Ollama", None) and popen.args == ["C:/ollama.exe", "serve"]
+    assert popen.kwargs["env"]["OLLAMA_MAX_LOADED_MODELS"] == "1" and "ollama" in sm._service_procs
+
+
+def test_ollama_that_never_opens_its_port_gives_a_warning(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
+    monkeypatch.setattr(sm, "wait_port_open", lambda host, port, timeout=20, interval=0.5: False)
+    monkeypatch.setattr(sm.shutil, "which", lambda name: "C:/ollama.exe")
+    monkeypatch.setattr(sm, "_service_procs", {})
+    started, warning = sm.start_ollama(lambda line: None)
+    assert started is None and "等了 20 秒" in warning
+
+
+def test_missing_ollama_command_gives_a_warning(monkeypatch):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
+    monkeypatch.setattr(sm.shutil, "which", lambda name: None)
+    assert sm.start_ollama(lambda line: None) == (None, "找不到 ollama 指令，請確認 Ollama 已安裝並加入系統 PATH。")
+
+
+def test_assistant_window_starts_as_a_module_and_is_not_opened_twice(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "_service_procs", {})
+    ok, _ = sm.start_assistant_window(lambda line: None)
+    popen = fake_popen.instances[0]
+    assert ok and popen.args == [sm._project_python_exe(), "-u", "-m", "admin.assistant_window"]
+    assert popen.kwargs["cwd"] == paths.PROJECT_ROOT
+    popen.poll = lambda: None  # 視窗還開著
+    assert sm.assistant_window_running()
+    ok, message = sm.start_assistant_window(lambda line: None)
+    assert not ok and "已經開著" in message and len(fake_popen.instances) == 1
+
+
+def test_assistant_window_start_failure_is_reported(monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("找不到檔案")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(sm, "_service_procs", {})
+    ok, message = sm.start_assistant_window(lambda line: None)
+    assert not ok and "找不到檔案" in message
+
+
+def test_closed_assistant_window_is_forgotten(monkeypatch):
+    class Dead:
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(sm, "_service_procs", {"assistant": Dead()})
+    assert sm.assistant_window_running() is False and "assistant" not in sm._service_procs
 
 
 # ---------- 停止與狀態 ----------
