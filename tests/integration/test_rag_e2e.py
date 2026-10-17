@@ -1,5 +1,5 @@
 """
-管理者助理端到端整合測試：真的 bge-m3、重排模型、本機 Ollama（qwen2:7b）、真的文件與臨時資料庫。
+管理者助理端到端整合測試：真的 bge-m3、重排模型、本機 Ollama（qwen3:8b）、真的文件與臨時資料庫。
 需要 Ollama 正在執行；沒有的話跳過。LLM 用溫度 0，但說明文字仍可能小幅變動，所以只檢查關鍵事實與結構。
 """
 import datetime
@@ -17,11 +17,11 @@ ROSTER = [("王小明", "E001"), ("李大華", "E002"), ("葉君緯", "E003"), (
 
 @pytest.fixture(scope="module")
 def stack(tmp_path_factory):
-    from assistant import llm as llm_mod
-    from assistant.doc_store import DocStore
-    from assistant.rerank import Reranker
-    from assistant import llm_settings as ls
-    from assistant.embedding import ManagedEmbedder
+    from rag import llm as llm_mod
+    from rag.doc_store import DocStore
+    from rag.rerank import Reranker
+    from rag import llm_settings as ls
+    from rag.embedding import ManagedEmbedder
     from shared import paths
 
     rerank_dir = os.path.join(paths.MODELS_DIR, "bge-reranker-v2-m3")
@@ -44,8 +44,8 @@ def stack(tmp_path_factory):
 
 @pytest.fixture
 def assistant(stack, db):
-    from assistant import answer
-    from assistant.entity_resolver import NameResolver
+    from rag import answer
+    from rag.entity_resolver import NameResolver
 
     con = sqlite3.connect(db)
     for name, emp in ROSTER:

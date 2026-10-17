@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from assistant import router
+from rag import router
 
 TODAY = datetime.date(2026, 10, 17)
 

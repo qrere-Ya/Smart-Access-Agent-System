@@ -15,7 +15,7 @@ import os
 from dataclasses import replace
 from typing import Callable, List, Sequence, Tuple
 
-from assistant.doc_store import Hit
+from rag.doc_store import Hit
 from shared.resource_manager import ManagedResource, cuda_available
 
 IDLE_TTL = float(os.environ.get("RERANK_IDLE_TTL", "300"))
@@ -31,7 +31,7 @@ class _RerankResource(ManagedResource):
         if device.startswith("cuda") and not cuda_available():
             print("[rerank] ⚠️ 找不到可用的 CUDA，重排模型退回 CPU。")
             device = "cpu"
-        super().__init__("assistant.rerank.bge-reranker-v2-m3",
+        super().__init__("rag.rerank.bge-reranker-v2-m3",
                          est_ram_mb=2600 if device == "cpu" else 1200,
                          est_vram_mb=0 if device == "cpu" else 1300, idle_ttl=IDLE_TTL)
         self._dir, self._device = model_dir, device

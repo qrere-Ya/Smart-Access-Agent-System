@@ -144,7 +144,7 @@ def test_assistant_window_starts_as_a_module_and_is_not_opened_twice(monkeypatch
     monkeypatch.setattr(sm, "_service_procs", {})
     ok, _ = sm.start_assistant_window(lambda line: None)
     popen = fake_popen.instances[0]
-    assert ok and popen.args == [sm._project_python_exe(), "-u", "-m", "admin.assistant_window"]
+    assert ok and popen.args == [sm._project_python_exe(), "-u", "-m", "rag.chat_window"]
     assert popen.kwargs["cwd"] == paths.PROJECT_ROOT
     popen.poll = lambda: None  # 視窗還開著
     assert sm.assistant_window_running()

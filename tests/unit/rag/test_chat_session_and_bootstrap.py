@@ -9,8 +9,8 @@ import types
 import numpy as np
 import pytest
 
-from assistant import answer, bootstrap
-from assistant.chat_session import MAX_INPUT_CHARS, ChatController, plain_text
+from rag import answer, bootstrap
+from rag.chat_session import MAX_INPUT_CHARS, ChatController, plain_text
 
 
 class FakeAssistant:

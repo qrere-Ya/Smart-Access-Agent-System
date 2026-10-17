@@ -10,17 +10,17 @@ bootstrap.py：把助理需要的所有零件組起來（文件向量庫、重�
 串接模組：
   - doc_store、rerank、entity_resolver、llm、queries、answer：各個零件
   - embedding：bge-m3 的資源包裝
-  - admin.assistant_window：呼叫 create_runtime 並顯示進度
+  - rag.chat_window：呼叫 create_runtime 並顯示進度
 """
 import os
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 
-from assistant import answer, llm as llm_mod, queries
-from assistant.doc_store import DocStore, SyncReport
-from assistant.entity_resolver import NameResolver
-from assistant.rerank import Reranker
+from rag import answer, llm as llm_mod, queries
+from rag.doc_store import DocStore, SyncReport
+from rag.entity_resolver import NameResolver
+from rag.rerank import Reranker
 from shared import paths
 
 Progress = Callable[[str], None]
@@ -46,7 +46,7 @@ class Runtime:
 
 def _default_embedder():
     """正式環境的向量化：bge-m3（本機資料夾）。回傳 (embed_fn, 釋放函式)。"""
-    from assistant.embedding import ManagedEmbedder
+    from rag.embedding import ManagedEmbedder
 
     model_dir = os.path.join(paths.MODELS_DIR, "bge-m3")
     if not os.path.isdir(model_dir):
@@ -70,7 +70,7 @@ def create_runtime(progress: Progress = print, docs_dir: Optional[str] = None, s
                    roster=roster_names) -> Runtime:
     """依序準備所有零件並組成 Assistant；任何一步失敗都會丟出例外，由呼叫端顯示原因。"""
     docs_dir = docs_dir or paths.DOCS_DIR
-    store_dir = store_dir or paths.ASSISTANT_DIR
+    store_dir = store_dir or paths.RAG_DIR
     closers: List[Callable[[], None]] = []
 
     progress("載入向量模型（bge-m3）…")

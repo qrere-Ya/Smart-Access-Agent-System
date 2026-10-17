@@ -20,7 +20,7 @@ DOCS_DIR = os.environ.get("SMART_ACCESS_DOCS_DIR") or os.path.join(PROJECT_ROOT,
 
 RUNTIME_DIR = os.environ.get("SMART_ACCESS_RUNTIME_DIR") or os.path.join(PROJECT_ROOT, "runtime")
 DB_PATH = os.path.join(RUNTIME_DIR, "database.db")
-ASSISTANT_DIR = os.path.join(RUNTIME_DIR, "assistant")
+RAG_DIR = os.path.join(RUNTIME_DIR, "rag")
 ANOMALY_DIR = os.path.join(RUNTIME_DIR, "anomaly_logs")
 LLM_SETTINGS_PATH = os.path.join(RUNTIME_DIR, "llm_settings.json")
 

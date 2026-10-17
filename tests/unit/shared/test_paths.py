@@ -10,7 +10,7 @@ from pathlib import Path
 from shared import paths
 
 ROOT = Path(__file__).resolve().parents[3]
-KEYS = ("PROJECT_ROOT", "MODELS_DIR", "DOCS_DIR", "RUNTIME_DIR", "DB_PATH", "ASSISTANT_DIR",
+KEYS = ("PROJECT_ROOT", "MODELS_DIR", "DOCS_DIR", "RUNTIME_DIR", "DB_PATH", "RAG_DIR",
         "ANOMALY_DIR", "LLM_SETTINGS_PATH", "VENV_PYTHON")
 
 
@@ -32,7 +32,7 @@ def test_project_root_is_the_repository_root():
 def test_runtime_files_live_inside_the_runtime_folder():
     runtime = Path(paths.RUNTIME_DIR)
     assert runtime.is_dir()
-    for value in (paths.DB_PATH, paths.ASSISTANT_DIR, paths.ANOMALY_DIR, paths.LLM_SETTINGS_PATH):
+    for value in (paths.DB_PATH, paths.RAG_DIR, paths.ANOMALY_DIR, paths.LLM_SETTINGS_PATH):
         assert Path(value).parent == runtime
     assert Path(paths.DB_PATH).name == "database.db"
     assert Path(paths.LLM_SETTINGS_PATH).name == "llm_settings.json"
@@ -47,7 +47,7 @@ def test_runtime_folder_can_be_moved_with_an_environment_variable(tmp_path):
     result = load_paths(SMART_ACCESS_RUNTIME_DIR=str(target))
     assert result["RUNTIME_DIR"] == str(target) and target.is_dir()
     assert Path(result["DB_PATH"]) == target / "database.db"
-    assert Path(result["ASSISTANT_DIR"]) == target / "assistant"
+    assert Path(result["RAG_DIR"]) == target / "rag"
     assert Path(result["ANOMALY_DIR"]) == target / "anomaly_logs"
 
 

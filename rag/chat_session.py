@@ -9,7 +9,7 @@ chat_session.py：聊天視窗背後的「對話控制」（不含任何畫面�
 
 串接模組：
   - answer.Assistant：實際的問答
-  - admin.assistant_window：畫面，每隔一小段時間呼叫 poll() 更新氣泡
+  - rag.chat_window：畫面，每隔一小段時間呼叫 poll() 更新氣泡
 """
 import queue
 import re

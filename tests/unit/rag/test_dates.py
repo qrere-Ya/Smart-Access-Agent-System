@@ -6,7 +6,7 @@ import datetime
 
 import pytest
 
-from assistant import dates
+from rag import dates
 
 TODAY = datetime.date(2026, 10, 17)
 

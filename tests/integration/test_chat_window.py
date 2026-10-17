@@ -47,7 +47,7 @@ class FakeRuntime:
 def window():
     import tkinter
 
-    from admin.assistant_window import AssistantWindow
+    from rag.chat_window import AssistantWindow
 
     runtime = FakeRuntime(failed={"壞檔.pdf": "沒有可擷取的文字"})
     try:
@@ -137,7 +137,7 @@ def test_closing_the_window_releases_the_models(window):
 def test_startup_failure_is_explained(window):
     import tkinter
 
-    from admin.assistant_window import AssistantWindow
+    from rag.chat_window import AssistantWindow
 
     def boom(progress):
         raise RuntimeError("本機模型也無法使用")
