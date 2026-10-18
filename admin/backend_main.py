@@ -6,7 +6,7 @@ backend_main.py：門禁系統管理後台主程式（Tkinter / ttkbootstrap）�
   - 營運狀態與尾隨監控：今日打卡統計、異常件數、人臉辨識終端機開關與即時輸出
   - 員工帳號管理：列出、停用、啟用、刪除員工
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
-  - AI 代理設定：RAG 服務（Ollama + 助理網頁）開關與即時輸出
+  - 管理者助理：另開聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
   只負責畫面，實際工作轉發給其他模組。
 
 串接模組：
@@ -49,7 +49,6 @@ class BackendManagerApp:
         self.root.resizable(True, True)
 
         # 三個服務的狀態文字，視窗關閉後仍保留，重開視窗時再同步實際狀態
-        self.rag_status_var = ttk.StringVar(value="⚪ RAG 服務未啟動")
         self.face_status_var = ttk.StringVar(value="⚪ 人臉辨識未啟動")
         self.reg_status_var = ttk.StringVar(value="⚪ 註冊伺服器未啟動")
 
@@ -102,8 +101,8 @@ class BackendManagerApp:
             ("📊", "營運狀態與尾隨監控", "今日打卡統計、安全警報、人臉辨識即時輸出", SUCCESS, self.open_dashboard),
             ("👤", "員工帳號管理", "列出、停用、啟用、刪除員工帳號與角色", INFO, self.open_account_admin),
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", WARNING, self.open_qr_registration),
-            ("🤖", "AI 代理與個人化設定", "啟動 RAG 智慧問答服務（勞基法規＋員工資料庫）", PRIMARY,
-             self.open_ai_agent_settings),
+            ("🤖", "管理者助理", "用聊天查公司文件與法規、考勤紀錄、異常事件", PRIMARY,
+             self.open_assistant_window),
         ]
         for idx, (icon, title, desc, style, cmd) in enumerate(modules):
             row, col = divmod(idx, 2)
@@ -221,67 +220,6 @@ class BackendManagerApp:
         except Exception:  # noqa: S110
             pass
         return {}
-
-    # --- RAG 服務開關 ---
-    def toggle_rag_services(self):
-        """RAG 服務開關：啟動中不處理，執行中就停止，否則啟動"""
-        if service_manager.is_rag_busy():
-            return
-        if service_manager.rag_group_running():
-            self._stop_rag_services()
-        else:
-            self._start_rag_services()
-
-    def _start_rag_services(self):
-        """在背景啟動 RAG 服務，輸出與完成事件透過 after() 轉回主執行緒更新畫面"""
-        self.rag_status_var.set("🟡 RAG 服務啟動中…")
-        if hasattr(self, "rag_btn") and self.rag_btn.winfo_exists():
-            self.rag_btn.config(state="disabled")
-
-        def on_output_line(prefix, line):
-            self.root.after(0, lambda: console_panel.append_line(
-                getattr(self, "rag_console", None), f"{prefix}{line}"))
-
-        def on_finished(started, warnings):
-            self.root.after(0, lambda: self._finish_rag_start(started, warnings))
-
-        service_manager.start_rag_services_async(on_output_line, on_finished)
-
-    def _finish_rag_start(self, started, warnings):
-        """RAG 啟動完成：更新狀態並跳出啟動結果"""
-        self._update_rag_status()
-        # 視窗可能在啟動期間被關掉，先確認按鈕還在
-        if hasattr(self, "rag_btn") and self.rag_btn.winfo_exists():
-            self.rag_btn.config(state="normal")
-        msg = ""
-        if started:
-            msg += "已就緒：" + "、".join(started) + "\n"
-        if warnings:
-            msg += "\n⚠️ 需要留意：\n" + "\n\n".join(warnings)
-        if msg:
-            messagebox.showinfo("RAG 服務啟動結果", msg, **self._msgbox_parent("agent_win"))
-
-    def _stop_rag_services(self):
-        """停止 RAG 服務並提示結果"""
-        results = service_manager.stop_rag_services()
-        self._update_rag_status()
-        if any(results):
-            messagebox.showinfo("提示", "已停止 RAG 服務（Ollama / 助理網頁）。", **self._msgbox_parent("agent_win"))
-        else:
-            messagebox.showinfo("提示", "RAG 服務目前沒有在跑。", **self._msgbox_parent("agent_win"))
-
-    def _update_rag_status(self):
-        """依實際狀態更新 RAG 狀態文字與按鈕文字"""
-        running = service_manager.rag_group_running()
-        if running:
-            self.rag_status_var.set("🟢 RAG 服務執行中")
-            btn_text = "🛑 停止 RAG 服務"
-        else:
-            self.rag_status_var.set("⚪ RAG 服務未啟動")
-            btn_text = "🧠 啟動 RAG（Ollama + 助理網頁）"
-        # 按鈕只在視窗開著時存在
-        if hasattr(self, "rag_btn") and self.rag_btn.winfo_exists():
-            self.rag_btn.config(text=btn_text)
 
     # --- 人臉辨識終端機開關 ---
     def toggle_face_service(self):
@@ -538,54 +476,14 @@ class BackendManagerApp:
     def open_future_module(self, module_name):
         messagebox.showinfo("開發中", f"🚀 【{module_name}】模組正同步開發中！\n此介面已與核心資料庫連結成功。")
 
-    # --- 視窗 3：AI 代理與個人化設定 ---
-    def open_ai_agent_settings(self):
-        """開啟 AI 代理設定視窗：RAG 服務開關在左，三個子服務的即時輸出在右"""
-        agent_win = ttk.Toplevel(self.root)
-        self.agent_win = agent_win
-        agent_win.title("AI 代理與個人化設定")
-        agent_win.geometry("880x400")
-
-        main_split = ttk.Frame(agent_win)
-        main_split.pack(fill=BOTH, expand=True)
-
-        left_col = ttk.Frame(main_split)
-        left_col.pack(side=LEFT, fill=BOTH, expand=True)
-
-        right_col = ttk.Frame(main_split, width=340)
-        right_col.pack(side=RIGHT, fill=Y)
-        right_col.pack_propagate(False)
-
-        ttk.Label(
-            left_col, text="🤖 AI 代理與個人化設定",
-            font=("微軟正黑體", 16, "bold"), bootstyle=PRIMARY,
-        ).pack(pady=(20, 5), padx=20, anchor=W)
-        ttk.Label(
-            left_col, text="管理 RAG 智慧問答服務（勞基法規 + 員工資料庫問答）",
-            font=("微軟正黑體", 10), bootstyle=SECONDARY,
-        ).pack(padx=20, anchor=W)
-
-        rag_ctrl_frame = ttk.Labelframe(left_col, text="RAG 智慧問答服務", padding=15, bootstyle=INFO)
-        rag_ctrl_frame.pack(fill=X, padx=20, pady=20)
-
-        ttk.Label(rag_ctrl_frame, textvariable=self.rag_status_var,
-                  font=("微軟正黑體", 11)).pack(anchor=W, pady=(0, 10))
-        self.rag_btn = ttk.Button(
-            rag_ctrl_frame, text="🧠 啟動 RAG（Ollama + 助理網頁）",
-            bootstyle=(INFO, OUTLINE), command=self.toggle_rag_services,
-        )
-        self.rag_btn.pack(fill=X, ipady=8)
-
-        ttk.Label(
-            left_col,
-            text="啟動完成後，可在瀏覽器開啟 http://127.0.0.1:7860 使用 RAG 助理問答網頁。",
-            font=("微軟正黑體", 9), bootstyle=SECONDARY, wraplength=420, justify=LEFT,
-        ).pack(padx=20, pady=(0, 15), anchor=W)
-
-        # 右邊顯示 Ollama / 助理網頁的輸出，各有前綴區分
-        self.rag_console = console_panel.build_console_panel(right_col, "RAG 服務即時輸出")
-
-        self._update_rag_status()
+    # --- 視窗 3：管理者助理（另開行程的聊天視窗） ---
+    def open_assistant_window(self):
+        """開啟管理者助理聊天視窗；模型在那個行程裡載入，這裡只負責啟動與提示。"""
+        ok, message = service_manager.start_assistant_window(lambda line: print(f"[管理者助理] {line}"))
+        if ok:
+            messagebox.showinfo("管理者助理", message, parent=self.root)
+        else:
+            messagebox.showwarning("管理者助理", message, parent=self.root)
 
     # --- 視窗 4：手機遠端 QR Code 註冊 ---
     def open_qr_registration(self):

@@ -31,7 +31,8 @@ def closed_port_url():
 
 
 def make_settings(base, **overrides):
-    s = dict(ls.DEFAULTS, api_base=base, api_key="good-key", api_model="m", local_host=base, mode="api")
+    s = dict(ls.DEFAULTS, api_base=base, api_key="good-key", api_model="m", local_model="qwen2:7b",
+             local_host=base, mode="api")
     s.update(overrides)
     return s
 
@@ -182,6 +183,7 @@ def test_ollama_streams_and_sends_the_shared_context_size(fake_llm_server):
     path, body = requests[-1]
     assert path == "/api/chat" and body["model"] == "qwen2:7b"
     assert body["options"]["num_ctx"] == ls.LOCAL_NUM_CTX and body["options"]["num_predict"] == 8
+    assert body["think"] is False  # 關閉思考模式，qwen3 的推理過程才不會混進回答
 
 
 def test_ollama_missing_model_and_unreachable_server(fake_llm_server):
@@ -271,26 +273,3 @@ def test_failover_does_not_switch_while_the_primary_works():
     primary = _Working()
     llm = ls.FailoverLLM(primary, _Failing())
     assert llm.complete("嗨") == "備援的答案" and not llm.switched and llm.label() == "本機備援"
-
-
-def test_judge_uses_the_cloud_api_with_local_fallback(fake_llm_server, settings_file):
-    base, _ = fake_llm_server
-    llm, note = ls.build_judge_llm(make_settings(base))
-    assert isinstance(llm, ls.FailoverLLM) and "雲端 API" in note
-
-
-def test_judge_falls_back_to_local_when_the_cloud_key_is_bad(fake_llm_server, settings_file):
-    base, _ = fake_llm_server
-    llm, note = ls.build_judge_llm(make_settings(base, api_key="bad-key"))
-    assert isinstance(llm, ls.OllamaChatLLM) and "已自動改用" in note
-
-
-def test_judge_in_local_mode(fake_llm_server, settings_file):
-    base, _ = fake_llm_server
-    llm, note = ls.build_judge_llm(make_settings(base, mode="local"))
-    assert isinstance(llm, ls.OllamaChatLLM) and "只用本機模型" in note
-
-
-def test_judge_is_unavailable_when_nothing_works(settings_file):
-    llm, note = ls.build_judge_llm(make_settings(closed_port_url(), mode="local"))
-    assert llm is None and "評估無法進行" in note

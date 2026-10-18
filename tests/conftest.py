@@ -5,7 +5,6 @@ tests/conftest.py：pytest 共用設定與 fixture。
   - 在匯入任何專案模組之前，把執行期資料夾與法規資料夾導向臨時資料夾，測試不會讀寫真實的 runtime/ 與 data/
   - db：臨時資料庫並已初始化；add_user、add_attendance：快速塞測試資料
   - clock：固定 database_mgr 使用的目前時間
-  - rag_db：把 RAG 的 SQL 引擎也指向臨時資料庫
   - fake_llm_server：本機假的雲端 API 與 Ollama 伺服器，不需要網路與金鑰
 """
 import datetime as real_datetime
@@ -22,7 +21,7 @@ import pytest
 
 _TEST_ROOT = tempfile.mkdtemp(prefix="smart_access_tests_")
 os.environ["SMART_ACCESS_RUNTIME_DIR"] = os.path.join(_TEST_ROOT, "runtime")
-os.environ["SMART_ACCESS_LAWS_DIR"] = os.path.join(_TEST_ROOT, "laws")
+os.environ["SMART_ACCESS_DOCS_DIR"] = os.path.join(_TEST_ROOT, "docs")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
@@ -101,18 +100,6 @@ def clock(monkeypatch):
     return _set
 
 
-@pytest.fixture
-def rag_db(db, monkeypatch):
-    """讓 RAG 的 SQL 引擎也使用臨時資料庫，並清掉員工姓名快取。"""
-    from rag import rag_sql_engine
-
-    monkeypatch.setattr(rag_sql_engine, "ACCESS_SYSTEM_DB_PATH", db)
-    rag_sql_engine._ensure_safe_employee_roster_view(db)
-    monkeypatch.setitem(rag_sql_engine._employee_names_cache, "names", None)
-    monkeypatch.setitem(rag_sql_engine._employee_names_cache, "at", 0.0)
-    return db
-
-
 class _FakeLLMHandler(BaseHTTPRequestHandler):
     """假的雲端 API（OpenAI 相容）與 Ollama：金鑰 good-key、模型 qwen2:7b 可用。"""
 
@@ -180,3 +167,26 @@ def fake_llm_server():
         os.environ.pop("NO_PROXY", None)
     else:
         os.environ["NO_PROXY"] = old_no_proxy
+
+
+# --- 整合測試與回歸測試共用（需要真的模型，預設不執行）---
+
+
+@pytest.fixture(scope="session")
+def face_bgr():
+    """內建的測試人臉（scikit-image 附的公有領域照片），不需要另外放圖檔。"""
+    import cv2
+    from skimage import data
+
+    return cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
+
+
+@pytest.fixture(scope="session")
+def require_models():
+    """缺少模型檔就跳過整合測試。"""
+    from shared import paths
+
+    needed = ["arcface_r100_v1.onnx", "MiniFASNetV2.onnx", "yolov8s.pt", os.path.join("bge-m3", "config.json")]
+    missing = [name for name in needed if not os.path.exists(os.path.join(paths.MODELS_DIR, name))]
+    if missing:
+        pytest.skip(f"缺少模型檔：{missing}")
