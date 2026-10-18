@@ -55,13 +55,16 @@ def _limit(limit: int) -> int:
     return max(1, min(int(limit), MAX_ROWS))
 
 
+_ROSTER_ALL = "SELECT name, employee_id, COALESCE(is_active, 1) FROM Users ORDER BY name"
+_ROSTER_ACTIVE = ("SELECT name, employee_id, COALESCE(is_active, 1) FROM Users "
+                  "WHERE COALESCE(is_active, 1) = 1 ORDER BY name")
+
+
 def roster(include_inactive: bool = True) -> List[Dict]:
     """員工名單（姓名、員工編號、是否在職）；不含任何人臉特徵。"""
-    sql = "SELECT name, employee_id, COALESCE(is_active, 1) FROM Users"
-    if not include_inactive:
-        sql += " WHERE COALESCE(is_active, 1) = 1"
+    sql = _ROSTER_ALL if include_inactive else _ROSTER_ACTIVE
     with closing(_connect()) as conn:
-        rows = conn.execute(sql + " ORDER BY name").fetchall()
+        rows = conn.execute(sql).fetchall()
     return [{"name": r[0], "employee_id": r[1], "active": bool(r[2])} for r in rows]
 
 
