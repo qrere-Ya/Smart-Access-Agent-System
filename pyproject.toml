@@ -42,4 +42,5 @@ exclude_dirs = [
     "models",
     "runtime",
     "data",
+    "tests",  # 測試檔不會上線，用 assert 是正常寫法（B101）
 ]
