@@ -1,7 +1,7 @@
 # 單元測試用的輕量依賴（供 CI 使用，不含 TensorFlow、PyTorch 等大型套件）。
 # 安裝：pip install -r requirements/test.txt -c requirements/lock.txt
 pytest==9.1.1
-numpy==2.2.6
+numpy==2.5.4
 scipy==1.15.3
 scikit-learn==1.7.2
 scikit-image==0.25.2
