@@ -6,7 +6,6 @@ import io
 import socket
 import subprocess
 import sys
-import threading
 import time
 import types
 
@@ -98,50 +97,78 @@ def test_start_failures_are_reported_not_raised(monkeypatch):
     assert not ok and "找不到檔案" in message
 
 
-def test_rag_group_is_only_ollama_and_the_assistant_page():
-    assert sm._RAG_GROUP == ["ollama", "rag_app"]
-    assert not hasattr(sm, "PORT_LITELLM")
-
-
-def run_rag_start(on_output=None):
-    done, result = threading.Event(), {}
-
-    def finished(started, warnings):
-        result.update(started=started, warnings=warnings)
-        done.set()
-
-    sm.start_rag_services_async(on_output or (lambda prefix, line: None), finished)
-    assert done.wait(5)
-    return result
-
-
-def test_rag_start_launches_the_app_module_and_reports_a_missing_ollama(monkeypatch, fake_popen):
-    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
-    monkeypatch.setattr(sm.shutil, "which", lambda name: None)
-    result = run_rag_start()
-    assert result["started"] == ["RAG 助理網頁"]
-    assert len(result["warnings"]) == 1 and "找不到 ollama" in result["warnings"][0]
-    assert fake_popen.instances[0].args == [sm._project_python_exe(), "-u", "-m", "rag.app"]
-    assert sm.is_rag_busy() is False
-
-
-def test_rag_start_does_not_duplicate_services_that_already_run(monkeypatch, fake_popen):
-    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: True)
-    lines = []
-    result = run_rag_start(lambda prefix, line: lines.append((prefix, line)))
-    assert len(result["started"]) == 2 and all("本來就已經在跑" in s for s in result["started"])
-    assert result["warnings"] == [] and fake_popen.instances == []
-    assert {prefix for prefix, _ in lines} == {"[Ollama] ", "[RAG App] "}
-
-
-def test_stopping_rag_never_touches_litellm(monkeypatch):
+def test_stopping_everything_stops_ollama_terminal_web_server_and_the_assistant(monkeypatch):
     calls = []
     monkeypatch.setattr(sm, "stop_service", lambda key, port=None: calls.append((key, port)) or True)
-    assert sm.stop_rag_services() == [True, True]
-    assert calls == [("ollama", sm.PORT_OLLAMA), ("rag_app", sm.PORT_RAG_APP)]
-    calls.clear()
+    assert not hasattr(sm, "PORT_LITELLM") and not hasattr(sm, "PORT_RAG_APP")
     sm.stop_all_services()
-    assert [key for key, _ in calls] == ["ollama", "rag_app", "terminal", "web_server"]
+    assert [key for key, _ in calls] == ["ollama", "terminal", "web_server", "assistant"]
+
+
+# ---------- 本機 LLM 與管理者助理視窗 ----------
+
+def test_ollama_already_running_is_not_started_twice(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: True)
+    lines = []
+    started, warning = sm.start_ollama(lines.append)
+    assert "本來就已經在跑" in started and warning is None and fake_popen.instances == [] and lines
+
+
+def test_ollama_start_limits_its_resources_and_waits_for_the_port(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
+    monkeypatch.setattr(sm, "wait_port_open", lambda host, port, timeout=20, interval=0.5: True)
+    monkeypatch.setattr(sm.shutil, "which", lambda name: "C:/ollama.exe")
+    monkeypatch.setattr(sm, "_service_procs", {})
+    started, warning = sm.start_ollama(lambda line: None)
+    popen = fake_popen.instances[0]
+    assert (started, warning) == ("Ollama", None) and popen.args == ["C:/ollama.exe", "serve"]
+    assert popen.kwargs["env"]["OLLAMA_MAX_LOADED_MODELS"] == "1" and "ollama" in sm._service_procs
+
+
+def test_ollama_that_never_opens_its_port_gives_a_warning(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
+    monkeypatch.setattr(sm, "wait_port_open", lambda host, port, timeout=20, interval=0.5: False)
+    monkeypatch.setattr(sm.shutil, "which", lambda name: "C:/ollama.exe")
+    monkeypatch.setattr(sm, "_service_procs", {})
+    started, warning = sm.start_ollama(lambda line: None)
+    assert started is None and "等了 20 秒" in warning
+
+
+def test_missing_ollama_command_gives_a_warning(monkeypatch):
+    monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
+    monkeypatch.setattr(sm.shutil, "which", lambda name: None)
+    assert sm.start_ollama(lambda line: None) == (None, "找不到 ollama 指令，請確認 Ollama 已安裝並加入系統 PATH。")
+
+
+def test_assistant_window_starts_as_a_module_and_is_not_opened_twice(monkeypatch, fake_popen):
+    monkeypatch.setattr(sm, "_service_procs", {})
+    ok, _ = sm.start_assistant_window(lambda line: None)
+    popen = fake_popen.instances[0]
+    assert ok and popen.args == [sm._project_python_exe(), "-u", "-m", "rag.chat_window"]
+    assert popen.kwargs["cwd"] == paths.PROJECT_ROOT
+    popen.poll = lambda: None  # 視窗還開著
+    assert sm.assistant_window_running()
+    ok, message = sm.start_assistant_window(lambda line: None)
+    assert not ok and "已經開著" in message and len(fake_popen.instances) == 1
+
+
+def test_assistant_window_start_failure_is_reported(monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("找不到檔案")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(sm, "_service_procs", {})
+    ok, message = sm.start_assistant_window(lambda line: None)
+    assert not ok and "找不到檔案" in message
+
+
+def test_closed_assistant_window_is_forgotten(monkeypatch):
+    class Dead:
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(sm, "_service_procs", {"assistant": Dead()})
+    assert sm.assistant_window_running() is False and "assistant" not in sm._service_procs
 
 
 # ---------- 停止與狀態 ----------
@@ -173,10 +200,10 @@ def test_face_service_state_cleans_up_dead_processes(monkeypatch):
 def test_service_state_combines_ports_and_process_objects(monkeypatch):
     monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: False)
     monkeypatch.setattr(sm, "_service_procs", {})
-    assert not sm.rag_group_running() and not sm.reg_server_running() and not sm.any_service_running()
+    assert not sm.reg_server_running() and not sm.any_service_running()
     sm._service_procs["ollama"] = ALIVE
     sm._service_procs["web_server"] = DEAD
-    assert sm.rag_group_running() and not sm.reg_server_running() and sm.any_service_running()
+    assert not sm.reg_server_running() and sm.any_service_running()
     monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: port == sm.PORT_WEB_SERVER)
     assert sm.reg_server_running()
 

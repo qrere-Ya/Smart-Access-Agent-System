@@ -10,8 +10,8 @@ from pathlib import Path
 from shared import paths
 
 ROOT = Path(__file__).resolve().parents[3]
-KEYS = ("PROJECT_ROOT", "MODELS_DIR", "LAWS_DIR", "RUNTIME_DIR", "DB_PATH", "FAISS_DIR",
-        "ANOMALY_DIR", "LLM_SETTINGS_PATH", "EVAL_RESULTS_DIR", "VENV_PYTHON")
+KEYS = ("PROJECT_ROOT", "MODELS_DIR", "DOCS_DIR", "RUNTIME_DIR", "DB_PATH", "RAG_DIR",
+        "ANOMALY_DIR", "LLM_SETTINGS_PATH", "VENV_PYTHON")
 
 
 def load_paths(**env):
@@ -32,7 +32,7 @@ def test_project_root_is_the_repository_root():
 def test_runtime_files_live_inside_the_runtime_folder():
     runtime = Path(paths.RUNTIME_DIR)
     assert runtime.is_dir()
-    for value in (paths.DB_PATH, paths.FAISS_DIR, paths.ANOMALY_DIR, paths.LLM_SETTINGS_PATH, paths.EVAL_RESULTS_DIR):
+    for value in (paths.DB_PATH, paths.RAG_DIR, paths.ANOMALY_DIR, paths.LLM_SETTINGS_PATH):
         assert Path(value).parent == runtime
     assert Path(paths.DB_PATH).name == "database.db"
     assert Path(paths.LLM_SETTINGS_PATH).name == "llm_settings.json"
@@ -47,17 +47,17 @@ def test_runtime_folder_can_be_moved_with_an_environment_variable(tmp_path):
     result = load_paths(SMART_ACCESS_RUNTIME_DIR=str(target))
     assert result["RUNTIME_DIR"] == str(target) and target.is_dir()
     assert Path(result["DB_PATH"]) == target / "database.db"
-    assert Path(result["FAISS_DIR"]) == target / "faiss_storage"
+    assert Path(result["RAG_DIR"]) == target / "rag"
     assert Path(result["ANOMALY_DIR"]) == target / "anomaly_logs"
 
 
-def test_laws_folder_and_interpreter_can_be_overridden(tmp_path):
-    result = load_paths(SMART_ACCESS_RUNTIME_DIR=str(tmp_path / "rt"), SMART_ACCESS_LAWS_DIR=str(tmp_path / "laws"),
+def test_docs_folder_and_interpreter_can_be_overridden(tmp_path):
+    result = load_paths(SMART_ACCESS_RUNTIME_DIR=str(tmp_path / "rt"), SMART_ACCESS_DOCS_DIR=str(tmp_path / "docs"),
                         SMART_ACCESS_PYTHON="C:/custom/python.exe")
-    assert result["LAWS_DIR"] == str(tmp_path / "laws") and result["VENV_PYTHON"] == "C:/custom/python.exe"
+    assert result["DOCS_DIR"] == str(tmp_path / "docs") and result["VENV_PYTHON"] == "C:/custom/python.exe"
 
 
 def test_defaults_without_overrides(tmp_path):
     result = load_paths(SMART_ACCESS_RUNTIME_DIR=str(tmp_path / "rt"))
-    assert Path(result["LAWS_DIR"]) == ROOT / "data" / "laws"
+    assert Path(result["DOCS_DIR"]) == ROOT / "data" / "docs"
     assert Path(result["VENV_PYTHON"]) == ROOT / ".venv" / "Scripts" / "python.exe"
