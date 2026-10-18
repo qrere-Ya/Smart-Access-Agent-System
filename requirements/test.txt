@@ -8,7 +8,7 @@ scikit-image==0.25.2
 pillow==12.2.0
 psutil==7.2.2
 RapidFuzz==3.14.5
-llama-index-core==0.14.24
+llama-index-core==0.14.25
 faiss-cpu==1.15.0
 llama-index-readers-file==0.7.0
 pypdf==6.16.2

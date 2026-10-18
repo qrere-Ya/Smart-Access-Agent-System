@@ -7,7 +7,7 @@
 # 一般安裝會把下面 tensorflow==2.21.0 降版而破壞環境，必須加 --no-deps 單獨安裝。
 # lock.txt 是驗證通過的完整版本清單（含間接依賴），用 -c 限制版本，讓環境可以重現。
 
-llama-index-core==0.14.24
+llama-index-core==0.14.25
 llama-index-readers-file==0.7.0
 sentence-transformers==6.0.1
 transformers==5.16.1
