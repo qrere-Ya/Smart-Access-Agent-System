@@ -84,7 +84,7 @@ namex==0.1.0
 networkx==3.4.2
 opt_einsum==3.4.0
 optree==0.19.1
-packaging==26.2
+packaging==26.3
 polars==1.41.2
 polars-runtime-32==1.41.2
 protobuf==7.35.0

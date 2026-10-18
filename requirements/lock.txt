@@ -83,7 +83,7 @@ onnxruntime-gpu==1.23.2
 opencv-python==4.13.0.92
 opt_einsum==3.4.0
 optree==0.19.1
-packaging==26.2
+packaging==26.3
 pandas==2.3.3
 pillow==12.2.0
 platformdirs==4.11.7
