@@ -10,20 +10,43 @@ llm.py：助理用的 LLM 取得（本機 Ollama 或雲端 API，雲端失效自
   - llm_settings：設定讀寫、兩種用戶端與失敗備援
   - answer：回答與意圖判斷各取一個 LLM
 """
+import hashlib
+import json
+import time
 from typing import Optional, Tuple
 
 from rag import llm_settings as ls
+
+HEALTH_CACHE_SECONDS = 10.0
+_health_cache = {}
+
+
+def clear_health_cache():
+    _health_cache.clear()
+
+
+def _health(s):
+    """本機與雲端的連線檢查；助理啟動時會連續取兩個 LLM，短時間內同一份設定只檢查一次。"""
+    key = hashlib.sha256(json.dumps(s, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    cached = _health_cache.get(key)
+    if cached and time.monotonic() - cached[0] < HEALTH_CACHE_SECONDS:
+        return cached[1]
+    result = (ls.check_local(s), ls.check_api(s, timeout=15.0) if s["mode"] == "api" else None)
+    _health_cache.clear()
+    _health_cache[key] = (time.monotonic(), result)
+    return result
 
 
 def build_llm(settings: Optional[dict] = None, max_tokens: Optional[int] = None) -> Tuple[Optional[object], str]:
     """回傳 (llm 或 None, 給畫面看的一行說明)；max_tokens 限制單次輸出長度（意圖判斷用小一點）。"""
     s = settings or ls.load_settings()
-    local_ok, local_err, _names, _text, _sec = ls.check_local(s)
+    local_check, api_check = _health(s)
+    local_ok, local_err, _names, _text, _sec = local_check
     local = ls.OllamaChatLLM(ls.local_host(s), s["local_model"], max_tokens=max_tokens) if local_ok else None
 
     note = ""
     if s["mode"] == "api":
-        ok, err, _text, _sec = ls.check_api(s, timeout=15.0)
+        ok, err, _text, _sec = api_check
         if ok:
             api = ls.OpenAICompatLLM(s["api_base"], ls.effective_api_key(s), s["api_model"], max_tokens=max_tokens)
             return ls.FailoverLLM(api, local), f"助理使用{api.label()}" + ("，失效時自動改用本機模型" if local else "")

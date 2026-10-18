@@ -207,3 +207,37 @@ def test_roster_is_read_from_the_database_without_face_data(db, add_user):
 ])
 def test_markdown_marks_are_removed_from_the_answer(raw, clean):
     assert plain_text(raw) == clean
+
+
+@pytest.mark.parametrize("assistant", [FakeAssistant(), FakeAssistant(error=RuntimeError("boom"))],
+                         ids=["正常結束", "發生例外"])
+def test_the_controller_is_already_free_when_the_finishing_event_is_queued(assistant):
+    import queue
+
+    controller = ChatController(assistant)
+    busy_at_end = []
+
+    class Spy(queue.Queue):
+        def put(self, item, *args, **kwargs):
+            if item.kind in ("done", "error"):
+                busy_at_end.append(controller.busy)
+            super().put(item, *args, **kwargs)
+
+    controller._events = Spy()
+    controller.submit("問題")
+    controller.wait()
+    assert busy_at_end == [False]   # 畫面收到結束事件後馬上再送出問題，不能被擋下
+    assert controller.submit("馬上再問") is True
+    controller.wait()
+
+
+def test_models_are_released_when_a_later_step_fails(parts):
+    log, kwargs = parts
+
+    def broken_roster():
+        raise OSError("資料庫被鎖住")
+
+    kwargs["roster"] = broken_roster
+    with pytest.raises(OSError):
+        bootstrap.create_runtime(progress=lambda s: None, **kwargs)
+    assert log["closed"] == ["embed", "rerank"]

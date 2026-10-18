@@ -187,3 +187,16 @@ def test_a_saved_name_without_a_tag_matches_the_installed_latest_model(settings_
     settings_dialog.local_model.set("llama3")
     settings_dialog._fill_model_names(["llama3:latest", "qwen3:8b"])
     assert settings_dialog.local_model.get() == "llama3:latest"
+
+
+def test_a_failed_document_rescan_is_reported_and_the_button_comes_back(window):
+    assert pump(window, lambda: window._controller is not None)
+
+    def broken():
+        raise RuntimeError("顯存不足")
+
+    window.runtime.store.sync = broken
+    window._refresh_docs()
+    assert window.docs_btn.cget("state") == "disabled"
+    assert pump(window, lambda: window.docs_btn.cget("state") == "normal")
+    assert any("重新掃描失敗" in w.cget("text") and "顯存不足" in w.cget("text") for w in window._notes_widgets)

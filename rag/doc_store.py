@@ -15,6 +15,7 @@ doc_store.py：文件知識庫（逐份文件追蹤的向量庫）。
 """
 import json
 import os
+import threading
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, List, Optional
 
@@ -75,6 +76,7 @@ class DocStore:
                  max_chars: int = ingest.DEFAULT_MAX_CHARS):
         self.docs_dir, self.store_dir, self.embed_fn = docs_dir, store_dir, embed_fn
         self.dim, self.max_chars = dim, max_chars
+        self._lock = threading.RLock()  # 掃描文件與檢索不能同時動到同一份索引
         self._manifest: Dict[str, dict] = {}
         self._chunks: Dict[int, dict] = {}
         self._next_id = 1
@@ -155,6 +157,10 @@ class DocStore:
 
     def sync(self) -> SyncReport:
         """讓向量庫和文件資料夾一致，只處理有變動的文件。"""
+        with self._lock:
+            return self._sync()
+
+    def _sync(self) -> SyncReport:
         report = SyncReport()
         found = self._discover()
         for name in sorted(set(self._manifest) - set(found)):
@@ -208,6 +214,10 @@ class DocStore:
 
     def search(self, query: str, k: int = 5) -> List[Hit]:
         """混合檢索，回傳最多 k 筆，依融合分數由高到低。"""
+        with self._lock:
+            return self._search(query, k)
+
+    def _search(self, query: str, k: int) -> List[Hit]:
         if not self._chunks or not query.strip():
             return []
         pool = min(len(self._chunks), max(k * _CANDIDATE_FACTOR, k))

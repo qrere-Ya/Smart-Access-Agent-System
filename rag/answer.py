@@ -135,8 +135,9 @@ class Assistant:
         data_text, notes = "", []
         if plan.data:
             outcome = self._run_data(plan, question, today)
-            if isinstance(outcome, str):  # 需要使用者釐清，或查無此人
-                self.last.outcome = "clarify"
+            if isinstance(outcome, str):  # 需要使用者釐清、查無此人，或資料庫出錯（出錯時 outcome 已是 error）
+                if self.last.outcome != "error":
+                    self.last.outcome = "clarify"
                 yield outcome
                 return
             data_text, notes = outcome
@@ -405,8 +406,8 @@ class Assistant:
         if plan.data == "count":
             counts = queries.count_by_status(name, start, end)
             lines = [f"{status}：{n} 次" for status, n in sorted(counts.items())]
-            return self._lines(f"{name}　{span}　各狀態次數", lines)
-        rows = queries.attendance_records(name, start, end, plan.status, limit=MAX_LISTED_ROWS)
+            return self._lines(f"{name}　{span}　各狀態次數", lines, with_total=False)
+        rows = queries.attendance_records(name, start, end, plan.status, limit=queries.MAX_ROWS)
         return self._lines(f"{name}　{span}　打卡紀錄" + (f"（只看{plan.status}）" if plan.status else ""),
                            [f"{r['timestamp']}　{r['status']}" for r in rows])
 
@@ -415,12 +416,16 @@ class Assistant:
         return start if start == end else f"{start} 至 {end}"
 
     @staticmethod
-    def _lines(title: str, lines: List[str]) -> str:
+    def _lines(title: str, lines: List[str], with_total: bool = True) -> str:
+        """標題加上清單；筆數只在每行代表一筆紀錄時才標示，查詢數量碰到上限時寫「至少」。"""
         if not lines:
             return f"{title}\n（沒有符合的紀錄）"
         shown = lines[:MAX_LISTED_ROWS]
         more = f"\n…還有 {len(lines) - len(shown)} 筆未列出" if len(lines) > len(shown) else ""
-        return f"{title}（共 {len(lines)} 筆）\n" + "\n".join(shown) + more
+        if not with_total:
+            return f"{title}\n" + "\n".join(shown)
+        total = f"至少 {len(lines)}" if len(lines) >= queries.MAX_ROWS else str(len(lines))
+        return f"{title}（共 {total} 筆）\n" + "\n".join(shown) + more
 
     @staticmethod
     def _summary_text(s: dict) -> str:

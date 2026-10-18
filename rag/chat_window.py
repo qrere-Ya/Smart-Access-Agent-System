@@ -457,7 +457,11 @@ class AssistantWindow(ctk.CTk):
         self.status.configure(text="⏳ 重新掃描文件…")
 
         def run():
-            report = bootstrap.refresh_documents(self._runtime)
+            try:
+                report = bootstrap.refresh_documents(self._runtime)
+            except Exception as e:  # 掃描失敗也要讓按鈕恢復，不然這次開著的期間都不能再掃
+                self._events.put(("docs", f"⚠️ 文件重新掃描失敗：{type(e).__name__}：{e}"))
+                return
             parts = []
             for label, items in (("新增", report.added), ("更新", report.updated), ("移除", report.removed)):
                 if items:
