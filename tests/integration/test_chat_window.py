@@ -152,3 +152,38 @@ def test_startup_failure_is_explained(window):
         assert failing.send("問題") is False
     finally:
         failing.destroy()
+
+
+# --- 語言模型設定視窗：本機模型改成下拉選單 ---
+
+@pytest.fixture
+def settings_dialog(window, monkeypatch, tmp_path):
+    from rag import chat_window, llm_settings
+
+    monkeypatch.setattr(llm_settings, "SETTINGS_PATH", str(tmp_path / "s.json"))
+    monkeypatch.setattr(llm_settings, "list_local_models",
+                        lambda s, timeout=4.0: (True, ["gemma3:4b", "llama3:latest", "qwen3:8b"]))
+    dialog = chat_window.SettingsDialog(window, on_saved=lambda show: None)
+    yield dialog
+    dialog.destroy()
+
+
+def test_local_model_is_chosen_from_the_installed_models(settings_dialog, window):
+    installed = ["gemma3:4b", "llama3:latest", "qwen3:8b"]
+    assert pump(window, lambda: settings_dialog.local_model.cget("values") == installed)
+    assert settings_dialog.local_model.get() == "qwen3:8b"  # 預設值剛好有安裝
+    settings_dialog.local_model.set("gemma3:4b")
+    assert settings_dialog._form()["local_model"] == "gemma3:4b"
+
+
+def test_a_saved_model_that_is_not_installed_is_marked_and_saved_without_the_mark(settings_dialog, window):
+    settings_dialog.local_model.set("phi3:mini")
+    settings_dialog._fill_model_names(["gemma3:4b"])
+    assert settings_dialog.local_model.get() == "phi3:mini（尚未安裝）"
+    assert settings_dialog._form()["local_model"] == "phi3:mini"
+
+
+def test_a_saved_name_without_a_tag_matches_the_installed_latest_model(settings_dialog, window):
+    settings_dialog.local_model.set("llama3")
+    settings_dialog._fill_model_names(["llama3:latest", "qwen3:8b"])
+    assert settings_dialog.local_model.get() == "llama3:latest"

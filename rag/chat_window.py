@@ -111,6 +111,7 @@ class SettingsDialog(ctk.CTkToplevel):
     """語言模型設定：本機或雲端優先、模型名稱、金鑰（不顯示已存的金鑰）、測試與儲存。"""
 
     MODES = {"只用本機模型": "local", "雲端優先（失效自動改本機）": "api"}
+    NOT_INSTALLED = "（尚未安裝）"
 
     def __init__(self, master, on_saved):
         super().__init__(master)
@@ -127,7 +128,16 @@ class SettingsDialog(ctk.CTkToplevel):
         self.mode = ctk.CTkSegmentedButton(self, values=list(self.MODES), font=(FONT_FAMILY, 13))
         self.mode.set(next(k for k, v in self.MODES.items() if v == s["mode"]))
         self.mode.pack(padx=18, pady=(6, 0), fill="x")
-        self.local_model = self._entry("本機模型名稱（Ollama）", s["local_model"])
+        ctk.CTkLabel(self, text="本機模型（Ollama 已安裝的模型）", font=(FONT_FAMILY, 13)).pack(
+            padx=18, pady=(10, 0), anchor="w")
+        self._saved_model = s["local_model"]
+        self.local_model = ctk.CTkOptionMenu(self, values=[self._saved_model], font=(FONT_FAMILY, 13),
+                                             dropdown_font=(FONT_FAMILY, 13), dynamic_resizing=False)
+        self.local_model.set(self._saved_model)
+        self.local_model.pack(padx=18, pady=(2, 0), fill="x")
+        self._model_names = queue.Queue()
+        threading.Thread(target=self._load_model_names, args=(s,), daemon=True).start()
+        self.after(100, self._poll_model_names)
         self.api_base = self._entry("雲端 API 網址（OpenAI 相容）", s["api_base"])
         self.api_model = self._entry("雲端模型名稱", s["api_model"])
         self.api_key = self._entry("雲端 API 金鑰", "", show="•", placeholder="留空＝沿用已儲存的")
@@ -142,6 +152,38 @@ class SettingsDialog(ctk.CTkToplevel):
         self.result = ctk.CTkLabel(self, text="", wraplength=470, justify="left", font=(FONT_FAMILY, 12))
         self.result.pack(padx=18, anchor="w")
 
+    def _load_model_names(self, settings):
+        """背景向 Ollama 問已安裝的模型，問不到就維持只有目前設定的那一個。"""
+        ok, names = self.ls.list_local_models(settings)
+        self._model_names.put(names if ok and names else None)
+
+    def _poll_model_names(self):
+        """畫面執行緒定時看背景有沒有查到模型清單（Tk 的 after 不能從別的執行緒呼叫）。"""
+        if not self.winfo_exists():
+            return
+        try:
+            names = self._model_names.get_nowait()
+        except queue.Empty:
+            self.after(100, self._poll_model_names)
+            return
+        if names:
+            self._fill_model_names(names)
+
+    def _fill_model_names(self, names):
+        if not self.winfo_exists():
+            return
+        current = self.local_model.get()
+        values = list(names)
+        if current not in values:
+            same = next((n for n in values if n.startswith(current + ":")), None)  # 寫 llama3、裝的是 llama3:latest
+            if same:
+                current = same
+            else:
+                values.insert(0, current + self.NOT_INSTALLED)
+                current += self.NOT_INSTALLED
+        self.local_model.configure(values=values)
+        self.local_model.set(current if current in values else values[0])
+
     def _entry(self, label, value, show=None, placeholder=""):
         ctk.CTkLabel(self, text=label, font=(FONT_FAMILY, 13)).pack(padx=18, pady=(10, 0), anchor="w")
         entry = ctk.CTkEntry(self, show=show, placeholder_text=placeholder, font=(FONT_FAMILY, 13))
@@ -151,7 +193,8 @@ class SettingsDialog(ctk.CTkToplevel):
         return entry
 
     def _form(self):
-        return {"mode": self.MODES[self.mode.get()], "local_model": self.local_model.get(),
+        local_model = self.local_model.get().removesuffix(self.NOT_INSTALLED)
+        return {"mode": self.MODES[self.mode.get()], "local_model": local_model,
                 "api_base": self.api_base.get(), "api_model": self.api_model.get(), "api_key": self.api_key.get()}
 
     def _show(self, text):
