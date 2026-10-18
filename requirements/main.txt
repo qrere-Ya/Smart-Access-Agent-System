@@ -1,5 +1,5 @@
 # Python 3.11。安裝順序（不能反）：
-#   1) pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126 --extra-index-url https://pypi.org/simple
+#   1) pip install torch==2.14.1+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126 --extra-index-url https://pypi.org/simple
 #      （GPU 版 PyTorch；沒有 NVIDIA 顯卡可略過，第 2 步會改裝 CPU 版，並把 onnxruntime-gpu 換成 onnxruntime）
 #   2) pip install -r requirements/main.txt -c requirements/lock.txt
 #   3) pip install retinaface==1.1.1 --no-deps
@@ -21,7 +21,7 @@ customtkinter==6.0.0
 darkdetect==0.8.0
 rapidfuzz==3.14.5
 numpy==2.2.6
-torch==2.13.0
+torch==2.14.1
 torchvision==0.28.0
 scipy==1.15.3
 scikit-learn==1.7.2
