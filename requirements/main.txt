@@ -67,8 +67,8 @@ google-pasta==0.2.0
 grpcio==1.81.0
 h5py==3.14.0
 humanfriendly==10.0
-idna==3.17
-ImageIO==2.37.3
+idna==3.20
+ImageIO==2.38.1
 itsdangerous==2.2.0
 Jinja2==3.1.6
 joblib==1.5.3
@@ -84,12 +84,12 @@ namex==0.1.0
 networkx==3.4.2
 opt_einsum==3.4.0
 optree==0.19.1
-packaging==26.2
+packaging==26.3
 polars==1.41.2
 polars-runtime-32==1.41.2
 protobuf==7.35.0
 pycparser==3.0
-Pygments==2.20.0
+Pygments==2.21.0
 pyparsing==3.3.2
 pyreadline3==3.5.6
 python-dateutil==2.9.0.post0
@@ -102,5 +102,5 @@ threadpoolctl==3.6.0
 tifffile==2025.5.10
 typing_extensions==4.15.0
 urllib3==2.7.0
-Werkzeug==3.1.8
+Werkzeug==3.1.9
 wrapt==2.2.1
