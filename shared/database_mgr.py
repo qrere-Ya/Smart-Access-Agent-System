@@ -16,6 +16,7 @@ database_mgr.py：SQLite 資料層。
 """
 import sqlite3
 import io
+from contextlib import closing
 import os
 import re
 import numpy as np
@@ -279,15 +280,12 @@ _EVIDENCE_NAME = re.compile(r"^(?P<type>[a-z]+)_(?P<d>\d{8})_(?P<t>\d{6})\.jpg$"
 def add_anomaly_event(event_type, evidence_path=None, detail="", timestamp=None):
     """新增一筆異常事件（如 tailgate），回傳事件編號；timestamp 預設為現在。"""
     when = timestamp or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn_db = sqlite3.connect(DB_PATH, timeout=5)
-    try:
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
         cur = conn_db.execute(
             "INSERT INTO AnomalyEvents (timestamp, event_type, detail, evidence_path) VALUES (?, ?, ?, ?)",
             (when, event_type, detail, evidence_path))
         conn_db.commit()
         return cur.lastrowid
-    finally:
-        conn_db.close()
 
 
 def list_anomaly_events(start=None, end=None, event_type=None, limit=200):
@@ -306,13 +304,10 @@ def list_anomaly_events(start=None, end=None, event_type=None, limit=200):
         clauses.append("event_type = ?")
         params.append(event_type)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    conn_db = sqlite3.connect(DB_PATH, timeout=5)
-    try:
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
         rows = conn_db.execute(
             f"SELECT id, timestamp, event_type, detail, evidence_path FROM AnomalyEvents {where} "  # noqa: S608
             "ORDER BY timestamp DESC, id DESC LIMIT ?", (*params, limit)).fetchall()
-    finally:
-        conn_db.close()
     return [{"id": r[0], "timestamp": r[1], "event_type": r[2], "detail": r[3], "evidence_path": r[4]}
             for r in rows]
 
@@ -325,8 +320,7 @@ def import_anomaly_photos(folder=None):
     folder = folder or paths.ANOMALY_DIR
     if not os.path.isdir(folder):
         return 0
-    conn_db = sqlite3.connect(DB_PATH, timeout=5)
-    try:
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
         known = {os.path.basename(r[0]) for r in conn_db.execute(
             "SELECT evidence_path FROM AnomalyEvents WHERE evidence_path IS NOT NULL")}
         added = 0
@@ -345,5 +339,3 @@ def import_anomaly_photos(folder=None):
             added += 1
         conn_db.commit()
         return added
-    finally:
-        conn_db.close()
