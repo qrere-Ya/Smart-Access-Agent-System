@@ -65,11 +65,11 @@ class ChatController:
         try:
             for piece in self.assistant.ask(question):
                 self._events.put(Event("chunk", piece))
-            self._events.put(Event("done", outcome=self.assistant.last.outcome))
+            final = Event("done", outcome=self.assistant.last.outcome)
         except Exception as e:  # ask() 本身不該丟例外；萬一發生也要讓畫面解除忙碌狀態
-            self._events.put(Event("error", f"{type(e).__name__}：{e}"))
-        finally:
-            self._busy = False
+            final = Event("error", f"{type(e).__name__}：{e}")
+        self._busy = False  # 先解除忙碌再送出結束事件，畫面收到後馬上再送出問題才不會被擋下
+        self._events.put(final)
 
     def poll(self) -> List[Event]:
         """取出目前累積的所有事件（沒有就回傳空清單），由畫面定時呼叫。"""

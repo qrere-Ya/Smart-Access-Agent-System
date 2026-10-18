@@ -534,3 +534,33 @@ def test_a_name_matched_despite_a_typo_is_disclosed(store, people):
 def test_an_exactly_typed_name_has_no_such_notice(store, people):
     llm = FakeLLM(COUNT_ROUTE)
     assert "不完全相符" not in ask(make(store, llm), "王小明這個月遲到幾次")
+
+
+# --- 清單筆數與出錯狀態 ---
+
+def test_a_long_records_list_reports_the_real_total_and_what_was_cut(store, people, add_attendance):
+    for day in range(1, 29):
+        add_attendance("王小明", f"2026-10-{day:02d} 09:00:00", "上班")
+        add_attendance("王小明", f"2026-10-{day:02d} 18:00:00", "下班")
+    llm = FakeLLM({"王小明這個月的打卡紀錄": {"data": "records", "person": "王小明"}})
+    text = ask(make(store, llm), "王小明這個月的打卡紀錄")
+    assert f"共 {28 * 2 + 5} 筆" in text and f"還有 {28 * 2 + 5 - answer.MAX_LISTED_ROWS} 筆未列出" in text
+
+
+def test_count_header_does_not_claim_a_number_of_records(store, people):
+    llm = FakeLLM({"王小明這個月遲到幾次": {"data": "count", "person": "王小明", "status": "遲到"}})
+    text = ask(make(store, llm), "王小明這個月遲到幾次")
+    header = text.split("【查詢結果】")[1].split(chr(10))[1]
+    assert "各狀態次數" in header and "筆" not in header
+
+
+def test_a_database_failure_keeps_the_error_outcome(store, people, monkeypatch):
+    llm = FakeLLM({"王小明遲到幾次": {"data": "count", "person": "王小明"}})
+
+    def broken(*args, **kwargs):
+        raise OSError("locked")
+
+    monkeypatch.setattr(answer.queries, "count_by_status", broken)
+    a = make(store, llm)
+    ask(a, "王小明遲到幾次")
+    assert a.last.outcome == "error"

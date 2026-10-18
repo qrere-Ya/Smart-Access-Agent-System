@@ -73,32 +73,38 @@ def create_runtime(progress: Progress = print, docs_dir: Optional[str] = None, s
     store_dir = store_dir or paths.RAG_DIR
     closers: List[Callable[[], None]] = []
 
-    progress("載入向量模型（bge-m3）…")
-    embed, release_embed = (embedder or _default_embedder)()
-    closers.append(release_embed)
+    try:
+        progress("載入向量模型（bge-m3）…")
+        embed, release_embed = (embedder or _default_embedder)()
+        closers.append(release_embed)
 
-    progress("掃描文件資料夾並建立索引…")
-    store = DocStore(docs_dir, store_dir, embed)
-    sync = store.sync()
+        progress("掃描文件資料夾並建立索引…")
+        store = DocStore(docs_dir, store_dir, embed)
+        sync = store.sync()
 
-    progress("載入重排模型…")
-    reranker, release_rerank = (reranker_factory or _default_reranker)()
-    closers.append(release_rerank)
+        progress("載入重排模型…")
+        reranker, release_rerank = (reranker_factory or _default_reranker)()
+        closers.append(release_rerank)
 
-    progress("連接語言模型…")
-    builder = llm_builder or llm_mod.build_llm
-    model, note = builder(settings)
-    router_model, _ = builder(settings, max_tokens=200)
-    if model is None:
+        progress("連接語言模型…")
+        builder = llm_builder or llm_mod.build_llm
+        model, note = builder(settings)
+        router_model, _ = builder(settings, max_tokens=200)
+        if model is None:
+            raise RuntimeError(note)
+
+        resolver = NameResolver(roster(), embed)
+        assistant = answer.Assistant(store, reranker, model, resolver, router_llm=router_model)
+        assistant.roster_provider = roster
+        progress("準備完成")
+        return Runtime(assistant, store, note, sync, closers)
+    except BaseException:  # 任何一步失敗都要把已載入的模型釋放掉，不然顯存會被占住
         for closer in closers:
-            closer()
-        raise RuntimeError(note)
-
-    resolver = NameResolver(roster(), embed)
-    assistant = answer.Assistant(store, reranker, model, resolver, router_llm=router_model)
-    assistant.roster_provider = roster
-    progress("準備完成")
-    return Runtime(assistant, store, note, sync, closers)
+            try:
+                closer()
+            except Exception as e:
+                print(f"[bootstrap] 釋放資源時出錯（略過）：{type(e).__name__}")
+        raise
 
 
 def refresh_documents(runtime: Runtime) -> SyncReport:

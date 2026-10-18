@@ -214,3 +214,33 @@ def test_keywords_alone_can_pull_the_right_document_up(docs, make_store, keyword
     store = make_store(lambda texts: np.ones((len(texts), DIM), dtype=np.float32))
     store.sync()
     assert store.search(keyword, 1)[0].chunk["source"] == expected
+
+
+def test_a_search_waits_while_the_documents_are_being_rescanned(docs, make_store):
+    import threading
+    import time
+
+    put(docs, "leave.txt", LEAVE)
+    gate, started = threading.Event(), threading.Event()
+
+    def slow_embed(texts):
+        if len(texts) > 1 or "加班" in texts[0]:
+            started.set()
+            gate.wait(5)
+        return fake_embed(texts)
+
+    store = make_store(slow_embed)
+    store.sync()
+    put(docs, "overtime.txt", OVERTIME)
+    syncing = threading.Thread(target=store.sync)
+    syncing.start()
+    assert started.wait(5)
+    done = []
+    searching = threading.Thread(target=lambda: done.append(store.search("特別休假", 1)))
+    searching.start()
+    time.sleep(0.3)
+    assert done == []          # 掃描還沒結束，檢索要等
+    gate.set()
+    syncing.join(5)
+    searching.join(5)
+    assert done and done[0]
