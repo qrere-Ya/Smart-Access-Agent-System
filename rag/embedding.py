@@ -48,8 +48,8 @@ class _EmbedResource(ManagedResource):
     def _unload(self, impl):
         try:
             impl.to("cpu")  # 先移回 CPU，確保顯存歸還
-        except Exception:  # noqa: S110
-            pass
+        except Exception as e:
+            print(f"[embedding] 釋放模型前移回 CPU 失敗（略過）：{type(e).__name__}")
 
 
 class ManagedEmbedder:
