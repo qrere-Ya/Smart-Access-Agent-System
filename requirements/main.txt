@@ -29,7 +29,7 @@ scikit-image==0.25.2
 opencv-python==4.13.0.92
 onnxruntime-gpu==1.23.2
 ultralytics==8.4.59
-ultralytics-thop==2.0.19
+ultralytics-thop==2.2.3
 tensorflow==2.21.0
 tf_keras==2.21.0
 keras==3.12.2
