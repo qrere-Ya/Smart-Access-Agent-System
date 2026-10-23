@@ -26,7 +26,7 @@ torchvision==0.28.0
 scipy==1.15.3
 scikit-learn==1.7.2
 scikit-image==0.25.2
-opencv-python==4.13.0.92
+opencv-python==5.0.0.93
 onnxruntime-gpu==1.23.2
 ultralytics==8.4.59
 ultralytics-thop==2.0.19
