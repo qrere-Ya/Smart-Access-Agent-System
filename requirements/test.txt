@@ -7,7 +7,7 @@ scikit-learn==1.7.2
 scikit-image==0.25.2
 pillow==12.2.0
 psutil==7.2.2
-RapidFuzz==3.14.5
+RapidFuzz==3.14.6
 llama-index-core==0.14.24
 faiss-cpu==1.15.0
 llama-index-readers-file==0.7.0

@@ -19,7 +19,7 @@ pypdf==6.16.2
 docx2txt==0.9
 customtkinter==6.0.0
 darkdetect==0.8.0
-rapidfuzz==3.14.5
+rapidfuzz==3.14.6
 numpy==2.2.6
 torch==2.13.0
 torchvision==0.28.0
