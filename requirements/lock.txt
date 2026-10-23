@@ -7,7 +7,7 @@ aiosignal==1.4.0
 aiosqlite==0.22.1
 annotated-doc==0.0.5
 annotated-types==0.8.0
-anyio==4.14.2
+anyio==4.15.1
 astunparse==1.6.3
 attrs==26.1.0
 banks==2.5.0
