@@ -64,7 +64,7 @@ libclang==18.1.1
 llama-index-core==0.14.24
 llama-index-instrumentation==0.6.0
 llama-index-readers-file==0.7.0
-llama-index-workflows==2.23.3
+llama-index-workflows==2.26.0
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 marshmallow==3.26.2
