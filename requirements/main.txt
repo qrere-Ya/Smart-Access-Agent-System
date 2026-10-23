@@ -12,7 +12,7 @@ llama-index-readers-file==0.7.0
 sentence-transformers==6.0.1
 transformers==5.16.1
 bm25s==0.3.11
-PyStemmer==2.2.0.3
+PyStemmer==3.1.0
 jieba==0.42.1
 faiss-cpu==1.15.0
 pypdf==6.16.2

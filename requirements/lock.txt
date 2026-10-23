@@ -101,7 +101,7 @@ pypdf==6.16.2
 pypng==0.20220715.0
 PyQRCode==1.2.1
 pyreadline3==3.5.6
-PyStemmer==2.2.0.3
+PyStemmer==3.1.0
 python-dateutil==2.9.0.post0
 pytz==2026.3.post1
 PyYAML==6.0.3
