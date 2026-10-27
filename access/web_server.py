@@ -193,7 +193,7 @@ def api_register():
         return jsonify({"status": "success", "message": f"註冊成功! 歡迎加入，{name}。您可以關閉此頁面了。"})
     except Exception as e:
         print(f"[Web Server Error]{e}")
-        return jsonify({"status": "error", "message": f"伺服器內部錯誤: {e}"})
+        return jsonify({"status": "error", "message": "伺服器內部錯誤"}), 500
 
 if __name__ == '__main__':
     local_ip = get_local_ip_offline()
