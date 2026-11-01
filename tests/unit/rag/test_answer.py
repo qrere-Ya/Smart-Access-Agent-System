@@ -279,6 +279,15 @@ def test_follow_up_without_a_name_reuses_the_previous_person_and_says_so(store, 
     assert "王小明這個月遲到幾次" in llm.router_prompts[1]  # 對話記憶有送給意圖判斷
 
 
+def test_follow_up_naming_someone_not_on_the_roster_does_not_reuse_the_previous_person(store, people):
+    llm = FakeLLM({"王小明這個月遲到幾次": {"data": "count", "person": "王小明", "status": "遲到"},
+                   "那張三上週呢": {"data": "count", "person": "張三"}})
+    a = make(store, llm)
+    ask(a, "王小明這個月遲到幾次")
+    text = ask(a, "那張三上週呢")
+    assert "找不到「張三」" in text and "沿用" not in text and "2026-10-05" not in text
+
+
 def test_reset_forgets_the_previous_person(store, people):
     llm = FakeLLM({"王小明這個月遲到幾次": {"data": "count", "person": "王小明"}, "那上週呢": {"data": "count"}})
     a = make(store, llm)

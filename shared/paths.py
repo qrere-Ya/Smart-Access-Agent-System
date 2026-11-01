@@ -25,6 +25,7 @@ ANOMALY_DIR = os.path.join(RUNTIME_DIR, "anomaly_logs")
 LLM_SETTINGS_PATH = os.path.join(RUNTIME_DIR, "llm_settings.json")
 SESSION_PATH = os.path.join(RUNTIME_DIR, "session.json")
 LOGIN_LOCK_PATH = os.path.join(RUNTIME_DIR, "login_lock.json")
+ANOMALY_SEEN_PATH = os.path.join(RUNTIME_DIR, "anomaly_seen.json")
 
 VENV_PYTHON = os.environ.get("SMART_ACCESS_PYTHON") or os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 

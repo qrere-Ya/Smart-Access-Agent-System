@@ -233,10 +233,11 @@ def analyze_in_background(frame_copy, detector):
             # 5. 尾隨偵測（YOLO）：只拍照存證並記錄時間，不覆蓋當事人的打卡結果
             person_count, person_boxes = sec.count_persons(frame_copy)
             if person_count >= 2:
-                evidence_path = sec.generate_evidence(frame_copy, person_boxes[-1])
                 try:
-                    db.add_anomaly_event("tailgate", evidence_path,
-                                         f"畫面有 {person_count} 人，只辨識到 {len(detections)} 張臉")
+                    # 連續尾隨合併成一筆；只有新增事件時才產生證據照片
+                    db.record_anomaly_event(
+                        "tailgate", f"畫面有 {person_count} 人，只辨識到 {len(detections)} 張臉",
+                        make_evidence=lambda: sec.generate_evidence(frame_copy, person_boxes[-1]))
                 except Exception as e:
                     print(f"[terminal_app][WARN] 異常事件寫入失敗（不影響警示與證據照片）: {e}")
                 _publish_tailgate_alert(current_time)
