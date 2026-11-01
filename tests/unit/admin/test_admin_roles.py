@@ -116,3 +116,9 @@ def test_with_a_second_admin_the_first_can_be_removed(team):
 def test_ordinary_members_can_still_be_disabled_and_deleted(team):
     uid = user_id(team, "組員乙")
     assert account_admin.set_active(uid, False)[0] and account_admin.delete_user(uid)[0]
+
+
+def test_an_admin_row_with_a_damaged_embedding_is_skipped_not_fatal(db, add_user):
+    add_user("正常管理者", "A1", embedding=ONES, role="admin")
+    add_user("維度不同的管理者", "A2", embedding=np.ones(7, dtype=np.float32), role="admin")
+    assert dbm.recognize_admin(ONES) == ("正常管理者", 0.0)

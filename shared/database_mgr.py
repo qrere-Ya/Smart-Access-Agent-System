@@ -297,6 +297,8 @@ def recognize_admin(target_embedding, threshold=0.8):
         for name, emb in conn_db.execute(
                 "SELECT name, embedding FROM Users WHERE role = ? AND (is_active = 1 OR is_active IS NULL)",
                 (ROLE_ADMIN,)):
+            if getattr(emb, "shape", None) != getattr(target_embedding, "shape", None):
+                continue                       # 特徵資料損壞或維度不同的帳號略過，不讓登入整個出錯
             dist = round(float(np.linalg.norm(emb - target_embedding)), 3)
             if best_dist is None or dist < best_dist:
                 best_name, best_dist = name, dist

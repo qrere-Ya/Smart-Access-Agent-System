@@ -36,10 +36,27 @@ def _hash(token: str) -> str:
 class LoginGuard:
     """登入失敗計數：連續 MAX_FAILURES 次失敗就鎖 LOCK_SECONDS 秒；成功後歸零。"""
 
-    def __init__(self, max_failures: int = MAX_FAILURES, lock_seconds: float = LOCK_SECONDS):
+    def __init__(self, max_failures: int = MAX_FAILURES, lock_seconds: float = LOCK_SECONDS,
+                 path: Optional[str] = None):
+        """path 不為 None 時，失敗次數與鎖定時間存在檔案裡，關掉後台再開不能重置。"""
         self.max_failures, self.lock_seconds = max_failures, lock_seconds
+        self.path = path
         self.failures = 0
         self._locked_until = 0.0
+        data = _read(path) if path else None
+        if data:
+            try:
+                self.failures = int(data.get("failures", 0))
+                self._locked_until = float(data.get("locked_until", 0.0))
+            except (TypeError, ValueError):
+                self.failures, self._locked_until = 0, 0.0
+
+    def _save(self):
+        if self.path:
+            try:
+                _write({"failures": self.failures, "locked_until": self._locked_until}, self.path)
+            except OSError:
+                pass
 
     def locked_for(self, now: Optional[float] = None) -> float:
         """還要鎖多久（秒）；沒有鎖定回傳 0。"""
@@ -52,15 +69,17 @@ class LoginGuard:
         if self.locked_for(now) > 0:
             return False
         self.failures += 1
-        if self.failures >= self.max_failures:
+        locked = self.failures >= self.max_failures
+        if locked:
             self._locked_until = now + self.lock_seconds
             self.failures = 0
-            return True
-        return False
+        self._save()
+        return locked
 
     def record_success(self):
         self.failures = 0
         self._locked_until = 0.0
+        self._save()
 
 
 class Session:
@@ -85,10 +104,22 @@ def _path(path: Optional[str]) -> str:
 
 
 def _write(data: dict, path: str):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, path)
+    """寫入暫存檔再原子取代；暫存檔名每次不同（後台與助理可能同時寫），Windows 上目標正被讀取時重試幾次。"""
+    tmp = f"{path}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -96,12 +127,22 @@ def _write(data: dict, path: str):
 
 
 def _read(path: str) -> Optional[dict]:
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else None
-    except (OSError, ValueError):
-        return None
+    """讀檔；檔案不存在或內容壞掉回傳 None。Windows 上別的行程正在取代檔案時會暫時讀不到，所以重試幾次，
+    不能因為一次讀取失敗就當成已登出。"""
+    for attempt in range(5):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else None
+        except FileNotFoundError:
+            return None
+        except ValueError:
+            return None
+        except OSError:
+            if attempt == 4:
+                return None
+            time.sleep(0.02)
+    return None
 
 
 def save_session(session: Session, path: Optional[str] = None):
@@ -140,6 +181,11 @@ def touch_token(token: Optional[str], path: Optional[str] = None, now: Optional[
     if verify_token(token, p, now) is None:
         return False
     data = _read(p)
+    if not data:                        # 驗證之後檔案剛好被登出刪掉
+        return False
     data["last_activity"] = time.time() if now is None else now
-    _write(data, p)
+    try:
+        _write(data, p)
+    except OSError:
+        return False
     return True

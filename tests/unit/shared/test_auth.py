@@ -106,3 +106,91 @@ def test_a_new_login_replaces_the_previous_session(path):
     auth.save_session(first, path)
     auth.save_session(second, path)
     assert auth.verify_token(first.token, path) is None and auth.verify_token(second.token, path) == "乙"
+
+
+# --- 鎖定寫入檔案、讀寫更穩 ---
+
+def test_the_lock_survives_a_restart_when_a_file_is_given(tmp_path):
+    lock = str(tmp_path / "lock.json")
+    guard = auth.LoginGuard(max_failures=2, lock_seconds=60, path=lock)
+    guard.record_failure(now=1000)
+    assert guard.record_failure(now=1000) is True
+    reopened = auth.LoginGuard(max_failures=2, lock_seconds=60, path=lock)      # 關掉後台再開
+    assert reopened.locked_for(now=1010) == pytest.approx(50)
+    assert reopened.locked_for(now=1061) == 0
+
+
+def test_the_failure_count_also_survives_a_restart(tmp_path):
+    lock = str(tmp_path / "lock.json")
+    auth.LoginGuard(max_failures=3, path=lock).record_failure(now=1)
+    again = auth.LoginGuard(max_failures=3, path=lock)
+    again.record_failure(now=2)
+    assert again.record_failure(now=3) is True               # 重開前 1 次 + 重開後 2 次 = 3 次
+
+
+def test_a_success_clears_the_saved_lock(tmp_path):
+    lock = str(tmp_path / "lock.json")
+    guard = auth.LoginGuard(max_failures=1, path=lock)
+    guard.record_failure(now=1)
+    guard.record_success()
+    assert auth.LoginGuard(max_failures=1, path=lock).locked_for(now=2) == 0
+
+
+@pytest.mark.parametrize("content", ["壞掉", "[]", '{"failures": "x", "locked_until": null}'])
+def test_a_damaged_lock_file_means_no_lock(tmp_path, content):
+    lock = tmp_path / "lock.json"
+    lock.write_text(content, encoding="utf-8")
+    assert auth.LoginGuard(path=str(lock)).locked_for(now=1) == 0
+
+
+def test_a_temporarily_unreadable_session_file_does_not_log_the_admin_out(path, monkeypatch):
+    session = auth.Session("王小明", now=1000)
+    auth.save_session(session, path)
+    real_open, calls = open, {"n": 0}
+
+    def flaky_open(file, *args, **kwargs):
+        if str(file) == path and calls["n"] < 2:           # 別的行程正在取代檔案：前兩次讀取被拒絕
+            calls["n"] += 1
+            raise PermissionError("檔案被占用")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", flaky_open)
+    assert auth.verify_token(session.token, path, now=1001) == "王小明"
+    assert calls["n"] == 2
+
+
+def test_touch_after_the_file_was_removed_returns_false_instead_of_crashing(path, monkeypatch):
+    session = auth.Session("王小明", now=1000)
+    auth.save_session(session, path)
+    calls = {"n": 0}
+    real_read = auth._read
+
+    def read_then_vanish(p):
+        calls["n"] += 1
+        if calls["n"] == 2:                                 # 驗證通過後、再讀取前，檔案被登出刪掉
+            auth.clear_session(p)
+        return real_read(p)
+
+    monkeypatch.setattr(auth, "_read", read_then_vanish)
+    assert auth.touch_token(session.token, path, now=1001) is False
+    assert not __import__("os").path.exists(path)           # 也沒有把已登出的工作階段重新寫回去
+
+
+def test_two_writers_use_different_temporary_files(path):
+    import os
+
+    names = set()
+    real_replace = os.replace
+
+    def spy(src, dst):
+        names.add(src)
+        return real_replace(src, dst)
+
+    os.replace = spy
+    try:
+        auth.save_session(auth.Session("甲"), path)
+        auth.save_session(auth.Session("乙"), path)
+    finally:
+        os.replace = real_replace
+    assert len(names) == 2
+    assert [f for f in os.listdir(os.path.dirname(path)) if f.endswith(".tmp")] == []
