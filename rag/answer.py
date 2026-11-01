@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 
 from rag import dates, queries, router
+from shared import event_labels
 
 TOP_K = 5
 CANDIDATES = 20
@@ -388,7 +389,8 @@ class Assistant:
                 self._anomaly_rows = rows
                 label = f"{self._span_text(start, end)}　" if rng else "最近的"
                 return self._lines(f"{label}異常事件", [
-                    f"{r['timestamp']}　{r['event_type']}　{r['detail'] or ''}" for r in rows]), notes
+                    f"{r['timestamp']}　{event_labels.label(r['event_type'])}　{r['detail'] or ''}"
+                    for r in rows]), notes
             if plan.data == "roster":
                 people = queries.roster()
                 active = sum(1 for p in people if p["active"])

@@ -76,10 +76,10 @@ def count_persons(frame):
 
     return len(person_boxes), person_boxes
 
-def generate_evidence(full_frame, suspicious_box):
-    """產生尾隨證據拼圖（上：全圖，左下：可疑者全身，右下：頭部）並存檔，回傳檔案路徑。"""
+def generate_evidence(full_frame, suspicious_box, prefix="tailgate"):
+    """產生證據拼圖（prefix 為檔名前綴，預設尾隨）（上：全圖，左下：可疑者全身，右下：頭部）並存檔，回傳檔案路徑。"""
     now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = os.path.join(paths.ANOMALY_DIR, f"tailgate_{now_str}.jpg")
+    save_path = os.path.join(paths.ANOMALY_DIR, f"{prefix}_{now_str}.jpg")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     H, W = full_frame.shape[:2]

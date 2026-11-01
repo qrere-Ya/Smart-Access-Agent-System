@@ -20,7 +20,7 @@ from typing import Optional
 DATA_TOOLS = ("records", "count", "status_list", "summary", "anomalies", "roster")
 STATUS_ALIASES = {"遲到": "遲到", "早退": "早退", "上班": "上班", "下班": "下班",
                   "加班": "下班 (加班)", "下班 (加班)": "下班 (加班)"}
-EVENT_TYPES = ("tailgate",)
+EVENT_TYPES = ("tailgate", "no_scan_walkby")
 _WEEKDAYS = "一二三四五六日"
 _MAX_PERSON_CHARS = 20
 
@@ -74,7 +74,7 @@ def build_prompt(question: str, history: str, today: datetime.date) -> str:
         "anomalies（異常、尾隨事件）、roster（員工名單）；不需要查資料庫填 none。\n"
         "- person：問題裡提到的人名，沒有就留空字串。\n"
         "- status：遲到、早退、上班、下班、加班 其中之一，沒有就留空字串。\n"
-        "- event_type：問異常或尾隨事件時填 tailgate，否則留空字串。\n"
+        "- event_type：問尾隨事件填 tailgate、問經過鏡頭未打卡填 no_scan_walkby、問一般異常留空，否則留空字串。\n"
         "日期由別的程式處理，不用輸出。\n"
         f"{_EXAMPLES}\n"
         f"今天是 {today.isoformat()}（星期{weekday}）。\n"

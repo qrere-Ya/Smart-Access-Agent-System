@@ -5,6 +5,7 @@ terminal_app.py：門禁現場即時人臉辨識主程式。
   - 讀取攝影機畫面，由背景執行緒做人臉偵測、活體偵測、ArcFace 身分比對
   - 辨識成功後寫入打卡紀錄，語音問候並播報當日行事曆
   - 偵測放行瞬間是否有多人（尾隨），畫面顯示橫幅警示並拍照存證
+  - 偵測有人停留在鏡頭前卻未打卡（pass_through），記為 no_scan_walkby 異常事件
   - 以 OpenCV 視窗顯示辨識結果，按 q 離開
 
 串接模組：
@@ -25,6 +26,7 @@ import threading
 import queue
 from access import utils
 from access import security as sec
+from access import pass_through
 from access.audio_player import SmartAudioPlayer
 import traceback
 
@@ -49,6 +51,9 @@ ATTENDANCE_COOLDOWN = 60   # 打卡冷卻時間（秒）
 # 尾隨警示狀態，與個人打卡結果分開存放
 shared_tailgate_ts = None
 TAILGATE_BANNER_HOLD = 3.0  # 尾隨橫幅最少顯示秒數
+
+# 經過未打卡監控（純邏輯，參數見 access/pass_through.py）
+pass_monitor = pass_through.PassThroughMonitor()
 
 # 活體連續判定計數器
 attack_counter = 0  # 連續假臉幀數
@@ -104,12 +109,26 @@ def draw_target(img, x1, y1, x2, y2, color=(255, 200, 0), length=40):
     cv2.line(img, (x2, y2), (x2 - length, y2), color, 3)
     cv2.line(img, (x2, y2), (x2, y2 - length), color, 3)
 
+def _check_pass_through(frame, person_boxes, tailgate_logged):
+    """每幀結尾判斷是否有人經過鏡頭卻未打卡，是就記錄異常事件（失敗不影響辨識）。"""
+    try:
+        if pass_monitor.update(time.time(), person_boxes, frame.shape[1], tailgate_logged):
+            big = max(person_boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+            db.record_anomaly_event(
+                pass_through.EVENT_TYPE, pass_through.EVENT_DETAIL,
+                make_evidence=lambda: sec.generate_evidence(frame, big, prefix=pass_through.EVENT_TYPE))
+    except Exception as e:
+        print(f"[terminal_app][WARN] 經過未打卡判斷或寫入失敗: {e}")
+
+
 def analyze_in_background(frame_copy, detector):
     """單幀完整分析：人臉偵測 → 活體 → 身分比對與打卡 → 尾隨偵測，結果寫入共用狀態。"""
     global is_analyzing, shared_face_data, cooldown_dict, voice_history, last_seen_dict
     global attack_counter, real_counter
+    person_boxes, tailgate_logged = [], False  # 供 finally 的經過未打卡判斷使用
 
     try:
+        _, person_boxes = sec.count_persons(frame_copy)
         # 1. 臉部偵測
         rgb_img, detections = vc.face_detect_bgr(frame_copy, detector)
         result_packet = None
@@ -170,6 +189,8 @@ def analyze_in_background(frame_copy, detector):
 
                 db_name, _ = db.recognize_face(face_DNA)
                 emp_id = db.get_employee_id(db_name) if db_name not in ["Unknown", "Empty DB"] else "N/A"
+                if db_name not in ["Unknown", "Empty DB"]:
+                    pass_monitor.note_scan(time.time())
 
                 display_text = "掃描中..."
                 color_bgr = (0, 255, 255)
@@ -231,8 +252,9 @@ def analyze_in_background(frame_copy, detector):
                 }
 
             # 5. 尾隨偵測（YOLO）：只拍照存證並記錄時間，不覆蓋當事人的打卡結果
-            person_count, person_boxes = sec.count_persons(frame_copy)
+            person_count = len(person_boxes)
             if person_count >= 2:
+                tailgate_logged = True
                 try:
                     # 連續尾隨合併成一筆；只有新增事件時才產生證據照片
                     db.record_anomaly_event(
@@ -257,6 +279,7 @@ def analyze_in_background(frame_copy, detector):
         print(f"[Analyze Error] 發生錯誤: {e}")
         traceback.print_exc()
     finally:
+        _check_pass_through(frame_copy, person_boxes, tailgate_logged)
         is_analyzing = False
 
 def main():
