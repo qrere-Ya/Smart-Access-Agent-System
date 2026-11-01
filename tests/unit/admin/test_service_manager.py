@@ -319,3 +319,20 @@ def test_local_ip_falls_back_to_loopback_when_everything_fails(module, monkeypat
 
     monkeypatch.setattr(socket, "gethostbyname_ex", boom)
     assert module.get_local_ip_offline() == "127.0.0.1"
+
+
+# ---------- 登入代碼只交給助理視窗 ----------
+
+def test_the_session_token_is_given_only_to_the_assistant_window(monkeypatch):
+    from shared import auth
+
+    monkeypatch.setenv(auth.TOKEN_ENV, "inherited-by-mistake")
+    assert auth.TOKEN_ENV not in sm._python_child_env()           # 其他子行程拿不到
+    assert sm._python_child_env("abc")[auth.TOKEN_ENV] == "abc"
+
+
+def test_the_assistant_window_is_started_with_the_token(monkeypatch, fake_popen):
+    from shared import auth
+
+    sm.start_assistant_window(lambda line: None, "my-token")
+    assert fake_popen.instances[-1].kwargs["env"][auth.TOKEN_ENV] == "my-token"

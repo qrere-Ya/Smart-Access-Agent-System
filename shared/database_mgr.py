@@ -272,6 +272,41 @@ def recognize_face(target_embedding, threshold=1.0):
     return (best_name, best_dist) if best_dist < threshold else ("Unknown", best_dist)
 
 
+# --- 管理者（後台登入用） ---
+
+ROLE_ADMIN = "admin"
+ROLE_EMPLOYEE = "employee"
+
+
+def list_admins():
+    """啟用中的管理者清單（只有編號、姓名、員工編號，不含人臉特徵）。"""
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        rows = conn_db.execute(
+            "SELECT id, name, employee_id FROM Users WHERE role = ? AND (is_active = 1 OR is_active IS NULL) "
+            "ORDER BY id", (ROLE_ADMIN,)).fetchall()
+    return [{"id": r[0], "name": r[1], "employee_id": r[2]} for r in rows]
+
+
+def recognize_admin(target_embedding, threshold=0.8):
+    """
+    1:N 比對，只和啟用中的管理者比。回傳 (姓名, 距離)；距離不小於門檻回傳 "Unknown"，
+    沒有任何管理者回傳 "No Admin"。門檻比打卡用的 recognize_face 嚴格。
+    """
+    best_name, best_dist = None, None
+    with closing(sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5)) as conn_db:
+        for name, emb in conn_db.execute(
+                "SELECT name, embedding FROM Users WHERE role = ? AND (is_active = 1 OR is_active IS NULL)",
+                (ROLE_ADMIN,)):
+            if getattr(emb, "shape", None) != getattr(target_embedding, "shape", None):
+                continue                       # 特徵資料損壞或維度不同的帳號略過，不讓登入整個出錯
+            dist = round(float(np.linalg.norm(emb - target_embedding)), 3)
+            if best_dist is None or dist < best_dist:
+                best_name, best_dist = name, dist
+    if best_dist is None:
+        return ("No Admin", 99.9)
+    return (best_name, best_dist) if best_dist < threshold else ("Unknown", best_dist)
+
+
 # --- 異常事件 ---
 
 _EVIDENCE_NAME = re.compile(r"^(?P<type>[a-z]+)_(?P<d>\d{8})_(?P<t>\d{6})\.jpg$")

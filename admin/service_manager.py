@@ -21,7 +21,7 @@ import subprocess
 import threading
 import time
 
-from shared import paths
+from shared import auth, paths
 
 _PROJECT_ROOT = paths.PROJECT_ROOT
 
@@ -142,7 +142,7 @@ def _start_output_reader_thread(proc, on_line, prefix=""):
 
 
 # --- 子行程啟動設定 ---
-def _python_child_env():
+def _python_child_env(session_token=None):
     """
     子行程的環境變數：
       - PYTHONIOENCODING=utf-8：輸出接 pipe 時預設會用 cp950，印 emoji 會出錯
@@ -151,6 +151,9 @@ def _python_child_env():
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    env.pop(auth.TOKEN_ENV, None)          # 別讓別的子行程繼承到登入代碼
+    if session_token:
+        env[auth.TOKEN_ENV] = session_token
     return env
 
 
@@ -212,15 +215,18 @@ def assistant_window_running():
     return False
 
 
-def start_assistant_window(on_output_line):
-    """另開一個行程顯示管理者助理聊天視窗（模型在那個行程裡載入，不拖慢後台）。回傳 (成功與否, 訊息)。"""
+def start_assistant_window(on_output_line, session_token=None):
+    """
+    另開一個行程顯示管理者助理聊天視窗（模型在那個行程裡載入，不拖慢後台）。回傳 (成功與否, 訊息)。
+    session_token 是後台登入的工作階段代碼，用環境變數交給視窗；沒有有效代碼時視窗會拒絕開啟。
+    """
     if assistant_window_running():
         return False, "管理者助理視窗已經開著了，請到工作列找它。"
     python_exe = _project_python_exe()
     try:
         proc = subprocess.Popen(  # noqa: S603
             [python_exe, "-u", "-m", "rag.chat_window"], cwd=_PROJECT_ROOT,
-            env=_python_child_env(),
+            env=_python_child_env(session_token),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             encoding="utf-8", errors="replace",
             **_hidden_console_popen_kwargs(),
