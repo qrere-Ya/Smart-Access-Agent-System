@@ -13,7 +13,8 @@ import pytest
 pytestmark = pytest.mark.integration
 
 ONES = np.ones(4, dtype=np.float32)
-FACE = {"x1": 10, "y1": 10, "x2": 90, "y2": 90}
+FACE = {"x1": 100, "y1": 100, "x2": 260, "y2": 280, "left_eye": (140, 150), "right_eye": (220, 150),
+        "nose": (180, 190), "left_lip": (150, 230), "right_lip": (210, 230)}
 
 
 class FakeCamera:
