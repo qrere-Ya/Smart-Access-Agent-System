@@ -6,7 +6,7 @@ database_mgr.py：SQLite 資料層。
     AnomalyEvents（異常事件，如尾隨；只存照片路徑，不存照片）
   - 員工註冊（姓名或員工編號重複即拒絕）、1:N 人臉比對
   - 打卡邏輯：依時間窗判斷上班、遲到、早退、下班、加班
-  - 異常事件的寫入、查詢，以及把舊的證據照片一次匯入事件表
+  - 異常事件的寫入（連續同類型事件於時間窗內合併成一筆，保留次數與起訖時間）、查詢，以及把舊的證據照片一次匯入事件表
 
 串接模組：
   - terminal_app：人臉比對、打卡、行事曆、記錄異常事件
@@ -56,6 +56,9 @@ AFTERNOON_RESUME = "16:30:00"
 SHIFT_EARLY_LEAVE_END = "17:40:00"
 SHIFT_END = "18:00:00"
 
+# 同類型異常事件與前一筆相隔不超過此秒數，就合併成一筆
+ANOMALY_MERGE_SECONDS = 30
+
 def init_db():
     """初始化資料庫：建立員工表、考勤表、行事曆表與 RAG 稽核表"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -101,6 +104,12 @@ def init_db():
                     event_type TEXT NOT NULL,
                     detail TEXT,
                     evidence_path TEXT)""")
+    # 舊資料庫補上合併用欄位：end_timestamp（最後一次發生）、event_count（合併次數）
+    existing_anomaly_columns = {row[1] for row in conn_db.execute("PRAGMA table_info(AnomalyEvents)").fetchall()}
+    if "end_timestamp" not in existing_anomaly_columns:
+        conn_db.execute("ALTER TABLE AnomalyEvents ADD COLUMN end_timestamp DATETIME")
+    if "event_count" not in existing_anomaly_columns:
+        conn_db.execute("ALTER TABLE AnomalyEvents ADD COLUMN event_count INTEGER DEFAULT 1")
     conn_db.execute("CREATE INDEX IF NOT EXISTS idx_anomaly_timestamp ON AnomalyEvents(timestamp)")
 
     conn_db.commit()
@@ -323,9 +332,48 @@ def add_anomaly_event(event_type, evidence_path=None, detail="", timestamp=None)
         return cur.lastrowid
 
 
+_MERGE_MARK = "（連續 "
+_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _merged_detail(detail, count, first_ts, last_ts):
+    """在原說明後加上合併資訊（次數與起訖時間）；已有合併資訊時先去掉舊的。"""
+    base = (detail or "").split(_MERGE_MARK)[0]
+    return f"{base}{_MERGE_MARK}{count} 次，{first_ts[11:]} ~ {last_ts[11:]}）"
+
+
+def record_anomaly_event(event_type, detail="", make_evidence=None, merge_window=ANOMALY_MERGE_SECONDS):
+    """
+    記錄異常事件；同類型事件與前一筆的最後發生時間相隔不超過 merge_window 秒時，合併進前一筆
+    （次數加一、更新結束時間與說明），不再新增、也不再呼叫 make_evidence 產生新證據照片。
+    make_evidence 為無參數函式，只在需要新增一筆時才呼叫，回傳證據路徑。回傳 (事件編號, 是否為合併)。
+    """
+    now = datetime.datetime.now()
+    now_str = now.strftime(_TS_FORMAT)
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        last = conn_db.execute(
+            "SELECT id, timestamp, COALESCE(end_timestamp, timestamp), COALESCE(event_count, 1), detail "
+            "FROM AnomalyEvents WHERE event_type = ? ORDER BY COALESCE(end_timestamp, timestamp) DESC, id DESC LIMIT 1",
+            (event_type,)).fetchone()
+        if last and merge_window > 0:
+            try:
+                gap = (now - datetime.datetime.strptime(last[2], _TS_FORMAT)).total_seconds()
+            except ValueError:
+                gap = None
+            if gap is not None and gap <= merge_window:
+                count = last[3] + 1
+                conn_db.execute(
+                    "UPDATE AnomalyEvents SET end_timestamp = ?, event_count = ?, detail = ? WHERE id = ?",
+                    (now_str, count, _merged_detail(detail or last[4], count, last[1], now_str), last[0]))
+                conn_db.commit()
+                return last[0], True
+    evidence_path = make_evidence() if make_evidence else None
+    return add_anomaly_event(event_type, evidence_path, detail), False
+
+
 def list_anomaly_events(start=None, end=None, event_type=None, limit=200):
     """
-    查詢異常事件，新的在前，回傳字典清單。
+    查詢異常事件，新的在前，回傳字典清單（end_timestamp 為最後一次發生時間，event_count 為合併次數）。
     start、end 為 "YYYY-MM-DD" 或完整時間字串（含頭尾；只給日期時 end 涵蓋當天整天）。
     """
     clauses, params = [], []
@@ -341,10 +389,11 @@ def list_anomaly_events(start=None, end=None, event_type=None, limit=200):
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
         rows = conn_db.execute(
-            f"SELECT id, timestamp, event_type, detail, evidence_path FROM AnomalyEvents {where} "  # noqa: S608
+            "SELECT id, timestamp, event_type, detail, evidence_path, "  # noqa: S608
+            f"COALESCE(end_timestamp, timestamp), COALESCE(event_count, 1) FROM AnomalyEvents {where} "
             "ORDER BY timestamp DESC, id DESC LIMIT ?", (*params, limit)).fetchall()
-    return [{"id": r[0], "timestamp": r[1], "event_type": r[2], "detail": r[3], "evidence_path": r[4]}
-            for r in rows]
+    return [{"id": r[0], "timestamp": r[1], "event_type": r[2], "detail": r[3], "evidence_path": r[4],
+             "end_timestamp": r[5], "event_count": r[6]} for r in rows]
 
 
 def import_anomaly_photos(folder=None):

@@ -349,7 +349,7 @@ class Assistant:
         if found.status == "ambiguous":
             names = "、".join(f"{n}" for n, _ in found.candidates)
             return None, f"你是指「{names}」嗎？請直接回覆正確的姓名。"
-        if self._last_person:
+        if self._last_person and not plan.person:  # 提到了名單外的人就不能沿用上一位，否則會把別人的資料當成他的
             return self._last_person, f"這題沒有提到人，沿用上一題的對象：{self._last_person}。"
         shown = plan.person or "你提到的人"
         return None, f"員工名單裡找不到「{shown}」。請確認姓名，或問「公司有哪些員工」。"
