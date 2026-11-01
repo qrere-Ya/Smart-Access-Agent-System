@@ -18,7 +18,8 @@ def test_event_is_stored_with_its_details(db):
     event_id = dbm.add_anomaly_event("tailgate", "C:/x/tailgate_1.jpg", "畫面有 2 人", timestamp="2026-10-14 09:15:00")
     [event] = dbm.list_anomaly_events()
     assert event == {"id": event_id, "timestamp": "2026-10-14 09:15:00", "event_type": "tailgate",
-                     "detail": "畫面有 2 人", "evidence_path": "C:/x/tailgate_1.jpg"}
+                     "detail": "畫面有 2 人", "evidence_path": "C:/x/tailgate_1.jpg",
+                     "end_timestamp": "2026-10-14 09:15:00", "event_count": 1}
 
 
 def test_timestamp_defaults_to_now(db, clock):
@@ -106,3 +107,76 @@ def test_database_without_the_table_is_upgraded(tmp_path, monkeypatch):
     dbm.init_db()
     assert dbm.list_anomaly_events() == []
     assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM Attendance").fetchone()[0] == 1
+
+
+# --- 連續事件合併 ---
+
+def _record(clock, h, m, s, event_type="tailgate", detail="畫面有 2 人", window=30, made=None):
+    clock(2026, 10, 14, h, m, s)
+    made = made if made is not None else []
+
+    def _evidence():
+        made.append(1)
+        return f"C:/x/{event_type}_{len(made)}.jpg"
+
+    return dbm.record_anomaly_event(event_type, detail, make_evidence=_evidence, merge_window=window)
+
+
+def test_consecutive_events_within_window_merge_into_one(db, clock):
+    made = []
+    first_id, merged1 = _record(clock, 9, 15, 0, made=made)
+    second_id, merged2 = _record(clock, 9, 15, 10, made=made)
+    third_id, merged3 = _record(clock, 9, 15, 25, made=made)
+    assert (merged1, merged2, merged3) == (False, True, True) and first_id == second_id == third_id
+    [event] = dbm.list_anomaly_events()
+    assert event["timestamp"] == "2026-10-14 09:15:00" and event["end_timestamp"] == "2026-10-14 09:15:25"
+    assert event["event_count"] == 3
+    assert event["detail"] == "畫面有 2 人（連續 3 次，09:15:00 ~ 09:15:25）"
+    assert event["evidence_path"] == "C:/x/tailgate_1.jpg" and len(made) == 1  # 合併時不再產生證據照片
+
+
+def test_window_slides_with_the_last_occurrence(db, clock):
+    # 每次間隔都小於窗，即使總長超過窗也屬同一次尾隨
+    for s in (0, 20, 40, 59):
+        _record(clock, 9, 15, s)
+    [event] = dbm.list_anomaly_events()
+    assert event["event_count"] == 4 and event["end_timestamp"] == "2026-10-14 09:15:59"
+
+
+def test_gap_longer_than_window_starts_a_new_event(db, clock):
+    _record(clock, 9, 15, 0)
+    _, merged = _record(clock, 9, 16, 0)
+    assert merged is False
+    assert [e["event_count"] for e in dbm.list_anomaly_events()] == [1, 1]
+
+
+def test_different_types_do_not_merge(db, clock):
+    _record(clock, 9, 15, 0, event_type="tailgate")
+    _, merged = _record(clock, 9, 15, 5, event_type="other")
+    assert merged is False and len(dbm.list_anomaly_events()) == 2
+
+
+def test_merge_does_not_touch_unrelated_older_events(db, clock):
+    dbm.add_anomaly_event("tailgate", None, "舊的", timestamp="2026-10-14 08:00:00")
+    _, merged = _record(clock, 9, 15, 0)
+    assert merged is False and len(dbm.list_anomaly_events()) == 2
+
+
+def test_zero_window_disables_merging(db, clock):
+    _record(clock, 9, 15, 0, window=0)
+    _, merged = _record(clock, 9, 15, 1, window=0)
+    assert merged is False and len(dbm.list_anomaly_events()) == 2
+
+
+def test_old_database_gets_merge_columns_and_old_rows_read_as_single(db):
+    con = sqlite3.connect(db)
+    con.execute("DROP TABLE AnomalyEvents")
+    con.execute("CREATE TABLE AnomalyEvents (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME NOT NULL, "
+                "event_type TEXT NOT NULL, detail TEXT, evidence_path TEXT)")
+    con.execute("INSERT INTO AnomalyEvents (timestamp, event_type, detail) "
+                "VALUES ('2026-10-14 09:00:00','tailgate','舊')")
+    con.commit()
+    con.close()
+    dbm.init_db()
+    [event] = dbm.list_anomaly_events()
+    assert event["event_count"] == 1 and event["end_timestamp"] == "2026-10-14 09:00:00"
