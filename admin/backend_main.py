@@ -38,6 +38,8 @@ from admin import console_panel
 from admin import dashboard_stats
 from admin import account_admin
 from admin import login_window
+from admin import report_panel
+from admin import notification_bar
 from shared import auth
 from shared import paths
 
@@ -120,6 +122,8 @@ class BackendManagerApp:
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", WARNING, self.open_qr_registration),
             ("🤖", "管理者助理", "用聊天查公司文件與法規、考勤紀錄、異常事件", PRIMARY,
              self.open_assistant_window),
+            ("📋", "每日出勤報告", "指定日期彙整準時、遲到、早退、缺勤，並可匯出 CSV", INFO,
+             lambda: report_panel.open_report_window(self.root)),
         ]
         for idx, (icon, title, desc, style, cmd) in enumerate(modules):
             row, col = divmod(idx, 2)
@@ -237,6 +241,8 @@ class BackendManagerApp:
     def teardown(self):
         """清掉整個後台畫面但保留同一個主視窗（同一個行程反覆建立 ttkbootstrap 視窗會讓 Tk 中止）。"""
         self._alive = False
+        if getattr(self, "notification_bar", None) is not None:
+            self.notification_bar.stop()
         for event in ("<Key>", "<Button>", "<Motion>"):
             self.root.unbind_all(event)
         for child in self.root.winfo_children():
@@ -260,6 +266,8 @@ class BackendManagerApp:
 
         self.sys_status_var = ttk.StringVar(value="系統資源監控準備中…")
         ttk.Label(footer, textvariable=self.sys_status_var, font=("Consolas", 9), bootstyle=SECONDARY).pack(side=LEFT)
+        self.notification_bar = notification_bar.NotificationBar(footer)   # 異常通知：紅點與彈窗
+        self.notification_bar.frame.pack(side=RIGHT)
         self._tick_system_status()
 
     def _tick_system_status(self):
