@@ -29,7 +29,7 @@ class ReportPanel(ttk.Frame):
         super().__init__(master, padding=20)
         self.report = None
         ttk.Label(self, text="📋 每日出勤報告", font=("微軟正黑體", 16, "bold"), bootstyle=PRIMARY).pack(anchor=W)
-        ttk.Label(self, text="缺勤＝當天完全沒有打卡紀錄；系統沒有假日與請假資料，週末與請假也會列為缺勤。",
+        ttk.Label(self, text="缺勤＝非假日、非請假且當天完全沒有打卡紀錄；假日與請假資料由資料庫維護。",
                   font=("微軟正黑體", 9), bootstyle=SECONDARY).pack(anchor=W, pady=(2, 10))
 
         bar = ttk.Frame(self)
