@@ -408,10 +408,10 @@ def list_admins():
     return [{"id": r[0], "name": r[1], "employee_id": r[2]} for r in rows]
 
 
-def recognize_admin(target_embedding, threshold=0.8):
+def recognize_admin(target_embedding, threshold=1.0):
     """
     1:N 比對，只和啟用中的管理者比。回傳 (姓名, 距離)；距離不小於門檻回傳 "Unknown"，
-    沒有任何管理者回傳 "No Admin"。門檻比打卡用的 recognize_face 嚴格。
+    沒有任何管理者回傳 "No Admin"。這是單幀門檻（與打卡相同）；後台登入另外要求連續幀的平均距離更小，見 face_login。
     """
     best_name, best_dist = None, None
     with closing(sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5)) as conn_db:

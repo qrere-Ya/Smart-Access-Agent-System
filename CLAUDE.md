@@ -15,7 +15,7 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
 - 環境：Windows、Python 3.11（`.venv/`），依賴見 `requirements/main.txt`，完整版本鎖定在 `requirements/lock.txt`（安裝順序見 main.txt 檔頭；retinaface 要另外用 `--no-deps` 安裝）。
 - 測試：`python -m pytest tests`（單元測試，不需要模型、GPU、攝影機或任何服務；用臨時的 `runtime/`，不會碰真實資料）。CI 使用較輕量的 `requirements/test.txt`。另有只在本機跑的整合測試 `python -m pytest -m integration`（真模型、真法規、真服務）與回歸測試 `python -m pytest -m regression`（對照 `tests/regression/baseline.json`；有意更新模型後用 `UPDATE_BASELINE=1` 重產）；兩者預設不執行。
 - 金鑰一律走環境變數（如 `NVIDIA_API_KEY`），不寫進檔案。`models/`、`data/`、`runtime/` 不進版控。
-- 資安現況：整個後台啟動要先用人臉登入（只比對角色為 admin 的帳號，距離 < 0.8，連續 5 幀活體分數 ≥ 0.90；失敗 5 次鎖 60 秒；閒置 15 分鐘登出；助理視窗只接受後台給的有效代碼）。限制：活體模型對照片與螢幕翻拍的防禦不夠強（EER 約 8% 到 14%），且擋不住能直接讀寫檔案與資料庫的人；門禁終端機、QR 註冊伺服器本身沒有登入。不要宣稱已經安全。
+- 資安現況：整個後台啟動要先用人臉登入（只比對角色為 admin 的帳號，連續 5 幀單幀距離 < 1.0 且平均距離 < 0.9，活體分數 ≥ 0.90，先確認是正面臉才比對；失敗 5 次鎖 60 秒；閒置 15 分鐘登出；助理視窗只接受後台給的有效代碼）。限制：活體模型對照片與螢幕翻拍的防禦不夠強（EER 約 8% 到 14%），且擋不住能直接讀寫檔案與資料庫的人；門禁終端機、QR 註冊伺服器本身沒有登入。不要宣稱已經安全。
 
 ## 2. 修改程式碼的流程
 

@@ -4,7 +4,8 @@ login_window.py：管理後台的人臉登入畫面（ttkbootstrap）。
 主要功能：
   - 開鏡頭預覽，背景執行緒逐幀判斷（face_login.FaceLoginVerifier），畫面定時取最新結果顯示提示與進度
   - 通過就建立工作階段（auth.Session）並寫入工作階段檔，後台才會打開；關閉視窗代表放棄登入
-  - 失敗與鎖定會寫入異常事件（login_failed、login_locked）；失敗 5 次鎖 60 秒，倒數期間不判斷
+  - 失敗與鎖定會寫入異常事件（login_failed、login_locked）；失敗 5 次鎖 60 秒，倒數期間不判斷；
+    兩次計入的失敗至少相隔數秒，同一次站在鏡頭前的連續不過只算一次（也只寫一筆事件）
   - 還沒有任何管理者時進入「初次設定」：在本機從啟用中的員工挑一位設為第一位管理者，再用他的臉登入
   - 鏡頭打不開（例如被門禁終端機占用）會說明原因並提供重試；視窗關閉時釋放鏡頭與視覺模型
   鏡頭與視覺函式可由外部傳入，測試不需要真的鏡頭。
@@ -81,7 +82,7 @@ class LoginWindow(ttk.Toplevel):
         self.resizable(False, False)
         self.session = None
         self._camera_factory, self._vision_factory = camera_factory, vision_factory
-        self._guard = guard or auth.LoginGuard(path=paths.LOGIN_LOCK_PATH)
+        self._guard = guard or auth.LoginGuard(path=paths.LOGIN_LOCK_PATH, min_interval=auth.FAILURE_INTERVAL_SECONDS)
         self._events = queue.Queue()
         self._stop = threading.Event()
         self._generation = 0
@@ -200,11 +201,14 @@ class LoginWindow(ttk.Toplevel):
         self.bar.configure(value=step.progress * 100)
         self.status.configure(text=step.message, bootstyle=SUCCESS if step.status == face_login.SUCCESS else PRIMARY)
         if step.distance is not None:
-            print(f"[登入] 狀態 {step.status}，與管理者的距離 {step.distance}")
+            print(f"[登入] 狀態 {step.status}，與管理者的距離 {step.distance}，姿勢 {step.pose}")
+        elif step.status == face_login.NOT_FRONTAL:
+            print(f"[登入] 還不是正面：{step.message}，姿勢 {step.pose}")
         if step.status == face_login.FAILED:
-            db.add_anomaly_event("login_failed", None, "管理者人臉登入失敗（不是活體，或不是管理者）")
-            if self._guard.record_failure():
-                db.add_anomaly_event("login_locked", None, f"連續失敗，登入鎖定 {int(auth.LOCK_SECONDS)} 秒")
+            if self._guard.counts_now():
+                db.add_anomaly_event("login_failed", None, "管理者人臉登入失敗（不是活體，或不是管理者）")
+                if self._guard.record_failure():
+                    db.add_anomaly_event("login_locked", None, f"連續失敗，登入鎖定 {int(auth.LOCK_SECONDS)} 秒")
         elif step.status == face_login.SUCCESS:
             self._guard.record_success()
             self.session = auth.Session(step.admin_name)

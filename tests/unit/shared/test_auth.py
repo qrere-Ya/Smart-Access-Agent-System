@@ -194,3 +194,23 @@ def test_two_writers_use_different_temporary_files(path):
         os.replace = real_replace
     assert len(names) == 2
     assert [f for f in os.listdir(os.path.dirname(path)) if f.endswith(".tmp")] == []
+
+
+def test_failures_closer_than_the_minimum_interval_count_only_once():
+    guard = auth.LoginGuard(max_failures=3, lock_seconds=60, min_interval=5)
+    assert guard.counts_now(100) is True
+    guard.record_failure(100)
+    for t in (100.1, 101, 104.9):                    # 同一次嘗試裡連續不過
+        assert guard.counts_now(t) is False
+        assert guard.record_failure(t) is False
+    assert guard.failures == 1
+    guard.record_failure(105)
+    assert guard.record_failure(110) is True         # 每隔 5 秒才算一次，第 3 次才鎖
+    assert guard.locked_for(110) > 0
+
+
+def test_success_clears_the_minimum_interval():
+    guard = auth.LoginGuard(max_failures=3, min_interval=5)
+    guard.record_failure(100)
+    guard.record_success()
+    assert guard.counts_now(100.5) is True
