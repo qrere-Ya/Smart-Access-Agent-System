@@ -130,7 +130,9 @@ def test_duplicate_registration_is_rejected_and_keeps_the_token(client, fake_fac
     assert token in ws.valid_tokens
 
 
-def test_internal_errors_are_reported_as_json(client, fake_face):
+def test_internal_errors_do_not_leak_exception_details(client, fake_face):
     fake_face["error"] = RuntimeError("模型壞了")
     reply = post_form(client, issue_token(client))
-    assert reply.get_json()["status"] == "error" and "模型壞了" in reply.get_json()["message"]
+    body = reply.get_json()
+    assert reply.status_code == 500 and body["status"] == "error"
+    assert "模型壞了" not in body["message"] and "RuntimeError" not in body["message"]
