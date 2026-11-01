@@ -7,10 +7,12 @@ backend_main.py：門禁系統管理後台主程式（Tkinter / ttkbootstrap）�
   - 員工帳號管理：列出、停用、啟用、刪除員工
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
   - 管理者助理：另開聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
+  - 登入保護：啟動先用人臉登入（login_window），閒置 15 分鐘或按「登出」就回到登入畫面
   只負責畫面，實際工作轉發給其他模組。
 
 串接模組：
   - service_manager：啟動、停止、監控背景服務與 IP 偵測
+  - login_window、auth：人臉登入、工作階段與閒置逾時
   - console_panel：內建終端機文字框
   - dashboard_stats：儀表板統計查詢
   - account_admin：帳號管理資料庫操作
@@ -22,7 +24,9 @@ from ttkbootstrap.constants import (
 )
 import tkinter as tk
 from tkinter import messagebox
+import gc
 import os
+import time
 import datetime
 from shared import database_mgr as db
 import pyqrcode
@@ -33,6 +37,8 @@ from admin import service_manager
 from admin import console_panel
 from admin import dashboard_stats
 from admin import account_admin
+from admin import login_window
+from shared import auth
 from shared import paths
 
 ANOMALY_DIR = paths.ANOMALY_DIR
@@ -41,8 +47,12 @@ ANOMALY_DIR = paths.ANOMALY_DIR
 class BackendManagerApp:
     """管理後台主視窗：建立主選單並開啟各功能視窗。"""
 
-    def __init__(self, root):
+    def __init__(self, root, session=None):
         self.root = root
+        self.session = session        # 登入後的工作階段；None 代表沒有啟用登入保護（測試或單獨開發時）
+        self.relogin = False          # 登出或閒置逾時後，main() 會再顯示登入畫面
+        self._last_touch = 0.0
+        self._alive = True            # teardown 之後，定時更新的函式不再動舊畫面
         self.root.title("智慧門禁 - 戰情控制中心")
         self.root.geometry("640x640")
         self.root.minsize(580, 580)
@@ -55,6 +65,7 @@ class BackendManagerApp:
         db.init_db()
 
         self._build_main_menu()
+        self._start_session_watch()
 
         # 關閉視窗時詢問是否一併停止背景服務
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
@@ -81,6 +92,12 @@ class BackendManagerApp:
         self.date_var = ttk.StringVar(value="----/--/--")
         ttk.Label(clock_col, textvariable=self.clock_var, font=("Consolas", 16, "bold"), bootstyle=LIGHT).pack(anchor=E)
         ttk.Label(clock_col, textvariable=self.date_var, font=("微軟正黑體", 9), bootstyle=SECONDARY).pack(anchor=E)
+        if self.session is not None:
+            who = ttk.Frame(clock_col)
+            who.pack(anchor=E, pady=(4, 0))
+            ttk.Label(who, text=f"👤 {self.session.admin_name}", font=("微軟正黑體", 9), bootstyle=INFO).pack(side=LEFT)
+            ttk.Button(who, text="登出", bootstyle=(SECONDARY, OUTLINE), width=5,
+                       command=lambda: self.logout()).pack(side=LEFT, padx=(8, 0))
         self._tick_clock()
 
         ttk.Separator(self.root, bootstyle=SECONDARY).pack(fill=X, padx=25)
@@ -179,9 +196,56 @@ class BackendManagerApp:
         b = round(b1 + (b2 - b1) * ratio)
         return f"#{r:02x}{g:02x}{b:02x}"
 
+    # --- 登入保護：活動延長期限、過期或登出就回到登入畫面 ---
+    def _start_session_watch(self):
+        if self.session is None:
+            return
+        for event in ("<Key>", "<Button>", "<Motion>"):
+            self.root.bind_all(event, self._note_activity, add="+")
+        self._tick_session()
+
+    def _note_activity(self, _event=None):
+        """有操作就延長工作階段；每 5 秒最多寫一次檔。"""
+        now = time.time()
+        if self.session is None or now - self._last_touch < 5:
+            return
+        self._last_touch = now
+        self.session.touch(now)
+        auth.touch_token(self.session.token)
+
+    def _tick_session(self):
+        if self.session is None or not self._alive or not self.root.winfo_exists():
+            return
+        # 以工作階段檔為準：助理視窗那邊有操作也會延長，檔案被刪或過期就登出
+        if auth.verify_token(self.session.token) is None:
+            self.logout("閒置超過 15 分鐘，已自動登出。")
+            return
+        self.root.after(1000, self._tick_session)
+
+    def logout(self, reason=None):
+        """登出：關掉助理視窗、清除工作階段，結束主迴圈後由 main() 清掉畫面並重新登入（背景服務不受影響）。"""
+        if self.session is None:
+            return
+        service_manager.stop_assistant_window()
+        auth.clear_session()
+        self.session = None
+        self.relogin = True
+        if reason:
+            print(f"[後台] {reason}")
+        self.root.quit()
+
+    def teardown(self):
+        """清掉整個後台畫面但保留同一個主視窗（同一個行程反覆建立 ttkbootstrap 視窗會讓 Tk 中止）。"""
+        self._alive = False
+        for event in ("<Key>", "<Button>", "<Motion>"):
+            self.root.unbind_all(event)
+        for child in self.root.winfo_children():
+            child.destroy()
+        self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
+
     def _tick_clock(self):
         """每秒更新頂部時鐘；主視窗已銷毀就停止排程"""
-        if not self.root.winfo_exists():
+        if not self._alive or not self.root.winfo_exists():
             return
         now = datetime.datetime.now()
         self.clock_var.set(now.strftime("%H:%M:%S"))
@@ -200,7 +264,7 @@ class BackendManagerApp:
 
     def _tick_system_status(self):
         """每 3 秒讀取一次 CPU/RAM 顯示在狀態列；讀不到（沒裝 psutil）就顯示提示"""
-        if not self.root.winfo_exists():
+        if not self._alive or not self.root.winfo_exists():
             return
         res = dashboard_stats.get_system_resources()
         if res is not None:
@@ -289,6 +353,10 @@ class BackendManagerApp:
             if messagebox.askyesno("確認關閉",
                                    "偵測到有後端服務仍在執行中，要一併停止嗎？\n（選「否」會讓它們繼續在背景執行）"):
                 service_manager.stop_all_services()
+        if self.session is not None:
+            service_manager.stop_assistant_window()
+            auth.clear_session()
+            self.session = None
         self.root.destroy()
 
     # --- 視窗 1：營運狀態與尾隨監控 ---
@@ -395,7 +463,8 @@ class BackendManagerApp:
                   bootstyle=PRIMARY).pack(anchor=W, pady=(0, 5))
         ttk.Label(
             frame,
-            text="停用的帳號會立刻無法再刷臉打卡（系統判定為查無資料）；刪除不會影響已經留存的打卡歷史紀錄。",
+            text="停用的帳號會立刻無法再刷臉打卡；刪除不會影響已經留存的打卡歷史紀錄。"
+                 "管理者可以用人臉登入這個後台，系統一定要保留至少一位管理者。",
             font=("微軟正黑體", 9), bootstyle=SECONDARY,
         ).pack(anchor=W, pady=(0, 10))
 
@@ -469,7 +538,26 @@ class BackendManagerApp:
                    command=do_deactivate).pack(side=LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="▶️ 啟用所選", bootstyle=(SUCCESS, OUTLINE),
                    command=do_activate).pack(side=LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="🗑️ 刪除所選", bootstyle=(DANGER, OUTLINE), command=do_delete).pack(side=LEFT)
+        ttk.Button(btn_frame, text="🗑️ 刪除所選", bootstyle=(DANGER, OUTLINE),
+                   command=do_delete).pack(side=LEFT, padx=(0, 8))
+
+        def set_role(role):
+            ids = require_selection()
+            operator = self.session.admin_name if self.session is not None else None
+            problems = []
+            for uid in ids:
+                ok, msg = account_admin.set_role(uid, role, operator=operator)
+                if not ok:
+                    problems.append(f"{tree.item(str(uid), 'values')[1]}：{msg}")
+            if ids:
+                refresh()
+            if problems:
+                messagebox.showwarning("無法設定", chr(10).join(problems), **self._msgbox_parent("admin_win"))
+
+        ttk.Button(btn_frame, text="🛡️ 設為管理者", bootstyle=(PRIMARY, OUTLINE),
+                   command=lambda: set_role(db.ROLE_ADMIN)).pack(side=LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="取消管理者", bootstyle=(SECONDARY, OUTLINE),
+                   command=lambda: set_role(db.ROLE_EMPLOYEE)).pack(side=LEFT)
 
         refresh()
 
@@ -479,7 +567,8 @@ class BackendManagerApp:
     # --- 視窗 3：管理者助理（另開行程的聊天視窗） ---
     def open_assistant_window(self):
         """開啟管理者助理聊天視窗；模型在那個行程裡載入，這裡只負責啟動與提示。"""
-        ok, message = service_manager.start_assistant_window(lambda line: print(f"[管理者助理] {line}"))
+        token = self.session.token if self.session is not None else None
+        ok, message = service_manager.start_assistant_window(lambda line: print(f"[管理者助理] {line}"), token)
         if ok:
             messagebox.showinfo("管理者助理", message, parent=self.root)
         else:
@@ -590,8 +679,31 @@ class BackendManagerApp:
         update_qr()
 
 
+def main():
+    """
+    先人臉登入再開後台；登出或閒置逾時後回到登入畫面，直接關閉視窗才結束。
+    整個行程只建立一個主視窗：同一個行程反覆建立 ttkbootstrap 視窗，Tk 會因樣式元素重複建立而中止。
+    """
+    app = ttk.Window(themename="superhero")  # 深色主題，也可換成 darkly、cyborg、solar；卡片顏色會自動依主題計算
+    app.withdraw()
+    db.init_db()
+    while True:
+        session = login_window.run_login(app)
+        if session is None:
+            break
+        app.deiconify()
+        backend = BackendManagerApp(app, session)
+        app.mainloop()
+        if not backend.relogin:      # 使用者直接關閉主視窗（on_app_close 已處理）
+            break
+        backend.teardown()
+        app.withdraw()
+        gc.collect()                 # 由主執行緒回收舊畫面的 Tk 物件，避免被別的執行緒回收而中止
+    try:
+        app.destroy()
+    except Exception:  # noqa: S110  主視窗可能已經關掉
+        pass
+
+
 if __name__ == "__main__":
-    # 深色主題，也可換成 darkly、cyborg、solar；卡片顏色會自動依主題計算
-    app = ttk.Window(themename="superhero")
-    BackendManagerApp(app)
-    app.mainloop()
+    main()

@@ -13,13 +13,16 @@ chat_window.py：管理者助理的聊天視窗（CustomTkinter，深色現代�
   - service_manager：自動啟動 Ollama；rag.llm_settings：語言模型設定的讀寫與測試
   - backend_main：用 service_manager.start_assistant_window 另開這個行程；單獨執行：python -m rag.chat_window
 """
+import os
 import queue
+import sys
 import threading
 import tkinter.font as tkfont
 
 import customtkinter as ctk
 
 from rag import bootstrap
+from shared import auth
 from rag.chat_session import ChatController, plain_text
 
 APP_TITLE = "管理者助理"
@@ -32,6 +35,7 @@ USER_COLOR = ("#2563eb", "#2563eb")
 BOT_COLOR = ("#e5e7eb", "#2b2f3a")
 META_COLOR = "#9aa4b2"
 POLL_MS = 60
+SESSION_CHECK_MS = 5000
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -219,8 +223,9 @@ class SettingsDialog(ctk.CTkToplevel):
 
 
 class AssistantWindow(ctk.CTk):
-    def __init__(self, runtime_factory=None, auto_start_ollama=True):
+    def __init__(self, runtime_factory=None, auto_start_ollama=True, session_token=None):
         super().__init__()
+        self._session_token = session_token
         self.title(APP_TITLE)
         self.geometry("920x760")
         self.minsize(640, 520)
@@ -238,6 +243,20 @@ class AssistantWindow(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         threading.Thread(target=self._load_runtime, daemon=True).start()
         self.after(POLL_MS, self._tick)
+        if session_token:
+            self.after(SESSION_CHECK_MS, self._check_session)
+
+    # --- 登入工作階段：後台登出或閒置逾時，這個視窗也要跟著關 ---
+
+    def _check_session(self):
+        if auth.verify_token(self._session_token) is None:
+            self._on_close()
+            return
+        self.after(SESSION_CHECK_MS, self._check_session)
+
+    def _touch_session(self):
+        if self._session_token:
+            auth.touch_token(self._session_token)
 
     # --- 畫面 ---
 
@@ -435,6 +454,7 @@ class AssistantWindow(ctk.CTk):
         """送出問題；還沒載入完或正在回答時回傳 False。"""
         if self._controller is None or not text.strip():
             return False
+        self._touch_session()
         return self._controller.submit(text)
 
     def _new_chat(self):
@@ -495,7 +515,19 @@ class AssistantWindow(ctk.CTk):
 
 
 def main():
-    AssistantWindow().mainloop()
+    """只接受從後台開啟（帶著有效的登入代碼）；直接執行沒有代碼就拒絕。"""
+    token = os.environ.pop(auth.TOKEN_ENV, None)
+    if auth.verify_token(token) is None:
+        import tkinter
+        from tkinter import messagebox
+
+        root = tkinter.Tk()
+        root.withdraw()
+        messagebox.showerror("需要登入", "管理者助理只能從管理後台開啟。"
+                             + chr(10) + "請先執行 python -m admin.backend_main 登入，再按「管理者助理」。")
+        root.destroy()
+        sys.exit(2)
+    AssistantWindow(session_token=token).mainloop()
 
 
 if __name__ == "__main__":
