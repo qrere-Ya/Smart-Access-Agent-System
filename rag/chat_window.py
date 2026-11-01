@@ -141,8 +141,10 @@ class SettingsDialog(ctk.CTkToplevel):
         self.local_model.set(self._saved_model)
         self.local_model.pack(padx=18, pady=(2, 0), fill="x")
         self._model_names = queue.Queue()
+        self._test_results = queue.Queue()  # 測試連線的結果，背景執行緒只放進來，畫面更新留給畫面執行緒
         threading.Thread(target=self._load_model_names, args=(s,), daemon=True).start()
         self.after(100, self._poll_model_names)
+        self.after(100, self._poll_test_results)
         self.api_base = self._entry("雲端 API 網址（OpenAI 相容）", s["api_base"])
         self.api_model = self._entry("雲端模型名稱", s["api_model"])
         self.api_key = self._entry("雲端 API 金鑰", "", show="•", placeholder="留空＝沿用已儲存的")
@@ -173,6 +175,17 @@ class SettingsDialog(ctk.CTkToplevel):
             return
         if names:
             self._fill_model_names(names)
+
+    def _poll_test_results(self):
+        """畫面執行緒定時取出背景測試連線的結果並顯示。"""
+        if not self.winfo_exists():
+            return
+        try:
+            while True:
+                self._show(self._test_results.get_nowait())
+        except queue.Empty:
+            pass
+        self.after(100, self._poll_test_results)
 
     def _fill_model_names(self, names):
         if not self.winfo_exists():
@@ -213,7 +226,7 @@ class SettingsDialog(ctk.CTkToplevel):
         def run():
             ok, msg = (self.ls.test_local if which == "local" else self.ls.test_api)(settings)
             plain = msg.replace("**", "").replace("`", "")
-            self.after(0, lambda: self._show(plain))
+            self._test_results.put(plain)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -403,6 +416,10 @@ class AssistantWindow(ctk.CTk):
                     self.status.configure(text="🔴 啟動失敗")
                     self._add_note(f"🛑 無法啟動助理：{payload}\n請確認 Ollama 已安裝、models 資料夾內有 bge-m3，"
                                    "然後按右上角 ⚙️ 檢查語言模型設定，或重新開啟視窗。")
+                elif kind == "settings_applied":
+                    show, note = payload
+                    show(note)
+                    self._set_ready_status()
                 elif kind == "docs":
                     self._add_note(payload)
                     self._set_ready_status()
@@ -513,7 +530,7 @@ class AssistantWindow(ctk.CTk):
 
         def run():
             note = bootstrap.reload_llm(self._runtime)
-            self.after(0, lambda: (show(note), self._set_ready_status()))
+            self._events.put(("settings_applied", (show, note)))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -522,6 +539,11 @@ class AssistantWindow(ctk.CTk):
             self.status.configure(text="釋放模型中…")
             self.update_idletasks()
             self._runtime.close()
+        if self._auto_start_ollama:
+            # 只關掉這個視窗自己啟動的 Ollama（沒有自己的行程就不動），不然視窗關了它會變成沒人管的孤兒行程
+            from admin import service_manager
+
+            service_manager.stop_service("ollama")
         self.destroy()
 
 
