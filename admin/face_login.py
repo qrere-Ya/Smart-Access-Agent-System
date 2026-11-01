@@ -81,6 +81,7 @@ class FaceLoginVerifier:
             return self._bad()
         name, dist = self._recognize_admin(self.vision.embed(rgb, face))
         if name == "No Admin":
+            self.reset()
             return LoginStep(NO_ADMIN, "目前沒有任何管理者")
         if name == "Unknown":
             return self._bad(dist)

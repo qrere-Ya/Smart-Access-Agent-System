@@ -106,3 +106,10 @@ def test_the_default_recognizer_only_looks_at_admins(db, add_user):
     v._recognize = None
     # 員工的特徵剛好是 0，管理者是 1；用 0 去比，只能找到管理者，而且距離 2.0 > 0.8 → Unknown
     assert v._recognize_admin(np.zeros(4, dtype=np.float32))[0] == "Unknown"
+
+
+def test_no_admin_resets_the_progress_so_it_cannot_carry_over():
+    v = verifier([], who=[("王小明", 0.3)] * 3 + [("No Admin", 99.9)] + [("王小明", 0.3)] * 2)
+    steps = run(v, 6)
+    assert steps[3].status == fl.NO_ADMIN
+    assert steps[-1].status == fl.VERIFYING and steps[-1].progress == pytest.approx(0.4)   # 重新累計，不是延續

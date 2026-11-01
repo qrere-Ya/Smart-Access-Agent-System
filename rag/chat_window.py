@@ -17,6 +17,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter.font as tkfont
 
 import customtkinter as ctk
@@ -245,6 +246,9 @@ class AssistantWindow(ctk.CTk):
         self.after(POLL_MS, self._tick)
         if session_token:
             self.after(SESSION_CHECK_MS, self._check_session)
+            self._last_touch = 0.0
+            for event in ("<Key>", "<Button>", "<MouseWheel>"):
+                self.bind_all(event, self._note_activity, add="+")
 
     # --- 登入工作階段：後台登出或閒置逾時，這個視窗也要跟著關 ---
 
@@ -257,6 +261,13 @@ class AssistantWindow(ctk.CTk):
     def _touch_session(self):
         if self._session_token:
             auth.touch_token(self._session_token)
+
+    def _note_activity(self, _event=None):
+        """閱讀、捲動、輸入都算使用中；每 5 秒最多寫一次檔。"""
+        now = time.time()
+        if now - self._last_touch >= 5:
+            self._last_touch = now
+            self._touch_session()
 
     # --- 畫面 ---
 

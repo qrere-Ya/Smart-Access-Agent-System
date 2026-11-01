@@ -23,7 +23,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import BOTH, DANGER, LEFT, LIGHT, PRIMARY, SUCCESS, W, WARNING, X
 
 from admin import account_admin, face_login
-from shared import auth
+from shared import auth, paths
 from shared import database_mgr as db
 
 PREVIEW_SIZE = (480, 360)
@@ -81,7 +81,7 @@ class LoginWindow(ttk.Toplevel):
         self.resizable(False, False)
         self.session = None
         self._camera_factory, self._vision_factory = camera_factory, vision_factory
-        self._guard = guard or auth.LoginGuard()
+        self._guard = guard or auth.LoginGuard(path=paths.LOGIN_LOCK_PATH)
         self._events = queue.Queue()
         self._stop = threading.Event()
         self._generation = 0
