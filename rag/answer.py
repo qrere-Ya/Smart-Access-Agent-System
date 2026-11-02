@@ -389,7 +389,7 @@ class Assistant:
                 self._anomaly_rows = rows
                 label = f"{self._span_text(start, end)}　" if rng else "最近的"
                 return self._lines(f"{label}異常事件", [
-                    f"{r['timestamp']}　{event_labels.label(r['event_type'])}　{r['detail'] or ''}"
+                    f"{r['timestamp']}　{event_labels.describe(r['event_type'], r['detail'], '　')}"
                     for r in rows]), notes
             if plan.data == "roster":
                 people = queries.roster()

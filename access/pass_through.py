@@ -14,7 +14,7 @@ pass_through.py：偵測「經過鏡頭但未打卡」的純邏輯判斷（不�
 
 EVENT_TYPE = "no_scan_walkby"
 EVENT_LABEL = "經過鏡頭未打卡"
-EVENT_DETAIL = "有人經過鏡頭但未打卡"
+EVENT_DETAIL = ""   # 事件名稱已說明一切；合併次數與時間由資料層自動附加
 
 
 class PassThroughMonitor:

@@ -24,7 +24,7 @@ def test_notification_popup_screenshot(root, db, tmp_path, screenshot):
     bar = notification_bar.NotificationBar(
         root, notifier=anomaly_notifier.AnomalyNotifier(str(tmp_path / "seen.json")), poll_ms=60000)
     dbm.add_anomaly_event("tailgate", None, "兩人同時進入")
-    dbm.add_anomaly_event("no_scan_walkby", None, "有人經過鏡頭未打卡")
+    dbm.add_anomaly_event("no_scan_walkby", None, "")
     bar.refresh()
     assert screenshot(bar._popup, "後台_異常通知彈窗")
     bar.stop()
