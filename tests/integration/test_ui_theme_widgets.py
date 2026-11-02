@@ -38,6 +38,36 @@ def root(_tk_root):
     gc.collect()
 
 
+def _when_dialog_appears(root, action, wait_ms=8000):
+    """等對話框真的出現再執行 action（固定延遲在機器忙時會太早）；逾時或出錯就關掉對話框，測試失敗而不是卡住。"""
+    errors = []
+    waited = [0]
+
+    def dialogs():
+        return [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
+
+    def poll():
+        found = dialogs()
+        if found and found[-1].winfo_viewable():
+            try:
+                action(found[-1])
+            except Exception as e:  # noqa: BLE001  任何錯誤都要先關掉對話框，否則模態視窗會讓測試永遠等下去
+                errors.append(e)
+                for d in dialogs():
+                    d.destroy()
+            return
+        waited[0] += 50
+        if waited[0] >= wait_ms:
+            errors.append(AssertionError("對話框沒有出現"))
+            for d in dialogs():
+                d.destroy()
+            return
+        root.after(50, poll)
+
+    root.after(50, poll)
+    return errors
+
+
 def test_builders_create_widgets(root):
     from shared import ui_theme as t
 
@@ -65,24 +95,27 @@ def test_confirm_returns_button_choice(root):
     from shared import ui_theme as t
 
     def click_button(label):
-        dialog = next(w for w in root.winfo_children() if w.winfo_class() == "Toplevel")
         def walk(w):
             for c in w.winfo_children():
                 yield c
                 yield from walk(c)
-        for w in walk(dialog):
-            try:
-                if w.cget("text") == label and hasattr(w, "invoke"):
-                    w.invoke()
-                    return
-            except (tkinter.TclError, ValueError, AttributeError):
-                continue
-        raise AssertionError(label)
+        def click(dialog):
+            for w in walk(dialog):
+                try:
+                    if w.cget("text") == label and hasattr(w, "invoke"):
+                        w.invoke()
+                        return
+                except (tkinter.TclError, ValueError, AttributeError):
+                    continue
+            raise AssertionError(label)
 
-    root.after(200, lambda: click_button("確定"))
+        return _when_dialog_appears(root, click)
+
+    errors = click_button("確定")
     assert t.confirm(root, "確認", "要刪除嗎？", danger=True) is True
-    root.after(200, lambda: click_button("取消"))
+    errors += click_button("取消")
     assert t.confirm(root, "確認", "要刪除嗎？") is False
+    assert not errors, errors
 
 
 def test_message_dialog_is_centered_and_grabs(root):
@@ -90,15 +123,15 @@ def test_message_dialog_is_centered_and_grabs(root):
 
     seen = {}
 
-    def inspect():
-        dialog = next(w for w in root.winfo_children() if w.winfo_class() == "Toplevel")
+    def inspect(dialog):
         seen["grab"] = dialog.grab_current() is not None
         seen["cx"] = dialog.winfo_rootx() + dialog.winfo_width() // 2
         seen["rx"] = root.winfo_rootx() + root.winfo_width() // 2
         dialog.destroy()
 
-    root.after(300, inspect)
+    errors = _when_dialog_appears(root, inspect)
     t.show_message(root, "提示", "完成")
+    assert not errors, errors
     assert seen["grab"]
     assert abs(seen["cx"] - seen["rx"]) < 40
 
@@ -119,3 +152,35 @@ def test_style_treeview_applies_colors(root, mode):
     style = ttk.Style(root)
     assert style.lookup(name, "background") == t.COLORS[mode]["table_bg"]
     assert style.lookup(f"{name}.Heading", "background") == t.COLORS[mode]["table_head"]
+
+
+def test_theme_sample_screenshot(root, screenshot):
+    """把共用主題的各種元件排在一起截圖，方便肉眼檢查外觀。"""
+    from shared import ui_theme as t
+
+    frame = t.card(root)
+    frame.pack(padx=16, pady=16, fill="both", expand=True)
+    t.section_title(frame, "共用主題預覽").pack(anchor="w", padx=12, pady=(12, 4))
+    for make, text in ((t.primary_button, "主要按鈕"), (t.secondary_button, "次要按鈕"),
+                       (t.danger_button, "危險按鈕")):
+        make(frame, text, lambda: None).pack(anchor="w", padx=12, pady=4)
+    for text, kind in (("正常", "success"), ("異常", "danger"), ("一般", "neutral")):
+        t.status_badge(frame, text, kind).pack(anchor="w", padx=12, pady=4)
+    assert screenshot(root, "共用主題_元件預覽")
+
+
+def test_dialog_height_follows_content_and_screenshot(root, screenshot):
+    """對話框高度要由內容決定（曾因 CTkFrame 預設高 200 被撐成一條長長的色條），並截圖。"""
+    from shared import ui_theme as t
+
+    shots = {}
+
+    def grab(dialog):
+        shots["h"] = dialog.winfo_height()
+        screenshot(dialog, "共用主題_確認對話框")
+        dialog.destroy()
+
+    errors = _when_dialog_appears(root, grab)
+    t.confirm(root, "確認", "要刪除嗎？", danger=True)
+    assert not errors, errors
+    assert 0 < shots["h"] < 200

@@ -35,3 +35,33 @@ def root(_tk_root):
         _tk_root.unbind_all(sequence)
     _tk_root.withdraw()
     gc.collect()
+
+
+@pytest.fixture
+def screenshot():
+    """回傳函式 shot(視窗, 檔名)：把視窗畫面存到 runtime/screenshots/，並檢查不是空白畫面。"""
+    import os
+    import time
+
+    from PIL import ImageGrab, ImageStat
+
+    from shared import paths
+
+    out_dir = os.path.join(paths.PROJECT_ROOT, "runtime", "screenshots")
+    os.makedirs(out_dir, exist_ok=True)
+
+    def shot(widget, name):
+        top = widget.winfo_toplevel()
+        top.deiconify()
+        top.lift()
+        for _ in range(15):                       # 等淡入淡出動畫與重繪結束再截圖
+            top.update()
+            time.sleep(0.04)
+        x, y, w, h = top.winfo_rootx(), top.winfo_rooty(), top.winfo_width(), top.winfo_height()
+        img = ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
+        path = os.path.join(out_dir, f"{name}.png")
+        img.save(path)
+        assert sum(ImageStat.Stat(img.convert("L")).stddev) > 1, f"{name} 畫面是空白的"
+        return path
+
+    return shot

@@ -175,12 +175,12 @@ class _Dialog(ctk.CTkToplevel):
         self.transient(master)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         accent = {"error": "danger", "warning": "warning", "info": "info"}.get(kind, "info")
-        body = ctk.CTkFrame(self, fg_color="transparent")
+        body = ctk.CTkFrame(self, fg_color="transparent", height=1)   # CTkFrame 預設高 200，要壓小才會依內容決定高度
         body.pack(padx=PAD_LG, pady=(PAD_LG, PAD_SM), fill="x")
-        accent_bar = ctk.CTkFrame(body, width=4, fg_color=pair(accent), corner_radius=2)
+        accent_bar = ctk.CTkFrame(body, width=4, height=1, fg_color=pair(accent), corner_radius=2)
         accent_bar.pack(side="left", fill="y", padx=(0, PAD_MD))
         ctk.CTkLabel(body, text=message, font=font(), wraplength=360, justify="left", anchor="w").pack(side="left")
-        row = ctk.CTkFrame(self, fg_color="transparent")
+        row = ctk.CTkFrame(self, fg_color="transparent", height=1)
         row.pack(padx=PAD_LG, pady=(PAD_SM, PAD_LG), fill="x")
         for label, value, style in reversed(buttons):
             make = {"primary": primary_button, "danger": danger_button}.get(style, secondary_button)
