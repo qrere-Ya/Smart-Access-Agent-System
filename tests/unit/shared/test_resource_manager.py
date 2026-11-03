@@ -224,3 +224,8 @@ def test_the_global_manager_is_a_singleton():
 def test_base_class_requires_a_load_implementation(mgr):
     with pytest.raises(NotImplementedError):
         rm.ManagedResource("x", manager=mgr)._load()
+
+
+def test_unit_tests_do_not_depend_on_real_free_memory():
+    """conftest 讓單元測試看不到真實剩餘記憶體（None＝未知，不拒絕載入），避免與同時執行的程式互相干擾。"""
+    assert rm._free_ram_mb() is None and rm._free_vram_mb() is None

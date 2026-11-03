@@ -2,10 +2,11 @@
 database_mgr.py：SQLite 資料層。
 
 主要功能：
-  - 建立與升級資料表：Users（員工與人臉特徵）、Attendance（打卡）、calendar（行事曆）、
-    AnomalyEvents（異常事件，如尾隨；只存照片路徑，不存照片）
+  - 建立與升級資料表：Users（員工與人臉特徵）、Attendance（打卡，含 user_id 員工唯一識別）、calendar（行事曆）、
+    Holidays（假日）、Leaves（請假）、AnomalyEvents（異常事件，如尾隨；只存照片路徑，不存照片）
   - 員工註冊（姓名或員工編號重複即拒絕）、1:N 人臉比對
   - 打卡邏輯：依時間窗判斷上班、遲到、早退、下班、加班
+  - 假日與請假的新增、刪除、查詢（驗證日期格式、起訖順序、員工存在）
   - 異常事件的寫入（連續同類型事件於時間窗內合併成一筆，保留次數與起訖時間）、查詢，以及把舊的證據照片一次匯入事件表
 
 串接模組：
@@ -87,6 +88,29 @@ def init_db():
                     name TEXT NOT NULL,
                     timestamp DATETIME NOT NULL,
                     status TEXT NOT NULL)""")
+    # 舊資料庫補上 user_id（員工唯一識別，舊紀錄可為 NULL）
+    existing_att_columns = {row[1] for row in conn_db.execute("PRAGMA table_info(Attendance)").fetchall()}
+    if "user_id" not in existing_att_columns:
+        conn_db.execute("ALTER TABLE Attendance ADD COLUMN user_id INTEGER")
+    # 以姓名回填舊紀錄；姓名對到多位員工（或沒有）就保持 NULL，不猜測
+    conn_db.execute("""UPDATE Attendance SET user_id =
+                    (SELECT u.id FROM Users u WHERE u.name = Attendance.name)
+                    WHERE user_id IS NULL
+                    AND (SELECT COUNT(*) FROM Users u WHERE u.name = Attendance.name) = 1""")
+    conn_db.execute("CREATE INDEX IF NOT EXISTS idx_attendance_user ON Attendance(user_id)")
+
+    # 假日表與請假表
+    conn_db.execute("""CREATE TABLE IF NOT EXISTS Holidays
+                    (date TEXT PRIMARY KEY,
+                    name TEXT NOT NULL DEFAULT '')""")
+    conn_db.execute("""CREATE TABLE IF NOT EXISTS Leaves
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '')""")
+    conn_db.execute("CREATE INDEX IF NOT EXISTS idx_leaves_user ON Leaves(user_id, start_date, end_date)")
 
     # 行事曆表
     conn_db.execute("""CREATE TABLE IF NOT EXISTS calendar
@@ -183,10 +207,14 @@ def is_user_registered(dna_or_name):
     name, _ = recognize_face(dna_or_name)
     return name not in ["Unknown", "Empty DB"]
 
-def log_attendance(name):
-    """考勤核心邏輯：依今天已有的紀錄與目前時間，判斷上班、遲到、早退、下班，並寫入或更新紀錄"""
+def log_attendance(name, user_id=None):
+    """考勤核心邏輯：依今天已有的紀錄與目前時間，判斷上班、遲到、早退、下班，
+    並寫入或更新紀錄；未給 user_id 時由姓名查（姓名唯一才採用）"""
     conn_db = sqlite3.connect(DB_PATH)
     cursor = conn_db.cursor()
+    if user_id is None:
+        matches = cursor.execute("SELECT id FROM Users WHERE name=?", (name,)).fetchall()
+        user_id = matches[0][0] if len(matches) == 1 else None
 
     now = datetime.datetime.now()
     today_date = now.strftime("%Y-%m-%d")
@@ -250,12 +278,92 @@ def log_attendance(name):
         print(f"系統日誌: Updated: {name} ({status}) - 時間: {full_timestamp}")
         return f"Updated: {name} ({status})"
 
-    conn_db.execute("INSERT INTO Attendance (name, timestamp, status) VALUES (?, ?, ?)",
-                    (name, full_timestamp, status))
+    conn_db.execute("INSERT INTO Attendance (name, timestamp, status, user_id) VALUES (?, ?, ?, ?)",
+                    (name, full_timestamp, status, user_id))
     conn_db.commit()
     conn_db.close()
     print(f"系統日誌: {msg} - 時間: {full_timestamp}")
     return msg
+
+# --- 假日與請假 ---
+
+def _valid_date(text):
+    """驗證 YYYY-MM-DD 並回傳標準字串；不合法丟 ValueError。"""
+    try:
+        return datetime.datetime.strptime(str(text).strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        raise ValueError("日期格式需為 YYYY-MM-DD") from None
+
+def add_holiday(date, name=""):
+    """新增（或更新名稱）一個假日；日期不合法丟 ValueError。"""
+    date = _valid_date(date)
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        conn_db.execute("INSERT INTO Holidays (date, name) VALUES (?, ?) "
+                        "ON CONFLICT(date) DO UPDATE SET name=excluded.name", (date, str(name or "").strip()))
+        conn_db.commit()
+
+def remove_holiday(date):
+    """刪除假日，回傳是否真的刪到。"""
+    date = _valid_date(date)
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        n = conn_db.execute("DELETE FROM Holidays WHERE date=?", (date,)).rowcount
+        conn_db.commit()
+    return n > 0
+
+def list_holidays(start=None, end=None):
+    """列出假日 [{date, name}]，可用起訖日期（含）篩選。"""
+    start = _valid_date(start) if start else None
+    end = _valid_date(end) if end else None
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:   # 固定查詢；沒給的條件以 NULL 略過
+        rows = conn_db.execute(
+            "SELECT date, name FROM Holidays WHERE (? IS NULL OR date >= ?) AND (? IS NULL OR date <= ?) "
+            "ORDER BY date", (start, start, end, end)).fetchall()
+    return [{"date": r[0], "name": r[1]} for r in rows]
+
+def is_holiday(date):
+    """該日期是否為假日。"""
+    date = _valid_date(date)
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        return conn_db.execute("SELECT 1 FROM Holidays WHERE date=?", (date,)).fetchone() is not None
+
+def add_leave(user_id, start_date, end_date, kind="", note=""):
+    """新增請假（起訖日皆含）；員工必須存在、起日不可晚於迄日。回傳請假紀錄 id。"""
+    start_date, end_date = _valid_date(start_date), _valid_date(end_date)
+    if start_date > end_date:
+        raise ValueError("起始日期不可晚於結束日期")
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        if conn_db.execute("SELECT 1 FROM Users WHERE id=?", (user_id,)).fetchone() is None:
+            raise ValueError("找不到該員工")
+        cur = conn_db.execute(
+            "INSERT INTO Leaves (user_id, start_date, end_date, kind, note) VALUES (?, ?, ?, ?, ?)",
+            (user_id, start_date, end_date, str(kind or "").strip(), str(note or "").strip()))
+        conn_db.commit()
+        return cur.lastrowid
+
+def remove_leave(leave_id):
+    """刪除一筆請假，回傳是否真的刪到。"""
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        n = conn_db.execute("DELETE FROM Leaves WHERE id=?", (leave_id,)).rowcount
+        conn_db.commit()
+    return n > 0
+
+def list_leaves(user_id=None, on_date=None):
+    """列出請假 [{id, user_id, start_date, end_date, kind, note}]；可只看某員工，或只看涵蓋某日的。"""
+    clauses, params = [], []
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if on_date:
+        on_date = _valid_date(on_date)
+        clauses.append("start_date <= ? AND end_date >= ?")
+        params += [on_date, on_date]
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        rows = conn_db.execute(
+            f"SELECT id, user_id, start_date, end_date, kind, note FROM Leaves{where} "  # noqa: S608
+            "ORDER BY start_date, id", params).fetchall()
+    keys = ("id", "user_id", "start_date", "end_date", "kind", "note")
+    return [dict(zip(keys, r, strict=True)) for r in rows]
 
 def recognize_face(target_embedding, threshold=1.0):
     """
@@ -296,10 +404,10 @@ def list_admins():
     return [{"id": r[0], "name": r[1], "employee_id": r[2]} for r in rows]
 
 
-def recognize_admin(target_embedding, threshold=0.8):
+def recognize_admin(target_embedding, threshold=1.0):
     """
     1:N 比對，只和啟用中的管理者比。回傳 (姓名, 距離)；距離不小於門檻回傳 "Unknown"，
-    沒有任何管理者回傳 "No Admin"。門檻比打卡用的 recognize_face 嚴格。
+    沒有任何管理者回傳 "No Admin"。這是單幀門檻（與打卡相同）；後台登入另外要求連續幀的平均距離更小，見 face_login。
     """
     best_name, best_dist = None, None
     with closing(sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5)) as conn_db:

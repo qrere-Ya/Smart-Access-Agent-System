@@ -2,9 +2,11 @@
 attendance_report.py：每日出勤報告的純邏輯（不碰任何畫面元件）。
 
 主要功能：
-  - build_report：指定日期，彙整每位在職員工的狀態（準時、遲到、早退、缺勤、未打卡）與當日異常事件數
+  - build_report：指定日期，彙整每位在職員工的狀態（準時、遲到、早退、缺勤、未打卡、假日、請假）與當日異常事件數
+    打卡紀錄優先用 user_id 對應員工，舊紀錄（user_id 為空）才退回姓名（同名多人時不猜測）；
+    假日不列缺勤，請假中的員工顯示「請假」；假日或請假當天若仍有打卡，以實際打卡狀態為準
   - export_csv：匯出 CSV（utf-8-sig 讓 Excel 直接開得起來），並防 CSV 公式注入
-  只做參數化的唯讀查詢；沒有假日與請假資料，所以「缺勤」代表當天完全沒有打卡紀錄，週末與請假也會出現。
+  只做參數化的唯讀查詢；「缺勤」代表非假日、非請假且當天完全沒有打卡紀錄。
 
 串接模組：
   - database_mgr：資料庫路徑
@@ -22,6 +24,8 @@ STATUS_LATE = "遲到"
 STATUS_EARLY_LEAVE = "早退"
 STATUS_ABSENT = "缺勤"
 STATUS_NO_CLOCK_OUT = "未打卡"  # 有上班打卡但沒有下班紀錄
+STATUS_HOLIDAY = "假日"
+STATUS_LEAVE = "請假"
 
 # 打卡紀錄表 Attendance.status 裡的文字
 _PUNCH_LATE = "遲到"
@@ -47,10 +51,14 @@ def _day_range(day):
     return start.strftime(fmt), (start + datetime.timedelta(days=1)).strftime(fmt)
 
 
-def _classify(records):
+def _classify(records, holiday_name=None, leave=None):
     """由當天依時間排序的 [(時間字串, 狀態)] 回傳 (狀態, 上班, 下班, 備註)；優先序：遲到、早退、未打卡、準時。"""
     if not records:
-        return STATUS_ABSENT, "", "", "當天沒有任何打卡紀錄（未含假日與請假資料）"
+        if holiday_name is not None:
+            return STATUS_HOLIDAY, "", "", holiday_name
+        if leave is not None:
+            return STATUS_LEAVE, "", "", "；".join(x for x in (leave["kind"], leave["note"]) if x)
+        return STATUS_ABSENT, "", "", "當天沒有任何打卡紀錄"
     clock_in = records[0]
     clock_out = records[-1] if len(records) > 1 else None
     status, notes = STATUS_ON_TIME, []
@@ -76,21 +84,37 @@ def build_report(day):
     since, until = _day_range(day)
     with closing(sqlite3.connect(database_mgr.DB_PATH, timeout=5)) as conn:
         users = conn.execute(
-            "SELECT name, COALESCE(employee_id, '') FROM Users WHERE COALESCE(is_active, 1) = 1 "
+            "SELECT id, name, COALESCE(employee_id, '') FROM Users WHERE COALESCE(is_active, 1) = 1 "
             "ORDER BY employee_id, name").fetchall()
         punches = conn.execute(
-            "SELECT name, timestamp, status FROM Attendance WHERE timestamp >= ? AND timestamp < ? "
+            "SELECT user_id, name, timestamp, status FROM Attendance WHERE timestamp >= ? AND timestamp < ? "
             "ORDER BY timestamp, id", (since, until)).fetchall()
+        holiday = conn.execute("SELECT name FROM Holidays WHERE date = ?", (day,)).fetchone()
+        leaves = conn.execute(
+            "SELECT user_id, kind, note FROM Leaves WHERE start_date <= ? AND end_date >= ? ORDER BY id",
+            (day, day)).fetchall()
         anomaly_count = conn.execute(
             "SELECT COUNT(*) FROM AnomalyEvents WHERE timestamp >= ? AND timestamp < ?",
             (since, until)).fetchone()[0]
-    by_name = {}
-    for name, ts, st in punches:
-        by_name.setdefault(name, []).append((ts, st))
+    # 有 user_id 的紀錄用 user_id 對應；舊紀錄才用姓名，且同名多人時不猜測
+    name_count = {}
+    for _uid, name, _emp in users:
+        name_count[name] = name_count.get(name, 0) + 1
+    by_id, by_name = {}, {}
+    for uid, name, ts, st in punches:
+        if uid is not None:
+            by_id.setdefault(uid, []).append((ts, st))
+        elif name_count.get(name) == 1:
+            by_name.setdefault(name, []).append((ts, st))
+    leave_by_id = {}
+    for uid, kind, note in leaves:
+        leave_by_id.setdefault(uid, {"kind": kind, "note": note})
+    holiday_name = None if holiday is None else (holiday[0] or "")
 
     rows, counts = [], {}
-    for name, emp_id in users:
-        status, t_in, t_out, note = _classify(by_name.get(name, []))
+    for uid, name, emp_id in users:
+        records = sorted(by_id.get(uid, []) + by_name.get(name, []))
+        status, t_in, t_out, note = _classify(records, holiday_name, leave_by_id.get(uid))
         rows.append({"employee_id": emp_id, "name": name, "status": status,
                      "clock_in": t_in, "clock_out": t_out, "note": note})
         counts[status] = counts.get(status, 0) + 1

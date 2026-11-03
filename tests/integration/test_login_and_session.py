@@ -3,7 +3,6 @@
 驗證：人臉通過後建立工作階段、非活體失敗與鎖定並留下紀錄、初次設定第一位管理者、鏡頭打不開的說明、
 後台登出與閒置逾時、助理視窗跟著登出而關閉、助理視窗沒有登入代碼就拒絕開啟。
 """
-import gc
 import sqlite3
 import time
 import types
@@ -14,7 +13,8 @@ import pytest
 pytestmark = pytest.mark.integration
 
 ONES = np.ones(4, dtype=np.float32)
-FACE = {"x1": 10, "y1": 10, "x2": 90, "y2": 90}
+FACE = {"x1": 100, "y1": 100, "x2": 260, "y2": 280, "left_eye": (140, 150), "right_eye": (220, 150),
+        "nose": (180, 190), "left_lip": (150, 230), "right_lip": (210, 230)}
 
 
 class FakeCamera:
@@ -54,38 +54,6 @@ def pump(win, until, seconds=8.0):
             return True
         time.sleep(0.01)
     return False
-
-
-@pytest.fixture(scope="module")
-def _tk_root():
-    """整個模組共用一個主視窗：同一個行程反覆建立 ttkbootstrap 視窗會讓 Tk 中止（正式程式也只建一個）。"""
-    import tkinter
-
-    import ttkbootstrap as ttk
-
-    try:
-        app = ttk.Window(themename="superhero")
-    except tkinter.TclError:
-        pytest.skip("沒有可用的顯示器")
-    app.withdraw()
-    yield app
-    try:
-        app.destroy()
-    except tkinter.TclError:
-        pass
-    gc.collect()
-
-
-@pytest.fixture
-def root(_tk_root):
-    yield _tk_root
-    for child in _tk_root.winfo_children():
-        child.destroy()
-    _tk_root.unbind_all("<Key>")
-    _tk_root.unbind_all("<Button>")
-    _tk_root.unbind_all("<Motion>")
-    _tk_root.withdraw()
-    gc.collect()
 
 
 @pytest.fixture

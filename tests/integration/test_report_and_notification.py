@@ -2,38 +2,10 @@
 後台新功能整合測試：真的 Tk 視窗（需要顯示器）。
 驗證：每日出勤報告面板能查詢與匯出 CSV、日期錯誤不當機；異常通知列顯示紅點、新事件合併成單一彈窗、標為已讀後紅點消失。
 """
-import gc
-import tkinter
 
 import pytest
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture(scope="module")
-def _tk_root():
-    """整個模組共用一個主視窗：同一個行程反覆建立 ttkbootstrap 視窗會讓 Tk 中止。"""
-    import ttkbootstrap as ttk
-
-    try:
-        app = ttk.Window(themename="superhero")
-    except tkinter.TclError:
-        pytest.skip("沒有可用的顯示器")
-    app.withdraw()
-    yield app
-    try:
-        app.destroy()
-    except tkinter.TclError:
-        pass
-    gc.collect()
-
-
-@pytest.fixture
-def root(_tk_root):
-    yield _tk_root
-    for child in _tk_root.winfo_children():
-        child.destroy()
-    gc.collect()
 
 
 # --- 每日出勤報告 ---

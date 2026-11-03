@@ -16,6 +16,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import DANGER, LEFT, LINK, RIGHT, SECONDARY
 
 from admin import anomaly_notifier
+from shared import event_labels
 
 POLL_MS = 5000
 MAX_LINES = 5   # 彈窗最多列出幾筆，其餘以「…另有 N 筆」帶過
@@ -23,7 +24,7 @@ MAX_LINES = 5   # 彈窗最多列出幾筆，其餘以「…另有 N 筆」帶�
 
 def format_popup_text(events):
     """把多筆新事件合併成一段彈窗文字。"""
-    lines = [f"{e.get('timestamp', '')}  {e.get('event_type', '')}  {e.get('detail') or ''}".rstrip()
+    lines = [f"{e.get('timestamp', '')}  {event_labels.describe(e.get('event_type', ''), e.get('detail'))}"
              for e in events[:MAX_LINES]]
     if len(events) > MAX_LINES:
         lines.append(f"…另有 {len(events) - MAX_LINES} 筆")
