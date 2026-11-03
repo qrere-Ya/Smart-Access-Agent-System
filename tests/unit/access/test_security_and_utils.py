@@ -82,3 +82,55 @@ def test_missing_chinese_font_falls_back_to_the_default(monkeypatch, capsys):
     monkeypatch.setattr(utils.ImageFont, "truetype", without_chinese_font)
     assert utils._get_font(20) is not None
     assert "預設字體" in capsys.readouterr().out
+
+
+# --- 人物框去重（同一個人被框兩次不能算成兩個人） ---
+
+# 真實案例：一個人被 YOLO 框成貼身框（信心 0.90）與幾乎整個畫面的大框（信心 0.61），重疊 0.63
+TIGHT_BOX, BIG_BOX = [2, 103, 346, 703], [2, 102, 539, 707]
+
+
+def test_box_iou_basics():
+    assert security.box_iou([0, 0, 10, 10], [0, 0, 10, 10]) == 1.0
+    assert security.box_iou([0, 0, 10, 10], [20, 20, 30, 30]) == 0.0
+    assert security.box_iou([0, 0, 10, 10], [5, 0, 15, 10]) == pytest.approx(1 / 3)
+    assert security.box_iou([0, 0, 0, 0], [0, 0, 0, 0]) == 0.0
+
+
+def test_a_tight_box_and_a_larger_box_of_the_same_person_count_once():
+    assert 0.5 < security.box_iou(TIGHT_BOX, BIG_BOX) < 0.7        # 超過本模組門檻，但躲過 YOLO 內建的 0.7
+    kept = security.dedupe_person_boxes([(BIG_BOX, 0.61), (TIGHT_BOX, 0.90)])
+    assert kept == [TIGHT_BOX]                                       # 留信心較高的
+
+
+def test_two_people_side_by_side_still_count_as_two():
+    left, right = [0, 100, 300, 700], [320, 120, 620, 700]
+    assert len(security.dedupe_person_boxes([(left, 0.9), (right, 0.8)])) == 2
+
+
+def test_two_people_slightly_overlapping_still_count_as_two():
+    front, behind = [100, 100, 400, 700], [330, 140, 600, 700]       # 後面的人被擋住一小部分
+    assert security.box_iou(front, behind) < security.PERSON_DUP_IOU
+    assert len(security.dedupe_person_boxes([(front, 0.9), (behind, 0.7)])) == 2
+
+
+def test_dedupe_of_nothing_is_empty():
+    assert security.dedupe_person_boxes([]) == []
+
+
+class _FakeBox:
+    def __init__(self, cls, xyxy, conf):
+        import types
+        self.cls, self.conf = [cls], [conf]
+        self.xyxy = [types.SimpleNamespace(int=lambda: types.SimpleNamespace(tolist=lambda: list(xyxy)))]
+
+
+def test_count_persons_counts_the_duplicate_box_once(monkeypatch):
+    import contextlib
+    import types
+
+    boxes = [_FakeBox(0, TIGHT_BOX, 0.90), _FakeBox(39, [325, 412, 418, 668], 0.79), _FakeBox(0, BIG_BOX, 0.61)]
+    model = types.SimpleNamespace(predict=lambda **kw: [types.SimpleNamespace(boxes=boxes)])
+    monkeypatch.setattr(security._yolo, "use", contextlib.contextmanager(lambda: (yield model)))
+    count, person_boxes = security.count_persons(np.zeros((720, 540, 3), dtype=np.uint8))
+    assert count == 1 and person_boxes == [TIGHT_BOX]               # 瓶子不是人；兩個人物框其實是同一個人
