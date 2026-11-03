@@ -6,7 +6,8 @@ database_mgr.py：SQLite 資料層。
     Holidays（假日）、Leaves（請假）、AnomalyEvents（異常事件，如尾隨；只存照片路徑，不存照片）
   - 員工註冊（姓名或員工編號重複即拒絕）、1:N 人臉比對
   - 打卡邏輯：依時間窗判斷上班、遲到、早退、下班、加班
-  - 假日與請假的新增、刪除、查詢（驗證日期格式、起訖順序、員工存在）
+  - 假日與請假的新增、刪除、查詢（驗證日期格式、起訖順序、員工存在）；每週休息日可設定（預設週六、週日），
+    day_off_reason 統一回答「這天為什麼不用上班」
   - 異常事件的寫入（連續同類型事件於時間窗內合併成一筆，保留次數與起訖時間）、查詢，以及把舊的證據照片一次匯入事件表
 
 串接模組：
@@ -111,6 +112,11 @@ def init_db():
                     kind TEXT NOT NULL DEFAULT '',
                     note TEXT NOT NULL DEFAULT '')""")
     conn_db.execute("CREATE INDEX IF NOT EXISTS idx_leaves_user ON Leaves(user_id, start_date, end_date)")
+
+    # 系統設定（鍵值）：目前只放每週休息日
+    conn_db.execute("""CREATE TABLE IF NOT EXISTS Settings
+                    (key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL)""")
 
     # 行事曆表
     conn_db.execute("""CREATE TABLE IF NOT EXISTS calendar
@@ -325,6 +331,53 @@ def is_holiday(date):
     date = _valid_date(date)
     with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
         return conn_db.execute("SELECT 1 FROM Holidays WHERE date=?", (date,)).fetchone() is not None
+
+# --- 每週休息日 ---
+
+REST_WEEKDAYS_DEFAULT = (5, 6)      # 預設週六、週日休息（0＝週一 … 6＝週日）；可在設定中改
+_WEEKDAY_NAMES = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")
+_REST_KEY = "rest_weekdays"
+
+def get_rest_weekdays(conn_db=None):
+    """每週固定休息的星期（0＝週一 … 6＝週日）；沒設定過用預設。可傳入已開啟的連線。"""
+    if conn_db is None:
+        with closing(sqlite3.connect(DB_PATH, timeout=5)) as own:
+            return get_rest_weekdays(own)
+    try:
+        row = conn_db.execute("SELECT value FROM Settings WHERE key=?", (_REST_KEY,)).fetchone()
+    except sqlite3.OperationalError:       # 舊資料庫還沒升級（沒有 Settings 表）就用預設
+        row = None
+    if row is None:
+        return list(REST_WEEKDAYS_DEFAULT)
+    return sorted({int(x) for x in row[0].split(",") if x.strip().isdigit() and 0 <= int(x) <= 6})
+
+def set_rest_weekdays(days):
+    """設定每週休息日；每個值必須是 0 到 6 的整數，可以全部不休（傳空清單）。"""
+    try:
+        values = sorted({int(d) for d in days})
+    except (TypeError, ValueError):
+        raise ValueError("休息日必須是 0 到 6 的整數（0＝週一）") from None
+    if any(d < 0 or d > 6 for d in values):
+        raise ValueError("休息日必須是 0 到 6 的整數（0＝週一）")
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        conn_db.execute("INSERT INTO Settings (key, value) VALUES (?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (_REST_KEY, ",".join(str(d) for d in values)))
+        conn_db.commit()
+
+def day_off_reason(date, conn_db=None):
+    """該日期不用上班的原因：登錄的假日名稱（沒名稱寫「假日」）或每週休息日（如「週休（週六）」）；要上班回傳 None。"""
+    date = _valid_date(date)
+    if conn_db is None:
+        with closing(sqlite3.connect(DB_PATH, timeout=5)) as own:
+            return day_off_reason(date, own)
+    row = conn_db.execute("SELECT name FROM Holidays WHERE date=?", (date,)).fetchone()
+    if row is not None:
+        return row[0] or "假日"
+    weekday = datetime.datetime.strptime(date, "%Y-%m-%d").weekday()
+    if weekday in get_rest_weekdays(conn_db):
+        return f"週休（{_WEEKDAY_NAMES[weekday]}）"
+    return None
 
 def add_leave(user_id, start_date, end_date, kind="", note=""):
     """新增請假（起訖日皆含）；員工必須存在、起日不可晚於迄日。回傳請假紀錄 id。"""

@@ -434,7 +434,10 @@ class Assistant:
         def names(items):
             return "、".join(f"{p['name']}（{p['timestamp'][11:16]}）" for p in items) or "無"
 
-        return (f"{s['date']}　出勤摘要\n有打卡人數：{s['punched_count']}\n遲到：{names(s['late'])}\n"
-                f"早退：{names(s['early_leave'])}\n加班：{names(s['overtime'])}\n"
-                f"在職但當天沒有打卡紀錄：{'、'.join(s['no_record']) or '無'}\n"
-                "（沒有打卡紀錄不等於缺勤：系統沒有假日與請假資料）")
+        head = f"{s['date']}　出勤摘要" + (f"（{s['day_off']}，不用上班）" if s.get("day_off") else "")
+        on_leave = f"請假：{'、'.join(s['on_leave'])}\n" if s.get("on_leave") else ""
+        note = ("（休息日沒有打卡屬正常）" if s.get("day_off")
+                else "（沒有打卡紀錄不等於缺勤：可能是系統尚未登錄的假日或請假）")
+        return (f"{head}\n有打卡人數：{s['punched_count']}\n遲到：{names(s['late'])}\n"
+                f"早退：{names(s['early_leave'])}\n加班：{names(s['overtime'])}\n{on_leave}"
+                f"在職但當天沒有打卡紀錄：{'、'.join(s['no_record']) or '無'}\n{note}")
