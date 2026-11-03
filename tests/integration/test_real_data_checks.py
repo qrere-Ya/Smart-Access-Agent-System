@@ -17,7 +17,12 @@ pytestmark = pytest.mark.integration
 
 REAL_DB = os.path.join(paths.PROJECT_ROOT, "runtime", "database.db")
 LOGIN_DISTANCE_MAX = 0.9          # 與 admin/face_login.DISTANCE_MAX 相同
-TABLES = ("Users", "Attendance", "AnomalyEvents", "calendar")
+COUNT_SQL = {                      # 固定的完整查詢，不用字串組 SQL
+    "Users": "SELECT COUNT(*) FROM Users",
+    "Attendance": "SELECT COUNT(*) FROM Attendance",
+    "AnomalyEvents": "SELECT COUNT(*) FROM AnomalyEvents",
+    "calendar": "SELECT COUNT(*) FROM calendar",
+}
 
 
 @pytest.fixture
@@ -37,8 +42,7 @@ def real_copy(tmp_path, monkeypatch):
 def _counts(path):
     with closing(sqlite3.connect(path)) as con:
         existing = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        return {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]  # noqa: S608 表名來自上方固定清單
-                for t in TABLES if t in existing}
+        return {t: con.execute(sql).fetchone()[0] for t, sql in COUNT_SQL.items() if t in existing}
 
 
 def test_upgrade_keeps_all_rows_and_is_repeatable(real_copy):
