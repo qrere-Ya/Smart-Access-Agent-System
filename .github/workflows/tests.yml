@@ -29,6 +29,7 @@ jobs:
 
   ui:
     name: Window tests (customtkinter, virtual display)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,4 +43,4 @@ jobs:
       - name: Install a virtual display for the Tk window tests
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Run window tests (tests that need real models skip themselves)
-        run: xvfb-run -a python -m pytest -m integration tests/integration -q
+        run: timeout 420 xvfb-run -a python -m pytest -m integration tests/integration -v
