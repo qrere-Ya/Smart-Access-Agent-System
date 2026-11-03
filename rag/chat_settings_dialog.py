@@ -56,9 +56,9 @@ class SettingsDialog(ctk.CTkToplevel):
         self.after(100, self._poll_test_results)
         self.api_base = self._entry("雲端 API 網址（OpenAI 相容）", s["api_base"])
         self.api_model = self._entry("雲端模型名稱", s["api_model"])
-        self.api_key = self._entry("雲端 API 金鑰", "", show="•", placeholder="留空＝沿用已儲存的")
-        ctk.CTkLabel(self, text=self.ls.key_status_text(s), text_color=META_COLOR,
-                     font=ui_theme.font(ui_theme.FONT_SIZE_SMALL)).pack(padx=18, pady=(2, 0), anchor="w")
+        ctk.CTkLabel(self, text="雲端 API 金鑰：" + self.ls.key_status_text(s), text_color=META_COLOR, wraplength=470,
+                     justify="left", font=ui_theme.font(ui_theme.FONT_SIZE_SMALL)
+                     ).pack(padx=18, pady=(10, 0), anchor="w")
 
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(padx=18, pady=14, fill="x")
@@ -126,7 +126,7 @@ class SettingsDialog(ctk.CTkToplevel):
         """讀出表單目前的設定值。"""
         local_model = self.local_model.get().removesuffix(self.NOT_INSTALLED)
         return {"mode": self.MODES[self.mode.get()], "local_model": local_model,
-                "api_base": self.api_base.get(), "api_model": self.api_model.get(), "api_key": self.api_key.get()}
+                "api_base": self.api_base.get(), "api_model": self.api_model.get()}
 
     def _show(self, text):
         """在結果列顯示文字。"""
@@ -136,7 +136,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def _test(self, which):
         """背景測試本機或雲端連線，結果放進佇列。"""
         self._show("測試中…（第一次載入模型可能要等一會兒）")
-        settings = {**self.ls.load_settings(), **{k: v for k, v in self._form().items() if k != "api_key" or v}}
+        settings = {**self.ls.load_settings(), **self._form()}
 
         def run():
             ok, msg = (self.ls.test_local if which == "local" else self.ls.test_api)(settings)

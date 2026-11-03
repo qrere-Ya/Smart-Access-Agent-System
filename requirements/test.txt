@@ -22,3 +22,5 @@ PyQRCode==1.2.1
 pypng==0.20220715.0
 onnxruntime==1.23.2
 opencv-python-headless==4.13.0.92
+customtkinter==6.0.0
+darkdetect==0.8.0
