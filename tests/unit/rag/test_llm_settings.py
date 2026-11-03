@@ -186,6 +186,24 @@ def test_ollama_streams_and_sends_the_shared_context_size(fake_llm_server):
     assert body["think"] is False  # 關閉思考模式，qwen3 的推理過程才不會混進回答
 
 
+def test_ollama_free_memory_asks_the_server_to_unload_and_reports_failure(fake_llm_server):
+    base, requests = fake_llm_server
+    assert ls.OllamaChatLLM(base, "qwen2:7b").free_memory() is True
+    path, body = requests[-1]
+    assert path == "/api/generate" and body == {"model": "qwen2:7b", "keep_alive": 0}
+    assert ls.OllamaChatLLM("http://127.0.0.1:1", "qwen2:7b").free_memory(timeout=1) is False
+
+
+def test_failover_free_memory_only_touches_the_local_backend(fake_llm_server):
+    base, requests = fake_llm_server
+    cloud = ls.OpenAICompatLLM(base, "good-key", "m")
+    failover = ls.FailoverLLM(cloud, ls.OllamaChatLLM(base, "qwen2:7b"))
+    before = len(requests)
+    assert failover.free_memory() is True
+    assert [path for path, _ in requests[before:]] == ["/api/generate"]
+    assert ls.FailoverLLM(cloud, None).free_memory() is False
+
+
 def test_ollama_missing_model_and_unreachable_server(fake_llm_server):
     base, _ = fake_llm_server
     with pytest.raises(ls.LLMCallError) as info:
