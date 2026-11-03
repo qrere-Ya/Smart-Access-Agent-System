@@ -293,6 +293,17 @@ class OllamaChatLLM:
     def label(self):
         return f"本機模型（{self.model}）"
 
+    def free_memory(self, timeout=15.0):
+        """請 Ollama 卸載模型、把它占的記憶體還回去（下次提問時會自動重新載入）；回傳是否成功"""
+        body = {"model": self.model, "keep_alive": 0}
+        req = urllib.request.Request(f"{self.host}/api/generate", data=json.dumps(body).encode("utf-8"),  # noqa: S310
+                                     method="POST", headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=timeout).read()  # noqa: S310
+            return True
+        except Exception:
+            return False
+
     def stream_complete(self, prompt):
         """串流呼叫，逐段產生 Delta；錯誤轉成 LLMCallError"""
         options = {"temperature": self.temperature, "num_ctx": LOCAL_NUM_CTX}
@@ -348,6 +359,15 @@ class FailoverLLM:
 
     def label(self):
         return (self.fallback if self.switched else self.primary).label()
+
+    def free_memory(self):
+        """請本機模型卸載以釋放記憶體（雲端那端沒有這回事）；有任何一個成功就回傳 True"""
+        freed = False
+        for backend in (self.primary, self.fallback):
+            release = getattr(backend, "free_memory", None)
+            if release is not None:
+                freed = release() or freed
+        return freed
 
     def pop_notices(self):
         """取出並清空待顯示的切換通知"""

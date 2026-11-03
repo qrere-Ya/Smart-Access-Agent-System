@@ -62,8 +62,8 @@ def decode_frame(text):
 
 
 def make_line(message):
-    """組成一行輸出（以 PREFIX 開頭的 JSON）。"""
-    return PREFIX + json.dumps(message, ensure_ascii=False)
+    """組成一行輸出（以 PREFIX 開頭的 JSON）；中文一律跳脫成 ASCII，不受子行程所在系統的預設編碼影響。"""
+    return PREFIX + json.dumps(message)
 
 
 def parse_line(line):

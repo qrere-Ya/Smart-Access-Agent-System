@@ -215,7 +215,13 @@ class Assistant:
 
     def _search_documents(self, question: str):
         candidates = self.store.search(question, CANDIDATES)
-        return self.reranker.rerank(question, candidates, TOP_K)
+        try:
+            return self.reranker.rerank(question, candidates, TOP_K)
+        except RuntimeError:  # 記憶體不夠載入重排模型（常是本機語言模型占著）：請它先卸載，回答時會自動重載，再試一次
+            release = getattr(self.llm, "free_memory", None)
+            if release is None or not release():
+                raise
+            return self.reranker.rerank(question, candidates, TOP_K)
 
     def _stream(self, prompt: str) -> Iterator[str]:
         try:

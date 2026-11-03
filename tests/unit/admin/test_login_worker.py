@@ -47,6 +47,11 @@ def test_a_success_step_keeps_the_admin_name():
     assert parsed["step"]["admin_name"] == "管理者甲" and parsed["step"]["status"] == face_login.SUCCESS
 
 
+def test_protocol_lines_are_pure_ascii_so_the_childs_code_page_cannot_garble_chinese():
+    line = lw.make_line({"t": "error", "message": "打不開鏡頭"})
+    assert line.isascii() and lw.parse_line(line)["message"] == "打不開鏡頭"
+
+
 def test_an_error_line_is_parsed():
     message = {"t": "error", "message": "打不開鏡頭"}
     assert lw.parse_line(lw.make_line(message)) == message

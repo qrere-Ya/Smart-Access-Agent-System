@@ -575,3 +575,54 @@ def test_a_database_failure_keeps_the_error_outcome(store, people, monkeypatch):
     a = make(store, llm)
     ask(a, "王小明遲到幾次")
     assert a.last.outcome == "error"
+
+
+# --- 記憶體吃緊時的重排載入 ---
+
+class DenyOnceReranker:
+    """第一次重排丟出資源不足，之後正常；用來模擬本機語言模型占著記憶體。"""
+
+    def __init__(self, inner):
+        self.inner, self.calls = inner, 0
+
+    def rerank(self, query, hits, top_k=5):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("ResourceDenied")
+        return self.inner.rerank(query, hits, top_k)
+
+
+class FreeableLLM(FakeLLM):
+    def __init__(self, *args, freed=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.freed, self.free_calls = freed, 0
+
+    def free_memory(self):
+        self.free_calls += 1
+        return self.freed
+
+
+def test_denied_rerank_frees_the_language_model_and_tries_again(store):
+    llm = FreeableLLM({"每年給幾天特別休假": {"docs": True}}, reply="七天 [1]。")
+    a = make(store, llm)
+    a.reranker = DenyOnceReranker(a.reranker)
+    text = ask(a, "每年給幾天特別休假")
+    assert llm.free_calls == 1 and a.reranker.calls == 2
+    assert text.startswith("七天 [1]。") and a.last.outcome == "answered"
+
+
+def test_denied_rerank_that_cannot_free_memory_still_fails(store):
+    llm = FreeableLLM({"每年給幾天特別休假": {"docs": True}}, freed=False)
+    a = make(store, llm)
+    a.reranker = DenyOnceReranker(a.reranker)
+    with pytest.raises(RuntimeError):
+        ask(a, "每年給幾天特別休假")
+    assert llm.free_calls == 1 and a.reranker.calls == 1
+
+
+def test_denied_rerank_with_a_language_model_that_cannot_unload_still_fails(store):
+    llm = FakeLLM({"每年給幾天特別休假": {"docs": True}})
+    a = make(store, llm)
+    a.reranker = DenyOnceReranker(a.reranker)
+    with pytest.raises(RuntimeError):
+        ask(a, "每年給幾天特別休假")
