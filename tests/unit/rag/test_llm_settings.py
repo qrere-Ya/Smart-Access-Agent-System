@@ -18,6 +18,7 @@ def settings_file(tmp_path, monkeypatch):
     path = tmp_path / "llm_settings.json"
     monkeypatch.setattr(ls, "SETTINGS_PATH", str(path))
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     return path
 
@@ -62,29 +63,39 @@ def test_corrupt_settings_file_falls_back_to_defaults(settings_file):
 
 
 def test_save_merges_strips_and_normalizes(settings_file):
-    saved = ls.save_settings({"mode": "api", "local_model": "  llama3  ", "api_key": " k1 "})
-    assert saved["local_model"] == "llama3" and saved["api_key"] == "k1" and saved["mode"] == "api"
+    saved = ls.save_settings({"mode": "api", "local_model": "  llama3  "})
+    assert saved["local_model"] == "llama3" and saved["mode"] == "api"
     assert json.loads(settings_file.read_text(encoding="utf-8")) == saved
     assert ls.save_settings({"mode": "壞值"})["mode"] == "local"
 
 
-def test_blank_api_key_keeps_the_stored_one_unless_cleared(settings_file):
-    ls.save_settings({"api_key": "secret"})
-    assert ls.save_settings({"api_key": "  ", "local_model": "x"})["api_key"] == "secret"
-    assert ls.save_settings({}, clear_key=True)["api_key"] == ""
+def test_the_key_is_never_written_to_the_settings_file(settings_file):
+    saved = ls.save_settings({"api_key": "nvapi-SECRET", "local_model": "x"})
+    assert saved["api_key"] == "" and "nvapi-SECRET" not in settings_file.read_text(encoding="utf-8")
+
+
+def test_saving_clears_a_key_left_in_an_old_settings_file(settings_file):
+    settings_file.write_text(json.dumps({"api_key": "old-secret", "mode": "api"}), encoding="utf-8")
+    assert ls.load_settings()["api_key"] == "old-secret"          # 舊版殘留的金鑰仍可讀，升級後不會突然失效
+    ls.save_settings({"mode": "local"})
+    assert "old-secret" not in settings_file.read_text(encoding="utf-8")
 
 
 def test_effective_api_key_sources(settings_file, monkeypatch):
-    assert ls.effective_api_key({"api_key": "  abc  ", "api_base": ls.NVIDIA_BASE}) == "abc"
+    assert ls.effective_api_key({"api_key": "  abc  ", "api_base": ls.NVIDIA_BASE}) == "abc"   # 舊版設定檔殘留
     monkeypatch.setenv("NVIDIA_API_KEY", "from-env")
     assert ls.effective_api_key({"api_key": "", "api_base": ls.NVIDIA_BASE}) == "from-env"
+    assert ls.effective_api_key({"api_key": "old", "api_base": ls.NVIDIA_BASE}) == "from-env"   # 環境變數優先
     assert ls.effective_api_key({"api_key": "", "api_base": "https://example.com/v1"}) == ""
+    monkeypatch.setenv("LLM_API_KEY", "generic")
+    assert ls.effective_api_key({"api_key": "", "api_base": "https://example.com/v1"}) == "generic"
+    assert ls.effective_api_key({"api_key": "", "api_base": ls.NVIDIA_BASE}) == "generic"
 
 
 def test_key_status_text_never_shows_the_key(settings_file, monkeypatch):
     assert "尚未設定" in ls.key_status_text({"api_key": "", "api_base": "https://example.com"})
     saved = ls.key_status_text({"api_key": "topsecret", "api_base": ls.NVIDIA_BASE})
-    assert "已儲存" in saved and "topsecret" not in saved
+    assert "舊版設定檔" in saved and "topsecret" not in saved
     monkeypatch.setenv("NVIDIA_API_KEY", "envkey")
     assert "環境變數" in ls.key_status_text({"api_key": "", "api_base": ls.NVIDIA_BASE})
 
