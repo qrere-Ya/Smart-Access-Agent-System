@@ -131,7 +131,7 @@ def test_ollama_that_never_opens_its_port_gives_a_warning(monkeypatch, fake_pope
     monkeypatch.setattr(sm.shutil, "which", lambda name: "C:/ollama.exe")
     monkeypatch.setattr(sm, "_service_procs", {})
     started, warning = sm.start_ollama(lambda line: None)
-    assert started is None and "等了 20 秒" in warning
+    assert started is None and f"等了 {sm.OLLAMA_START_WAIT} 秒" in warning
 
 
 def test_missing_ollama_command_gives_a_warning(monkeypatch):

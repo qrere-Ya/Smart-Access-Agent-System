@@ -1,41 +1,10 @@
 """shared/ui_theme.py 的元件整合測試：真的 Tk 視窗（需要顯示器）。驗證建構函式、徽章、對話框置中與按鈕結果、
 表格樣式亮暗色。"""
-import gc
 import tkinter
 
 import pytest
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture(scope="module")
-def _tk_root():
-    """整個模組共用一個主視窗：同一個行程反覆建立 Tk 根視窗會當機。"""
-    import customtkinter as ctk
-
-    from shared import ui_theme
-
-    ui_theme.apply_theme("dark")
-    try:
-        app = ctk.CTk()
-    except tkinter.TclError:
-        pytest.skip("沒有可用的顯示器")
-    app.geometry("600x400+100+100")
-    app.update()
-    yield app
-    try:
-        app.destroy()
-    except tkinter.TclError:
-        pass
-    gc.collect()
-
-
-@pytest.fixture
-def root(_tk_root):
-    yield _tk_root
-    for child in _tk_root.winfo_children():
-        child.destroy()
-    gc.collect()
 
 
 def _when_dialog_appears(root, action, wait_ms=8000):
@@ -129,6 +98,8 @@ def test_message_dialog_is_centered_and_grabs(root):
         seen["rx"] = root.winfo_rootx() + root.winfo_width() // 2
         dialog.destroy()
 
+    root.deiconify()                         # 主視窗可見時對話框才會置中於它
+    root.update()
     errors = _when_dialog_appears(root, inspect)
     t.show_message(root, "提示", "完成")
     assert not errors, errors

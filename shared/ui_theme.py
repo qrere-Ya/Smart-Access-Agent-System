@@ -254,3 +254,81 @@ def style_treeview(tree=None, mode=None, style_name="Smart.Treeview"):
 def zebra_tags(index):
     """依列序回傳斑馬紋 tag，插入列時用：tree.insert(..., tags=zebra_tags(i))。"""
     return ("even",) if index % 2 else ("odd",)
+
+
+# --- 後台遷移新增的輔助函式 ---
+
+FONT_MONO = "Consolas"
+
+
+def mono_font(size=FONT_SIZE_SMALL):
+    """等寬字型 tuple（時鐘、網址、終端機輸出用）。"""
+    return (FONT_MONO, size)
+
+
+def style_window(win):
+    """把主視窗或 CTkToplevel 的底色換成主題底色。"""
+    win.configure(fg_color=pair("bg"))
+
+
+def link_button(master, text, command=None, **kw):
+    """文字連結樣式的小按鈕（透明底、主題色文字）。"""
+    return ctk.CTkButton(master, text=text, command=command, font=font(FONT_SIZE_SMALL), fg_color="transparent",
+                         hover_color=pair("secondary_hover"), text_color=pair("info"), **kw)
+
+
+def body_label(master, text="", **kw):
+    """一般內文標籤（靠左）。"""
+    opts = {"font": font(), "text_color": pair("text"), "anchor": "w", **kw}
+    return ctk.CTkLabel(master, text=text, **opts)
+
+
+def muted_label(master, text="", **kw):
+    """次要說明文字標籤（灰色小字，靠左）。"""
+    opts = {"font": font(FONT_SIZE_SMALL), "text_color": pair("text_muted"), "anchor": "w", **kw}
+    return ctk.CTkLabel(master, text=text, **opts)
+
+
+def entry(master, **kw):
+    """單行輸入框，套用主題的底色、邊線與字型。"""
+    opts = {"font": font(FONT_SIZE_INPUT), "fg_color": pair("bg"), "border_color": pair("border"),
+            "text_color": pair("text"), "placeholder_text_color": pair("text_muted"), **kw}
+    return ctk.CTkEntry(master, **opts)
+
+
+def combo(master, values, **kw):
+    """唯讀下拉選單，套用主題色。"""
+    opts = {"values": list(values), "state": "readonly", "font": font(FONT_SIZE_INPUT),
+            "dropdown_font": font(FONT_SIZE_INPUT), "fg_color": pair("bg"), "border_color": pair("border"),
+            "button_color": pair("secondary"), "button_hover_color": pair("secondary_hover"),
+            "text_color": pair("text"), "dropdown_fg_color": pair("card"), "dropdown_text_color": pair("text"),
+            "dropdown_hover_color": pair("secondary_hover"), **kw}
+    return ctk.CTkComboBox(master, **opts)
+
+
+def table(master, columns, selectmode="browse", height=10):
+    """
+    建立帶垂直捲軸、斑馬紋的表格，回傳 (容器, Treeview)。
+    columns 為 (欄位鍵, 標題, 寬度) 或再加第四個 anchor 的 tuple 清單；容器要自己 pack／grid。
+    """
+    box = ctk.CTkFrame(master, fg_color="transparent", height=1)
+    tree = ttk.Treeview(box, columns=[c[0] for c in columns], show="headings", selectmode=selectmode, height=height)
+    style_treeview(tree)
+    for col in columns:
+        key, title, width = col[:3]
+        anchor = col[3] if len(col) > 3 else "w"
+        tree.heading(key, text=title, anchor=anchor)             # 標題與內容同一個對齊方式，欄才會對齊
+        tree.column(key, width=width, anchor=anchor)
+    bar = ctk.CTkScrollbar(box, command=tree.yview, button_color=pair("border"),
+                           button_hover_color=pair("text_muted"))
+    tree.configure(yscrollcommand=bar.set)
+    bar.pack(side="right", fill="y")
+    tree.pack(side="left", fill="both", expand=True)
+    return box, tree
+
+
+def fill_table(tree, rows, iids=None):
+    """清空表格後依序插入列（含斑馬紋）；iids 給定時作為各列的 iid。"""
+    tree.delete(*tree.get_children())
+    for i, values in enumerate(rows):
+        tree.insert("", "end", iid=None if iids is None else str(iids[i]), values=values, tags=zebra_tags(i))

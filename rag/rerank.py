@@ -32,7 +32,7 @@ class _RerankResource(ManagedResource):
             print("[rerank] ⚠️ 找不到可用的 CUDA，重排模型退回 CPU。")
             device = "cpu"
         super().__init__("rag.rerank.bge-reranker-v2-m3",
-                         est_ram_mb=2600 if device == "cpu" else 1200,
+                         est_ram_mb=2600 if device == "cpu" else 700,    # GPU 路徑實測約 490MB，留餘裕
                          est_vram_mb=0 if device == "cpu" else 1300, idle_ttl=IDLE_TTL)
         self._dir, self._device = model_dir, device
 

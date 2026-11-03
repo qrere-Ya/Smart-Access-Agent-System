@@ -10,7 +10,8 @@ event_labels.py：異常事件類型的中文顯示名稱（助理回答與後�
   - admin.notification_bar：通知彈窗
 """
 
-EVENT_LABELS = {"tailgate": "尾隨", "no_scan_walkby": "經過鏡頭未打卡"}
+EVENT_LABELS = {"tailgate": "尾隨", "no_scan_walkby": "經過鏡頭未打卡", "login_failed": "後台登入失敗",
+                "login_locked": "後台登入鎖定", "admin_changed": "管理者異動"}
 
 
 def label(event_type):

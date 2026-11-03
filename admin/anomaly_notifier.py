@@ -6,6 +6,8 @@ anomaly_notifier.py：異常事件通知的純邏輯（未讀數、新事件、�
   - poll()：查詢編號大於該值的異常事件，回傳未讀數、未讀清單，以及這個行程尚未提示過的新事件
   - mark_all_read()：把已讀編號推進到最近一次 poll 看到的最大編號（沒看過的事件不會被誤標已讀）
   - 第一次使用（沒有紀錄檔）時以目前最大編號為基準，不把歷史事件當成未讀
+  - format_popup_text()：把多筆新事件合併成彈窗文字（純文字，沒裝畫面套件的環境也能測）
+  - safe_evidence_path()：證據照片路徑必須在證據資料夾內；event_row()：異常事件列表的一列文字
 
 串接模組：
   - database_mgr：list_anomaly_events 取得事件（只讀 id、timestamp、event_type、detail）
@@ -16,9 +18,45 @@ import os
 from dataclasses import dataclass, field
 
 from shared import database_mgr
+from shared import event_labels
 from shared import paths
 
 FETCH_LIMIT = 200   # 單次最多撈幾筆；未讀達上限時，畫面的未讀數加「+」
+MAX_LINES = 5       # 彈窗最多列出幾筆，其餘以「…另有 N 筆」帶過
+
+
+def format_popup_text(events):
+    """把多筆新事件合併成一段彈窗文字。"""
+    lines = [f"{e.get('timestamp', '')}  {event_labels.describe(e.get('event_type', ''), e.get('detail'))}"
+             for e in events[:MAX_LINES]]
+    if len(events) > MAX_LINES:
+        lines.append(f"…另有 {len(events) - MAX_LINES} 筆")
+    return "\n".join(lines)
+
+
+def safe_evidence_path(path, root=None):
+    """
+    證據照片的實際路徑。資料庫裡的路徑不可信（可能含 .. 或指到別處），必須落在證據資料夾內且是檔案，
+    通過回傳絕對路徑，否則回傳 None。
+    """
+    if not path:
+        return None
+    folder = os.path.realpath(root or paths.ANOMALY_DIR)
+    full = os.path.realpath(path if os.path.isabs(path) else os.path.join(folder, path))
+    try:
+        inside = os.path.commonpath([folder, full]) == folder
+    except ValueError:                      # 不同磁碟機
+        return None
+    return full if inside and os.path.isfile(full) else None
+
+
+def event_row(event, last_seen, evidence_root=None):
+    """異常事件列表的一列：(狀態, 時間, 類型, 說明, 次數, 證據)；說明裡的換行與多餘空白壓成單行。"""
+    unread = last_seen is not None and event["id"] > last_seen
+    detail = " ".join(str(event.get("detail") or "").split())
+    has_photo = safe_evidence_path(event.get("evidence_path"), evidence_root) is not None
+    return ("● 未讀" if unread else "已讀", event.get("timestamp", ""), event_labels.label(event.get("event_type", "")),
+            detail, event.get("event_count") or 1, "有" if has_photo else "無")
 
 
 @dataclass
