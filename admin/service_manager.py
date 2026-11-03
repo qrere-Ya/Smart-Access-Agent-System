@@ -28,6 +28,7 @@ _PROJECT_ROOT = paths.PROJECT_ROOT
 # 各服務使用的 port，用來判斷服務是否已在執行
 PORT_OLLAMA = 11434
 PORT_WEB_SERVER = 5000
+OLLAMA_START_WAIT = 45      # 啟動 Ollama 後最多等幾秒它才開 port（開機後第一次啟動可能很慢）
 
 # 本程式自己啟動的行程 {服務名稱: Popen}；port 已被外部占用時不會存進來，避免停止時誤殺
 _service_procs = {}
@@ -198,9 +199,10 @@ def start_ollama(on_output_line):
         )
         _service_procs["ollama"] = proc
         _start_output_reader_thread(proc, on_output_line)
-        if wait_port_open("127.0.0.1", PORT_OLLAMA, timeout=20):
+        if wait_port_open("127.0.0.1", PORT_OLLAMA, timeout=OLLAMA_START_WAIT):
             return "Ollama", None
-        return None, "Ollama 已啟動，但等了 20 秒 port 11434 還沒開，可能還在載入、或啟動異常。"
+        return None, (f"Ollama 已啟動，但等了 {OLLAMA_START_WAIT} 秒 port {PORT_OLLAMA} 還沒開，"
+                      "可能還在載入、或啟動異常。")
     except Exception as e:
         return None, f"Ollama 啟動失敗：{e}"
 

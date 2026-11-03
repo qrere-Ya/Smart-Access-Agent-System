@@ -6,20 +6,23 @@
 import pytest
 
 pytestmark = pytest.mark.integration
+pytest.importorskip("customtkinter")
 
 
 # --- 每日出勤報告 ---
 
 def test_report_panel_lists_employees_and_exports_csv(root, db, add_user, tmp_path, monkeypatch):
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog
 
     from admin import report_panel
+    from shared import ui_theme
 
     add_user("員工甲", "E1")
     add_user("=員工乙", "E2")
     out = tmp_path / "report.csv"
     monkeypatch.setattr(filedialog, "asksaveasfilename", lambda **k: str(out))
-    monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: None)
+    shown = []
+    monkeypatch.setattr(ui_theme, "show_message", lambda *a, **k: shown.append(a))
     panel = report_panel.ReportPanel(root)
     panel.pack()
     root.update()
@@ -27,22 +30,59 @@ def test_report_panel_lists_employees_and_exports_csv(root, db, add_user, tmp_pa
     panel.export()
     text = out.read_text(encoding="utf-8-sig")
     assert "員工甲" in text and "'=員工乙" in text          # 公式開頭的欄位被加上單引號
+    assert shown and "已匯出 2 筆" in shown[0][2]
 
 
-def test_report_panel_survives_a_bad_date(root, db, monkeypatch):
-    from tkinter import messagebox
-
+def test_report_panel_survives_a_bad_date(root, db, when_dialog_appears, dialog_texts, click_button):
     from admin import report_panel
 
-    shown = []
-    for name in ("showerror", "showwarning", "showinfo"):
-        monkeypatch.setattr(messagebox, name, lambda *a, **k: shown.append(a))
     panel = report_panel.ReportPanel(root)
     panel.pack()
     panel.date_var.set("2026-13-99'; DROP TABLE Users;--")
-    panel.refresh()
+    seen = []
+
+    def close(dialog):
+        seen.extend(dialog_texts(dialog))
+        click_button(dialog, "確定")
+
+    errors = when_dialog_appears(close)
+    panel.refresh()                                              # 真的跳出模態對話框，由輪詢的函式按掉
     root.update()
+    assert not errors, errors
+    assert any("日期" in t for t in seen) and not any("Traceback" in t for t in seen)
     assert panel.winfo_exists()
+
+
+def test_report_panel_failure_message_hides_the_exception(root, db, monkeypatch, when_dialog_appears,
+                                                           dialog_texts, click_button):
+    from admin import attendance_report, report_panel
+
+    panel = report_panel.ReportPanel(root)
+    panel.pack()
+
+    def boom(_date):
+        raise RuntimeError("secret-path /data/x.db")
+
+    monkeypatch.setattr(attendance_report, "build_report", boom)
+    seen = []
+    errors = when_dialog_appears(lambda d: (seen.extend(dialog_texts(d)), click_button(d, "確定")))
+    panel.refresh()
+    assert not errors, errors
+    assert seen and not any("secret-path" in t for t in seen)
+
+
+def test_report_table_scrolls_with_many_rows(root, db, add_user):
+    from admin import report_panel
+
+    for i in range(60):
+        add_user(f"員工{i}", f"E{i}")
+    panel = report_panel.ReportPanel(root)
+    panel.pack(fill="both", expand=True)
+    root.deiconify()
+    root.update()
+    assert len(panel.tree.get_children()) == 60
+    assert panel.tree.yview()[1] < 1.0                           # 一頁放不下，捲軸有作用
+    assert panel.tree.tag_has("odd", panel.tree.get_children()[0])
 
 
 # --- 異常通知 ---
