@@ -312,16 +312,12 @@ def remove_holiday(date):
 
 def list_holidays(start=None, end=None):
     """列出假日 [{date, name}]，可用起訖日期（含）篩選。"""
-    clauses, params = [], []
-    if start:
-        clauses.append("date >= ?")
-        params.append(_valid_date(start))
-    if end:
-        clauses.append("date <= ?")
-        params.append(_valid_date(end))
-    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
-        rows = conn_db.execute(f"SELECT date, name FROM Holidays{where} ORDER BY date", params).fetchall()  # noqa: S608
+    start = _valid_date(start) if start else None
+    end = _valid_date(end) if end else None
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:   # 固定查詢；沒給的條件以 NULL 略過
+        rows = conn_db.execute(
+            "SELECT date, name FROM Holidays WHERE (? IS NULL OR date >= ?) AND (? IS NULL OR date <= ?) "
+            "ORDER BY date", (start, start, end, end)).fetchall()
     return [{"date": r[0], "name": r[1]} for r in rows]
 
 def is_holiday(date):

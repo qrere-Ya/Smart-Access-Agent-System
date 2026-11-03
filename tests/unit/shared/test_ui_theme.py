@@ -1,7 +1,8 @@
 """shared/ui_theme.py 的純邏輯測試：token 完整性、亮暗色鍵一致、文字對比度、參數驗證（不需要顯示器）。"""
 import pytest
 
-from shared import ui_theme as t
+pytest.importorskip("customtkinter")   # CI 的輕量依賴不含 customtkinter，只在本機執行
+from shared import ui_theme as t  # noqa: E402
 
 
 def test_light_and_dark_have_same_keys():
