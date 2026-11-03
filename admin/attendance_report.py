@@ -4,7 +4,7 @@ attendance_report.py：每日出勤報告的純邏輯（不碰任何畫面元件
 主要功能：
   - build_report：指定日期，彙整每位在職員工的狀態（準時、遲到、早退、缺勤、未打卡、假日、請假）與當日異常事件數
     打卡紀錄優先用 user_id 對應員工，舊紀錄（user_id 為空）才退回姓名（同名多人時不猜測）；
-    假日不列缺勤，請假中的員工顯示「請假」；假日或請假當天若仍有打卡，以實際打卡狀態為準
+    假日與每週休息日（預設週六、週日，可設定）不列缺勤，請假中的員工顯示「請假」；休息或請假當天若仍有打卡，以實際打卡狀態為準
   - export_csv：匯出 CSV（utf-8-sig 讓 Excel 直接開得起來），並防 CSV 公式注入
   只做參數化的唯讀查詢；「缺勤」代表非假日、非請假且當天完全沒有打卡紀錄。
 
@@ -89,7 +89,7 @@ def build_report(day):
         punches = conn.execute(
             "SELECT user_id, name, timestamp, status FROM Attendance WHERE timestamp >= ? AND timestamp < ? "
             "ORDER BY timestamp, id", (since, until)).fetchall()
-        holiday = conn.execute("SELECT name FROM Holidays WHERE date = ?", (day,)).fetchone()
+        day_off = database_mgr.day_off_reason(day, conn)
         leaves = conn.execute(
             "SELECT user_id, kind, note FROM Leaves WHERE start_date <= ? AND end_date >= ? ORDER BY id",
             (day, day)).fetchall()
@@ -109,12 +109,11 @@ def build_report(day):
     leave_by_id = {}
     for uid, kind, note in leaves:
         leave_by_id.setdefault(uid, {"kind": kind, "note": note})
-    holiday_name = None if holiday is None else (holiday[0] or "")
 
     rows, counts = [], {}
     for uid, name, emp_id in users:
         records = sorted(by_id.get(uid, []) + by_name.get(name, []))
-        status, t_in, t_out, note = _classify(records, holiday_name, leave_by_id.get(uid))
+        status, t_in, t_out, note = _classify(records, day_off, leave_by_id.get(uid))
         rows.append({"employee_id": emp_id, "name": name, "status": status,
                      "clock_in": t_in, "clock_out": t_out, "note": note})
         counts[status] = counts.get(status, 0) + 1

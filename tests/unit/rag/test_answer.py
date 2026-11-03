@@ -208,10 +208,12 @@ def test_status_list_without_a_status_says_which_one_it_assumed(store, people):
     assert "沒有指定狀態，預設查「遲到」" in ask(make(store, llm), "今天誰有紀錄")
 
 
-def test_daily_summary_lists_people_without_records_with_a_warning(store, people):
+def test_daily_summary_lists_people_without_records_and_says_it_is_a_rest_day(store, people):
+    """測試用的「今天」是週六：摘要要說明是休息日，沒打卡屬正常（上班日的提醒見 test_rest_days_and_identity）。"""
     llm = FakeLLM({"今天出勤狀況": {"data": "summary"}})
     text = ask(make(store, llm), "今天出勤狀況")
-    assert "有打卡人數：2" in text and "在職但當天沒有打卡紀錄：葉君緯" in text and "不等於缺勤" in text
+    assert "有打卡人數：2" in text and "在職但當天沒有打卡紀錄：葉君緯" in text
+    assert "週休（週六），不用上班" in text and "休息日沒有打卡屬正常" in text
 
 
 def test_summary_for_a_range_falls_back_to_one_day_and_says_so(store, people):
