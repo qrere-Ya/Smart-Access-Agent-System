@@ -176,7 +176,8 @@ class LoginWindow(ctk.CTkToplevel):
     def _grab(self):
         """設為模態；視窗尚未可見時不強制，仍可操作。"""
         try:
-            self.wait_visibility()
+            if not self.winfo_viewable():   # 已經可見時再等一次永遠等不到「可見狀態改變」，會卡死
+                self.wait_visibility()
             self.grab_set()
         except tk.TclError:
             pass
