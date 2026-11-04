@@ -71,3 +71,17 @@ def test_no_holidays_are_added_and_only_weekdays_have_attendance(db):
     days = {r[0][:10] for r in con.execute("SELECT timestamp FROM Attendance")}
     con.close()
     assert days and all(datetime.date.fromisoformat(d).weekday() < 5 for d in days)
+
+
+def test_nobody_has_attendance_on_a_day_they_are_on_leave(db):
+    demo_data.add(TODAY)
+    con = sqlite3.connect(db)
+    leaves = con.execute(
+        "SELECT u.name, l.start_date, l.end_date FROM Leaves l JOIN Users u ON u.id = l.user_id").fetchall()
+    assert leaves
+    for name, start, end in leaves:
+        clash = con.execute(
+            "SELECT COUNT(*) FROM Attendance WHERE name = ? AND substr(timestamp, 1, 10) BETWEEN ? AND ?",
+            (name, start, end)).fetchone()[0]
+        assert clash == 0, (name, start, end)
+    con.close()

@@ -2,7 +2,7 @@
 demo_data.py：產生與移除示範用的假資料（假員工、假出勤、假請假、假異常事件），給遠端測試入口展示用。
 
 主要功能：
-  - add：新增 5 位假員工與近兩週的出勤、請假、異常事件；已經有假員工時不重複新增
+  - add：新增 5 位假員工與近兩週的出勤、請假、異常事件（請假那幾天沒有打卡）；已經有假員工時不重複新增
   - remove：只刪除假資料（員工編號 DEMO- 開頭的員工與他們的出勤、請假，以及標註示範的異常事件），真實資料不動
   - 假員工的人臉特徵是長度極大的向量，距離任何真實人臉都遠大於門檻，不會被門禁誤認成其他人；
     維度跟資料庫裡現有的特徵一致（空資料庫用 512），避免門禁比對時維度不合出錯
@@ -54,6 +54,9 @@ def add(today: datetime.date = None) -> dict:
     if exists():
         return counts
     rng = random.Random(7)  # noqa: S311  # nosec B311  固定種子的假資料，與安全無關
+    leaves = [("測試乙", 1, 1, "病假"), ("測試丁", 3, 4, "特休"), ("測試丙", -3, -2, "事假")]
+    leave_days = {(name, today + datetime.timedelta(days=d)) for name, start, end, _ in leaves
+                  for d in range(start, end + 1)}
     with _connect() as conn:
         embedding = np.full(_embedding_dim(conn), FAR_VALUE, dtype=np.float32)
         ids = {}
@@ -69,6 +72,8 @@ def add(today: datetime.date = None) -> dict:
             if day.weekday() >= 5:
                 continue
             for name, user_id in ids.items():
+                if (name, day) in leave_days:
+                    continue                                  # 請假那天沒有打卡，資料才前後一致
                 roll = rng.random()
                 if roll < 0.08:
                     continue                                  # 這天沒來
@@ -81,7 +86,6 @@ def add(today: datetime.date = None) -> dict:
                     conn.execute("INSERT INTO Attendance (name, timestamp, status, user_id) VALUES (?, ?, ?, ?)",
                                  (name, f"{day.isoformat()} {clock}", status, user_id))
                     counts["attendance"] += 1
-        leaves = [("測試乙", 1, 1, "病假"), ("測試丁", 3, 4, "特休"), ("測試丙", -3, -2, "事假")]
         for name, start, end, kind in leaves:
             conn.execute("INSERT INTO Leaves (user_id, start_date, end_date, kind, note) VALUES (?, ?, ?, ?, ?)",
                          (ids[name], (today + datetime.timedelta(days=start)).isoformat(),
