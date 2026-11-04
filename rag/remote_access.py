@@ -6,7 +6,8 @@ remote_access.py：遠端測試入口的存取控制與流量控制（純邏輯�
     已登入的工作階段每次請求也會用 fingerprint 重新確認金鑰仍有效
   - FailureBudget：全站登入失敗預算，不看來源位址；EventLog：登入成功、失敗、鎖定的安全事件紀錄
   - Gate：全站同時處理的題數上限與排隊上限，排太久就放棄，避免筆電被同時多題壓垮
-  - QuestionLog：把「誰、何時、問什麼、用了哪些工具、結果」一行一筆記下來（不記回答內容），可關閉
+  - QuestionLog：把「誰、何時、問什麼、用了哪些工具、結果」一行一筆記下來；with_answers 開啟時再存系統回答、
+    路由決定、檢索到的文件段落與分數、查詢結果表格，用來檢查 RAG 檢索與回答是否正確（含個資）；可關閉
   - GatedAssistant：包住每位使用者自己的 Assistant，問答前先排隊取得名額，結束後釋放並寫紀錄
 
 串接模組：
@@ -32,6 +33,10 @@ MAX_CONCURRENT = 1            # 同時處理的題數；向量與重排模型是
 MAX_WAITING = 5               # 排隊人數上限，超過直接回覆忙碌
 QUEUE_WAIT_SECONDS = 90.0     # 排隊最久等這麼久
 LOG_QUESTION_CHARS = 1000
+ANSWER_LOG_CHARS = 8000       # 提問紀錄裡每題回答最多存多少字
+DATA_LOG_CHARS = 3000         # 查詢結果表格最多存多少字
+SNIPPET_CHARS = 400           # 每個檢索到的文件段落存前幾個字
+HITS_LOGGED = 10              # 每題最多存幾個檢索結果
 DEFAULT_KEY_DAYS = 7          # 金鑰預設有效天數；外洩時的曝險期有上限
 BUDGET_MAX_FAILURES = 30      # 全站登入失敗上限：這段時間內不分來源，合計失敗這麼多次就暫停所有登入
 BUDGET_WINDOW_SECONDS = 600.0
@@ -225,19 +230,53 @@ class Gate:
         return None
 
 
-class QuestionLog:
-    """提問紀錄（JSON Lines）：只記誰、時間、問題、用了哪些工具、結果，不記回答內容。"""
+def _keep_text(text: str, limit: int) -> str:
+    """回答與資料表這類多行文字：保留換行（JSON 會跳脫），只把 Unicode 行分隔字元換成空白，並截短。"""
+    return "".join(" " if c in (" ", " ", "\x85") else c for c in str(text or ""))[:limit]
 
-    def __init__(self, path: Optional[str] = None, enabled: bool = True):
-        self.path, self.enabled = path or paths.REMOTE_LOG_PATH, enabled
+
+def _score(value) -> Optional[float]:
+    return None if value is None else round(float(value), 4)
+
+
+def trace_details(trace, answer_text: str) -> dict:
+    """一題的檢查資料：系統回答，加上能判斷「檢索對不對」的內部資訊
+    （路由決定、日期區間、比對到的人、檢索到的文件段落與分數、查出來的資料表）。"""
+    plan, rng = getattr(trace, "plan", None), getattr(trace, "date_range", None)
+    return {
+        "answer": _keep_text(answer_text, ANSWER_LOG_CHARS),
+        "plan": None if plan is None else {
+            "docs": plan.docs, "data": plan.data, "person": plan.person, "status": plan.status,
+            "event_type": plan.event_type, "source": plan.source,
+            "steps": [{"data": s.data, "person": s.person, "status": s.status, "event_type": s.event_type}
+                      for s in plan.steps]},
+        "date_range": None if rng is None else {"start": rng.start, "end": rng.end, "phrase": rng.phrase},
+        "person": _keep_text(trace.person, EVENT_FIELD_CHARS),
+        "hits": [{"source": _keep_text(h.chunk.get("source", ""), 200), "label": _keep_text(h.label, 200),
+                  "page": h.chunk.get("page"), "score": _score(h.score), "dense": _score(h.dense),
+                  "rerank": _score(h.rerank), "text": _keep_text(h.chunk.get("body", ""), SNIPPET_CHARS)}
+                 for h in trace.hits[:HITS_LOGGED]],
+        "data_text": _keep_text(trace.data_text, DATA_LOG_CHARS),
+        "note": _keep_text(trace.note, EVENT_FIELD_CHARS * 3),
+    }
+
+
+class QuestionLog:
+    """提問紀錄（JSON Lines）：誰、時間、問題、用了哪些工具、結果。with_answers 開啟時，再加上系統回答與
+    檢索資訊（見 trace_details），用來檢查 RAG 檢索與回答是否正確；這些內容含個資，要當個資處理。"""
+
+    def __init__(self, path: Optional[str] = None, enabled: bool = True, with_answers: bool = False):
+        self.path, self.enabled, self.with_answers = path or paths.REMOTE_LOG_PATH, enabled, with_answers
         self._lock = threading.Lock()
 
-    def record(self, user: str, question: str, tools: list, outcome: str):
+    def record(self, user: str, question: str, tools: list, outcome: str, details: Optional[dict] = None):
         if not self.enabled:
             return
-        line = json.dumps({"time": datetime.datetime.now().isoformat(timespec="seconds"), "user": _plain(user),
-                           "question": _plain(question[:LOG_QUESTION_CHARS]), "tools": list(tools),
-                           "outcome": outcome}, ensure_ascii=False)
+        row = {"time": datetime.datetime.now().isoformat(timespec="seconds"), "user": _plain(user),
+               "question": _plain(question[:LOG_QUESTION_CHARS]), "tools": list(tools), "outcome": outcome}
+        if self.with_answers and details:
+            row.update(details)
+        line = json.dumps(row, ensure_ascii=False)
         try:
             with self._lock, open(self.path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
@@ -275,10 +314,14 @@ class GatedAssistant:
             yield BUSY_TEXT
             return
         self._ticket = None
-        outcome = "error"
+        outcome, pieces = "error", []
         try:
-            yield from self.assistant.ask(question)
+            for piece in self.assistant.ask(question):
+                pieces.append(piece)
+                yield piece
             outcome = self.assistant.last.outcome
         finally:
             self.gate.release()
-            self.log.record(self.user, question, self.assistant.last.tools, outcome)
+            last = self.assistant.last
+            details = trace_details(last, "".join(pieces)) if self.log.with_answers else None
+            self.log.record(self.user, question, last.tools, outcome, details)

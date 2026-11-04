@@ -225,6 +225,73 @@ def test_question_log_records_question_but_not_answer(tmp_path):
     assert set(row) == {"time", "user", "question", "tools", "outcome"}
 
 
+def sample_trace():
+    from rag import dates, doc_store, router
+
+    hit = doc_store.Hit(chunk={"source": "規章.pdf", "title": "請假辦法", "section": "第二章", "article": "第5條",
+                               "page": 3, "body": "特休假依年資給假。" + "字" * 600},
+                        score=0.8123456, dense=0.71, rerank=0.9321)
+    plan = router.Plan(docs=True, data="count", person="王小明", status="遲到",
+                       steps=[router.Step(data="leaves", person="王小明")])
+    return answer.Trace(plan=plan, date_range=dates.DateRange("2026-11-01", "2026-11-30", "這個月"),
+                        person="王小明", hits=[hit], data_text="王小明 遲到：3 次\n第二行", tools=["count", "leaves"],
+                        outcome="answered", note="")
+
+
+def test_answers_and_retrieval_details_are_logged_only_when_enabled(tmp_path):
+    from rag import remote_access as ra
+
+    off = ra.QuestionLog(str(tmp_path / "off.jsonl"))
+    off.record("甲", "問題", ["count"], "answered", ra.trace_details(sample_trace(), "回答"))
+    assert "answer" not in json.loads(open(off.path, encoding="utf-8").read())
+    on = ra.QuestionLog(str(tmp_path / "on.jsonl"), with_answers=True)
+    on.record("甲", "問題", ["count"], "answered", ra.trace_details(sample_trace(), "第一行\n第二行"))
+    row = json.loads(open(on.path, encoding="utf-8").read())
+    assert row["answer"] == "第一行\n第二行" and row["person"] == "王小明" and row["data_text"].startswith("王小明")
+    assert row["plan"]["data"] == "count" and row["plan"]["steps"] == [
+        {"data": "leaves", "person": "王小明", "status": None, "event_type": None}]
+    assert row["date_range"] == {"start": "2026-11-01", "end": "2026-11-30", "phrase": "這個月"}
+    hit = row["hits"][0]
+    assert hit["source"] == "規章.pdf" and hit["label"] == "請假辦法 第二章 第5條" and hit["page"] == 3
+    assert hit["rerank"] == 0.9321 and hit["score"] == 0.8123 and len(hit["text"]) == 400
+
+
+def test_answer_log_is_capped_and_line_safe(tmp_path):
+    from rag import remote_access as ra
+
+    log = ra.QuestionLog(str(tmp_path / "a.jsonl"), with_answers=True)
+    log.record("甲", "問題", [], "answered", ra.trace_details(answer.Trace(), "字" * 20000 + " 偽造"))
+    text = open(log.path, encoding="utf-8").read()
+    assert len(text.splitlines()) == 1 and " " not in text
+    assert len(json.loads(text)["answer"]) == ra.ANSWER_LOG_CHARS
+
+
+def test_gated_assistant_logs_the_full_streamed_answer_and_trace(tmp_path):
+    from rag import remote_access as ra
+
+    class Streaming(FakeAssistant):
+        def ask(self, question):
+            self.last = sample_trace()
+            yield "前半"
+            yield "後半"
+
+    log = ra.QuestionLog(str(tmp_path / "q.jsonl"), with_answers=True)
+    gated = ra.GatedAssistant(Streaming(), ra.Gate(), log, "小明")
+    assert "".join(gated.ask("問題")) == "前半後半"
+    row = logged(log)[0]
+    assert row["answer"] == "前半後半" and row["tools"] == ["count", "leaves"] and row["hits"][0]["rerank"] == 0.9321
+
+
+def test_busy_questions_log_no_answer_details(tmp_path):
+    from rag import remote_access as ra
+
+    gate = ra.Gate(max_concurrent=1, max_waiting=0, wait_seconds=0.1)
+    gate.acquire(object())
+    log = ra.QuestionLog(str(tmp_path / "q.jsonl"), with_answers=True)
+    list(ra.GatedAssistant(FakeAssistant(), gate, log, "小明").ask("問題"))
+    assert "answer" not in logged(log)[0]
+
+
 def test_disabled_log_writes_nothing(tmp_path):
     log = remote_access.QuestionLog(str(tmp_path / "q.jsonl"), enabled=False)
     log.record("小明", "誰遲到", [], "answered")

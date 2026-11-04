@@ -1,6 +1,7 @@
 """
 test_remote_server.py：遠端測試入口的網頁服務（Flask 測試用戶端，不需要網路與模型）。
 """
+import json
 import os
 import time
 
@@ -325,6 +326,17 @@ def test_question_log_has_user_question_and_tools(env):
     settle(client)
     row = open(env.log.path, encoding="utf-8").read()
     assert "小明" in row and "誰遲到" in row and "count" in row and "回答：" not in row
+
+
+def test_answers_are_logged_end_to_end_when_answer_logging_is_on(env):
+    env.log = remote_access.QuestionLog(env.log.path, with_answers=True)
+    client = env.app().test_client()
+    env.login(client, "小明")
+    ask(env, client, "誰遲到")
+    settle(client)
+    row = json.loads(open(env.log.path, encoding="utf-8").read().splitlines()[-1])
+    assert row["question"] == "誰遲到" and row["answer"] == "回答：誰遲到" and row["tools"] == ["count"]
+    assert row["user"] == "小明" and "plan" in row and "hits" in row
 
 
 def test_session_cap(env, monkeypatch):

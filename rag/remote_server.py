@@ -8,7 +8,8 @@ remote_server.py：專題RAG測試的遠端入口（企業知識庫與出勤查�
     只信任本機代理連線附上的來源標頭
   - Host 白名單、Origin 同源、POST 必須是 JSON；回應帶內容安全政策等標頭並禁止搜尋引擎收錄；登入事件寫入安全事件紀錄
   - 每個工作階段有自己的 Assistant 與對話記憶（互不影響），共用同一份向量庫、重排與語言模型
-  - 問答經過流量閘門（同時處理數與排隊上限），網頁顯示「前面還有幾人」；提問寫入提問紀錄
+  - 問答經過流量閘門（同時處理數與排隊上限），網頁顯示「前面還有幾人」；提問、回答與檢索資訊預設寫入
+    runtime/remote_questions.jsonl（--no-log-answers 只記提問、--no-log 都不記）
   - 只有提問與回答：沒有設定頁、不能改語言模型、不能上傳文件；內部錯誤只在伺服器端印出，不回給使用者
   - 命令列管理金鑰：--add-key、--list-keys、--revoke-key
   這是測試用入口，不是完整的帳號系統：金鑰外洩就等於能查詢；用 Flask 內建伺服器，只適合少數人。
@@ -383,7 +384,9 @@ def main(argv=None):
                         help="經本機代理（例如 Tailscale Funnel）對外：Cookie 加 Secure、送 HSTS、依代理給的來源計次")
     parser.add_argument("--allowed-host", action="append", default=[], metavar="名稱",
                         help="額外允許的 Host 名稱（例如 Funnel 的 xxx.ts.net），可重複；預設只有本機位址")
-    parser.add_argument("--no-log", action="store_true", help="不記錄提問")
+    parser.add_argument("--no-log", action="store_true", help="不記錄提問（連回答也不記）")
+    parser.add_argument("--no-log-answers", action="store_true",
+                        help="只記提問，不記系統回答與檢索資訊（預設都記，用來檢查 RAG 對不對）")
     parser.add_argument("--allow-all-interfaces", action="store_true", help="允許綁 0.0.0.0（不建議）")
     parser.add_argument("--add-key", metavar="名稱")
     parser.add_argument("--days", type=float, default=remote_access.DEFAULT_KEY_DAYS,
@@ -408,10 +411,11 @@ def main(argv=None):
     print(f"[remote] {runtime.llm_note}")
     allowed = {args.host, "localhost", "127.0.0.1", *args.allowed_host}
     app = create_app(keystore, make_assistant_factory(runtime), remote_access.Gate(),
-                     remote_access.QuestionLog(enabled=not args.no_log), allowed_hosts=allowed,
-                     behind_proxy=args.behind_proxy)
+                     remote_access.QuestionLog(enabled=not args.no_log, with_answers=not args.no_log_answers),
+                     allowed_hosts=allowed, behind_proxy=args.behind_proxy)
     print(f"[remote] 允許的 Host 名稱：{', '.join(sorted(allowed))}")
-    print(f"[remote] 提問紀錄：{'關閉' if args.no_log else '開啟'}；本機網址 http://{args.host}:{args.port}/"
+    log_mode = "關閉" if args.no_log else ("只記提問" if args.no_log_answers else "提問、回答與檢索資訊")
+    print(f"[remote] 紀錄：{log_mode}；本機網址 http://{args.host}:{args.port}/"
           f"；{'經代理對外模式' if args.behind_proxy else '直接連線模式'}")
     try:
         from werkzeug.serving import WSGIRequestHandler, run_simple
