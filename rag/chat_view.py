@@ -16,7 +16,7 @@ import customtkinter as ctk
 
 from shared import ui_theme
 
-APP_TITLE = "管理者助理"
+APP_TITLE = "企業知識庫與出勤查詢"
 FONT_FAMILY = ui_theme.FONT_FAMILY
 SAMPLE_QUESTIONS = ["特別休假的規定是什麼？", "今天誰遲到？", "最近有沒有尾隨事件？", "這週的出勤狀況",
                     "颱風天公司要放假嗎？", "加班費怎麼計算？"]

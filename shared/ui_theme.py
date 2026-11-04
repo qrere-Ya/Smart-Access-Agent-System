@@ -1,5 +1,5 @@
 """
-ui_theme.py：後台與管理者助理共用的 CustomTkinter 主題（色彩、字型、間距與少量建構函式）。
+ui_theme.py：後台與企業知識庫視窗共用的 CustomTkinter 主題（色彩、字型、間距與少量建構函式）。
 
 主要功能：
   - 色彩 token（亮／暗兩套，以 rag/chat_window 的深色風格為基準）、字型與間距常數

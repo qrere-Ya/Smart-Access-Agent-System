@@ -165,7 +165,7 @@ def check_llm(settings=None, list_models=None, which=shutil.which):
         return Check("助理語言模型", OK, f"Ollama 已開，{model} 已安裝")
     if not which("ollama"):
         return Check("助理語言模型", FAIL, "電腦上找不到 Ollama", "安裝 Ollama（https://ollama.com），再下載設定的模型。")
-    return Check("助理語言模型", OK, "Ollama 已安裝，目前沒開（按後台「管理者助理」時會自動啟動）")
+    return Check("助理語言模型", OK, "Ollama 已安裝，目前沒開（按後台「企業知識庫與出勤查詢」時會自動啟動）")
 
 
 def check_network(get_ip=None):

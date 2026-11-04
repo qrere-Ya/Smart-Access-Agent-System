@@ -1,5 +1,5 @@
 """
-answer.py：管理者助理的問答流程（把檢索、固定查詢與 LLM 串起來）。
+answer.py：企業知識庫與出勤查詢的問答流程（把檢索、固定查詢與 LLM 串起來）。
 
 主要功能：
   - 判斷問題類型（router）→ 解析日期（dates）與人名（entity_resolver）

@@ -28,14 +28,15 @@ class ReportPanel(ctk.CTkFrame):
     COLUMNS = (("employee_id", "員工編號", 90), ("name", "姓名", 120), ("status", "狀態", 80),
                ("clock_in", "上班時間", 90), ("clock_out", "下班時間", 90), ("note", "備註", 300))
 
-    def __init__(self, master):
+    def __init__(self, master, embedded=False):
         super().__init__(master, fg_color="transparent", height=1)
         self.report = None
-        pad = ui_theme.PAD_LG
-        ui_theme.section_title(self, "📋 每日出勤報告").pack(anchor="w", padx=pad, pady=(pad, 0))
+        pad = 0 if embedded else ui_theme.PAD_LG       # 放進分頁時不重複標題與外距
+        if not embedded:
+            ui_theme.section_title(self, "📋 每日出勤報告").pack(anchor="w", padx=pad, pady=(pad, 0))
         ui_theme.muted_label(
-            self, "缺勤＝非假日、非請假且當天完全沒有打卡紀錄；假日與請假資料由「假日與請假」維護。").pack(
-            anchor="w", padx=pad, pady=(2, 10))
+            self, "缺勤＝非假日、非請假且當天完全沒有打卡紀錄；假日與請假資料在隔壁分頁維護。").pack(
+            anchor="w", padx=pad, pady=(4 if embedded else 2, 10))
 
         bar = ctk.CTkFrame(self, fg_color="transparent", height=1)
         bar.pack(fill="x", padx=pad, pady=(0, 8))

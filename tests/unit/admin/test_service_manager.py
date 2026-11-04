@@ -105,7 +105,7 @@ def test_stopping_everything_stops_ollama_terminal_web_server_and_the_assistant(
     assert [key for key, _ in calls] == ["ollama", "terminal", "web_server", "assistant"]
 
 
-# ---------- 本機 LLM 與管理者助理視窗 ----------
+# ---------- 本機 LLM 與企業知識庫視窗 ----------
 
 def test_ollama_already_running_is_not_started_twice(monkeypatch, fake_popen):
     monkeypatch.setattr(sm, "is_port_open", lambda host, port, timeout=0.3: True)
