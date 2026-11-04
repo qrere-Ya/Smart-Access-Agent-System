@@ -2,7 +2,9 @@
 remote_access.py：遠端測試入口的存取控制與流量控制（純邏輯，不含網頁，可單獨測試）。
 
 主要功能：
-  - KeyStore：每位組員一組存取金鑰，檔案只存雜湊；可新增、撤銷，撤銷後立刻失效（每次驗證都重讀檔案）
+  - KeyStore：每位組員一組存取金鑰，檔案只存雜湊；預設 7 天到期；可新增、撤銷，每次驗證都重讀檔案，
+    已登入的工作階段每次請求也會用 fingerprint 重新確認金鑰仍有效
+  - FailureBudget：全站登入失敗預算，不看來源位址；EventLog：登入成功、失敗、鎖定的安全事件紀錄
   - Gate：全站同時處理的題數上限與排隊上限，排太久就放棄，避免筆電被同時多題壓垮
   - QuestionLog：把「誰、何時、問什麼、用了哪些工具、結果」一行一筆記下來（不記回答內容），可關閉
   - GatedAssistant：包住每位使用者自己的 Assistant，問答前先排隊取得名額，結束後釋放並寫紀錄
@@ -18,6 +20,7 @@ import os
 import secrets
 import threading
 import time
+import unicodedata
 import datetime
 from typing import List, Optional
 
@@ -29,8 +32,18 @@ MAX_CONCURRENT = 1            # 同時處理的題數；向量與重排模型是
 MAX_WAITING = 5               # 排隊人數上限，超過直接回覆忙碌
 QUEUE_WAIT_SECONDS = 90.0     # 排隊最久等這麼久
 LOG_QUESTION_CHARS = 1000
+DEFAULT_KEY_DAYS = 7          # 金鑰預設有效天數；外洩時的曝險期有上限
+BUDGET_MAX_FAILURES = 30      # 全站登入失敗上限：這段時間內不分來源，合計失敗這麼多次就暫停所有登入
+BUDGET_WINDOW_SECONDS = 600.0
+BUDGET_BLOCK_SECONDS = 120.0
+EVENT_FIELD_CHARS = 100
 
 BUSY_TEXT = "目前使用的人太多，請稍後再問一次。"
+
+
+def _plain(text: str) -> str:
+    """把換行、控制字元與 Unicode 行分隔字元（U+2028 等）換成空白，避免用別的工具看紀錄時出現偽造的行。"""
+    return "".join(" " if unicodedata.category(c) in ("Zl", "Zp", "Cc", "Cf") else c for c in str(text))
 
 
 def _hash(key: str) -> str:
@@ -38,18 +51,29 @@ def _hash(key: str) -> str:
 
 
 class KeyStore:
-    """組員存取金鑰庫：檔案內容是 {名稱: 金鑰雜湊}，金鑰本身只在新增當下顯示一次。"""
+    """組員存取金鑰庫：檔案內容是 {名稱: {hash, expires}}，金鑰本身只在新增當下顯示一次；金鑰預設 7 天後失效。"""
 
     def __init__(self, path: Optional[str] = None):
         self.path = path or paths.REMOTE_KEYS_PATH
 
     def _load(self) -> dict:
+        """讀出 {名稱: {"hash": 雜湊, "expires": 到期時間或 None}}；舊格式（名稱對雜湊字串）視為不會到期。"""
         try:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
             return {}
-        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for label, entry in data.items():
+            if isinstance(entry, str):
+                out[str(label)] = {"hash": entry, "expires": None}
+            elif isinstance(entry, dict) and isinstance(entry.get("hash"), str):
+                expires = entry.get("expires")
+                out[str(label)] = {"hash": entry["hash"],
+                                   "expires": float(expires) if isinstance(expires, (int, float)) else None}
+        return out
 
     def _save(self, data: dict):
         tmp = f"{self.path}.{os.getpid()}.tmp"
@@ -64,16 +88,24 @@ class KeyStore:
     def labels(self) -> List[str]:
         return sorted(self._load())
 
-    def add(self, label: str) -> str:
-        """新增一位組員並回傳他的金鑰（只有這一次看得到）；名稱空白、過長、含控制字元或重複都拒絕。"""
+    def describe(self) -> List[tuple]:
+        """[(名稱, 到期時間或 None)]，依名稱排序，給 --list-keys 顯示。"""
+        return [(label, entry["expires"]) for label, entry in sorted(self._load().items())]
+
+    def add(self, label: str, days: Optional[float] = DEFAULT_KEY_DAYS, now: Optional[float] = None) -> str:
+        """新增一位組員並回傳他的金鑰（只有這一次看得到）；days 為有效天數（None 或 0 表示不會到期）。
+        名稱空白、過長、含控制字元或重複都拒絕。"""
         label = (label or "").strip()
         if not label or len(label) > KEY_LABEL_MAX or any(ord(c) < 32 for c in label):
             raise ValueError(f"名稱必須是 1 到 {KEY_LABEL_MAX} 個字，且不能含控制字元")
+        if days is not None and days < 0:
+            raise ValueError("有效天數不能是負數")
         data = self._load()
         if label in data:
             raise ValueError(f"「{label}」已經有金鑰了，要換請先撤銷")
         key = secrets.token_urlsafe(24)
-        data[label] = _hash(key)
+        now = time.time() if now is None else now
+        data[label] = {"hash": _hash(key), "expires": now + days * 86400 if days else None}
         self._save(data)
         return key
 
@@ -84,15 +116,68 @@ class KeyStore:
         self._save(data)
         return True
 
-    def verify(self, key: Optional[str]) -> Optional[str]:
-        """金鑰正確回傳組員名稱，否則 None；每個名稱都比對一次，不因為比中的順序洩漏時間差。"""
+    def fingerprint(self, label: str, now: Optional[float] = None) -> Optional[str]:
+        """名稱目前有效金鑰的雜湊（沒有這個名稱或已到期回傳 None）。工作階段登入時記下它，之後每次請求
+        重新比對：金鑰被撤銷、換新或到期，已登入的工作階段也跟著失效。"""
+        entry = self._load().get(label)
+        now = time.time() if now is None else now
+        if entry is None or (entry["expires"] is not None and now >= entry["expires"]):
+            return None
+        return entry["hash"]
+
+    def verify(self, key: Optional[str], now: Optional[float] = None) -> Optional[str]:
+        """金鑰正確且沒有到期回傳組員名稱，否則 None；每個名稱都比對一次，不因為比中的順序洩漏時間差。"""
         if not key or not isinstance(key, str):
             return None
+        now = time.time() if now is None else now
         digest, found = _hash(key), None
-        for label, stored in self._load().items():
-            if hmac.compare_digest(stored, digest):
+        for label, entry in self._load().items():
+            matched = hmac.compare_digest(entry["hash"], digest)
+            if matched and (entry["expires"] is None or now < entry["expires"]):
                 found = label
         return found
+
+
+class FailureBudget:
+    """全站登入失敗預算：不看來源位址（來源標頭可能被偽造），一段時間內失敗太多就暫停所有登入一小段時間。"""
+
+    def __init__(self, max_failures: int = BUDGET_MAX_FAILURES, window: float = BUDGET_WINDOW_SECONDS,
+                 block_seconds: float = BUDGET_BLOCK_SECONDS):
+        self.max_failures, self.window, self.block_seconds = max_failures, window, block_seconds
+        self._times: List[float] = []
+        self._blocked_until = 0.0
+
+    def blocked_for(self, now: float) -> float:
+        return max(0.0, self._blocked_until - now)
+
+    def record_failure(self, now: float):
+        self._times = [t for t in self._times if now - t < self.window] + [now]
+        if len(self._times) >= self.max_failures:
+            self._blocked_until = now + self.block_seconds
+            self._times = []
+
+
+class EventLog:
+    """安全事件紀錄（JSON Lines）：登入成功、失敗、鎖定。字串欄位會去掉控制字元並截短，避免偽造紀錄行。"""
+
+    def __init__(self, path: Optional[str] = None):
+        self.path = path or paths.REMOTE_EVENTS_PATH
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _clean(value):
+        if not isinstance(value, str):
+            return value
+        return "".join(c for c in value if c.isprintable())[:EVENT_FIELD_CHARS]
+
+    def record(self, kind: str, **fields):
+        row = {"time": datetime.datetime.now().isoformat(timespec="seconds"), "event": kind,
+               **{k: self._clean(v) for k, v in fields.items()}}
+        try:
+            with self._lock, open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except OSError as e:
+            print(f"[remote] 安全事件紀錄寫入失敗（略過）：{type(e).__name__}")
 
 
 class Busy(Exception):
@@ -150,9 +235,9 @@ class QuestionLog:
     def record(self, user: str, question: str, tools: list, outcome: str):
         if not self.enabled:
             return
-        line = json.dumps({"time": datetime.datetime.now().isoformat(timespec="seconds"), "user": user,
-                           "question": question[:LOG_QUESTION_CHARS], "tools": list(tools), "outcome": outcome},
-                          ensure_ascii=False)
+        line = json.dumps({"time": datetime.datetime.now().isoformat(timespec="seconds"), "user": _plain(user),
+                           "question": _plain(question[:LOG_QUESTION_CHARS]), "tools": list(tools),
+                           "outcome": outcome}, ensure_ascii=False)
         try:
             with self._lock, open(self.path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")

@@ -84,6 +84,7 @@ class Assistant:
         self._anomaly_rows: Optional[list] = None
         self.roster_provider = None  # 可選：回傳目前員工姓名清單，每題開始前更新人名比對
         self.show_evidence_paths = True  # 異常事件的回答是否附上證據照片的存放路徑；遠端入口關閉
+        self.show_internal_details = True  # 語言模型出錯時是否說明模型名稱、位址與設定提示；遠端入口關閉
         self.last = Trace()
 
     # --- 對外 ---
@@ -232,12 +233,18 @@ class Assistant:
             from rag import llm_settings
 
             self.last.outcome = "error"
+            if not self.show_internal_details:
+                print(f"[answer] 產生回答出錯（遠端模式，細節不回給使用者）：{type(e).__name__}")
+                yield "\n⚠️ 產生回答時出了問題，請稍後再試。"
+                getattr(self.llm, "pop_notices", lambda: [])()
+                return
             detail = llm_settings.format_error(e, markdown=False) if isinstance(e, llm_settings.LLMCallError) \
                 else f"{type(e).__name__}"
             yield f"\n⚠️ 產生回答時出了問題：{detail}"
         notices = getattr(self.llm, "pop_notices", lambda: [])()
-        for notice in notices:
-            yield f"\n{notice}"
+        if self.show_internal_details:
+            for notice in notices:
+                yield f"\n{notice}"
 
     @staticmethod
     def _relevant(hits, ratio):

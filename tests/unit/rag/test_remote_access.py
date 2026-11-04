@@ -79,6 +79,77 @@ def _try_acquire(gate, ticket):
         pass
 
 
+def test_keys_expire_after_their_days_and_zero_means_never(keystore):
+    short = keystore.add("短期", days=1, now=1000.0)
+    forever = keystore.add("長期", days=0, now=1000.0)
+    assert keystore.verify(short, now=1000.0 + 86399) == "短期"
+    assert keystore.verify(short, now=1000.0 + 86400) is None
+    assert keystore.verify(forever, now=1000.0 + 86400 * 3650) == "長期"
+    assert dict(keystore.describe()) == {"短期": 1000.0 + 86400, "長期": None}
+
+
+def test_default_key_lifetime_is_seven_days(keystore):
+    key = keystore.add("小明")
+    expires = dict(keystore.describe())["小明"]
+    assert 6.9 * 86400 < expires - time.time() < 7.1 * 86400
+    assert keystore.verify(key) == "小明" and keystore.verify(key, now=time.time() + 8 * 86400) is None
+
+
+def test_negative_days_are_rejected(keystore):
+    with pytest.raises(ValueError):
+        keystore.add("小明", days=-1)
+
+
+def test_old_format_key_file_still_works_and_never_expires(keystore):
+    key = "legacy-key"
+    with open(keystore.path, "w", encoding="utf-8") as f:
+        json.dump({"舊成員": remote_access._hash(key)}, f)
+    assert keystore.verify(key, now=time.time() + 86400 * 9999) == "舊成員"
+    assert dict(keystore.describe()) == {"舊成員": None}
+
+
+def test_failure_budget_blocks_everyone_after_too_many_failures():
+    budget = remote_access.FailureBudget(max_failures=3, window=100, block_seconds=50)
+    for t in (0, 1):
+        budget.record_failure(t)
+    assert budget.blocked_for(2) == 0
+    budget.record_failure(2)
+    assert budget.blocked_for(3) == 49 and budget.blocked_for(52) == 0
+
+
+def test_failure_budget_forgets_failures_outside_the_window():
+    budget = remote_access.FailureBudget(max_failures=3, window=10, block_seconds=50)
+    for t in (0, 20, 40, 60):
+        budget.record_failure(t)
+    assert budget.blocked_for(61) == 0
+
+
+def test_question_log_neutralizes_unicode_line_separators(tmp_path):
+    log = remote_access.QuestionLog(str(tmp_path / "q.jsonl"))
+    log.record("甲 乙", "第一行 {\"user\": \"偽造\"}\u0085\n第二行", [], "answered")
+    text = open(log.path, encoding="utf-8").read()
+    assert len(text.splitlines()) == 1 and " " not in text and "\u0085" not in text
+
+
+def test_fingerprint_changes_when_a_key_is_replaced_and_vanishes_on_revoke(keystore):
+    keystore.add("甲")
+    first = keystore.fingerprint("甲")
+    keystore.revoke("甲")
+    assert keystore.fingerprint("甲") is None
+    keystore.add("甲")
+    assert keystore.fingerprint("甲") not in (None, first)
+    assert keystore.fingerprint("不存在") is None
+
+
+def test_event_log_strips_control_characters_and_truncates(tmp_path):
+    log = remote_access.EventLog(str(tmp_path / "e.jsonl"))
+    log.record("login_fail", xff="1.1.1.1\n{\"event\": \"login_ok\"}\x00" + "x" * 500, user="甲")
+    lines = open(log.path, encoding="utf-8").read().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["event"] == "login_fail" and "\n" not in row["xff"] and len(row["xff"]) <= 100
+
+
 def test_gate_second_caller_waits_until_release():
     gate = remote_access.Gate(max_concurrent=1, max_waiting=3, wait_seconds=5)
     first, second = object(), object()

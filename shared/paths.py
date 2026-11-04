@@ -28,6 +28,7 @@ LOGIN_LOCK_PATH = os.path.join(RUNTIME_DIR, "login_lock.json")
 ANOMALY_SEEN_PATH = os.path.join(RUNTIME_DIR, "anomaly_seen.json")
 REMOTE_KEYS_PATH = os.path.join(RUNTIME_DIR, "remote_keys.json")
 REMOTE_LOG_PATH = os.path.join(RUNTIME_DIR, "remote_questions.jsonl")
+REMOTE_EVENTS_PATH = os.path.join(RUNTIME_DIR, "remote_events.jsonl")
 
 VENV_PYTHON = os.environ.get("SMART_ACCESS_PYTHON") or os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 

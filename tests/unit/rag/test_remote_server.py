@@ -33,6 +33,7 @@ class Env:
     def __init__(self, tmp_path):
         self.keystore = remote_access.KeyStore(str(tmp_path / "keys.json"))
         self.log = remote_access.QuestionLog(str(tmp_path / "q.jsonl"))
+        self.events = remote_access.EventLog(str(tmp_path / "e.jsonl"))
         self.now = 1000.0
         self.assistants = []
         self.raises = False
@@ -42,9 +43,10 @@ class Env:
         self.assistants.append(a)
         return a
 
-    def app(self, gate=None):
+    def app(self, gate=None, **kwargs):
+        kwargs.setdefault("events", self.events)
         return remote_server.create_app(self.keystore, self.factory, gate or remote_access.Gate(), self.log,
-                                        clock=lambda: self.now)
+                                        clock=lambda: self.now, **kwargs)
 
     def login(self, client, label):
         key = self.keystore.add(label)
@@ -104,14 +106,113 @@ def test_login_sets_httponly_strict_cookie(env):
     assert r.get_json()["name"] == "小明" and "HttpOnly" in cookie and "SameSite=Strict" in cookie
 
 
-def test_wrong_key_is_rejected_and_five_failures_lock_even_the_right_key(env):
+def test_five_wrong_keys_lock_further_guessing_but_the_right_key_still_works(env):
     client = env.app().test_client()
     key = env.keystore.add("小明")
     for _ in range(5):
-        assert client.post("/api/login", json={"key": "wrong"}).status_code in (401, 429)
-    assert client.post("/api/login", json={"key": key}).status_code == 429
+        assert client.post("/api/login", json={"key": "wrong"}).status_code == 401
+    assert client.post("/api/login", json={"key": "wrong"}).status_code == 429
+    assert client.post("/api/login", json={"key": key}).status_code == 200    # 有人狂試錯誤金鑰，鎖不住組員
     env.now += 61
+    assert client.post("/api/login", json={"key": "wrong"}).status_code == 401
+
+
+def test_blocked_failures_are_not_logged_again(env):
+    client = env.app().test_client()
+    for _ in range(5):
+        client.post("/api/login", json={"key": "wrong"})
+    before = open(env.events.path, encoding="utf-8").read().count("\n")
+    for _ in range(50):
+        assert client.post("/api/login", json={"key": "wrong"}).status_code == 429
+    assert open(env.events.path, encoding="utf-8").read().count("\n") == before
+
+
+def test_revoking_a_key_ends_its_live_session_but_not_others(env):
+    app = env.app()
+    a, b = app.test_client(), app.test_client()
+    env.login(a, "甲")
+    env.login(b, "乙")
+    assert a.get("/api/state").status_code == 200
+    env.keystore.revoke("甲")
+    assert a.get("/api/state").status_code == 401 and b.get("/api/state").status_code == 200
+
+
+def test_replacing_a_key_ends_the_old_session(env):
+    client = env.app().test_client()
+    env.login(client, "甲")
+    env.keystore.revoke("甲")
+    env.keystore.add("甲")
+    assert client.get("/api/state").status_code == 401
+
+
+def test_key_expiry_ends_a_live_session(env):
+    client = env.app().test_client()
+    key = env.keystore.add("甲", days=1, now=env.now)
     assert client.post("/api/login", json={"key": key}).status_code == 200
+    env.now += 86400 + 1
+    assert client.get("/api/state").status_code == 401
+
+
+def test_one_key_cannot_hold_more_than_three_sessions(env):
+    app = env.app()
+    key = env.keystore.add("甲")
+    clients = [app.test_client() for _ in range(4)]
+    for c in clients:
+        assert c.post("/api/login", json={"key": key}).status_code == 200
+    assert [c.get("/api/state").status_code for c in clients] == [401, 200, 200, 200]
+
+
+def test_deeply_nested_json_does_not_cause_a_server_error(env):
+    client = env.app().test_client()
+    body = "[" * 1900 + "]" * 1900
+    r = client.post("/api/login", data=body, content_type="application/json")
+    assert r.status_code == 401
+
+
+def test_overlong_question_is_refused(env):
+    client = env.app().test_client()
+    env.login(client, "小明")
+    assert client.post("/api/ask", json={"question": "a" * 1001}).status_code == 400
+    assert ask(env, client, "a" * 1000).status_code == 200
+
+
+def test_login_cookie_is_a_browser_session_cookie(env):
+    client = env.app().test_client()
+    key = env.keystore.add("小明")
+    assert "Max-Age" not in client.post("/api/login", json={"key": key}).headers["Set-Cookie"]
+
+
+def test_llm_failures_do_not_reveal_internal_settings_to_remote_users():
+    from rag import llm_settings
+
+    class Boom:
+        def stream_complete(self, prompt):
+            raise llm_settings.LLMCallError("auth", "api", "secret-model-detail", 401)
+            yield   # pragma: no cover
+
+    remote = answer.Assistant(None, None, Boom(), None)
+    remote.show_internal_details = False
+    out = "".join(remote._stream("問題"))
+    assert "請稍後再試" in out and "secret-model-detail" not in out and remote.last.outcome == "error"
+    local = answer.Assistant(None, None, Boom(), None)
+    assert "請稍後再試" not in "".join(local._stream("問題"))
+
+
+@pytest.mark.parametrize("name", ["https://msi.tail1.ts.net/", "msi.tail1.ts.net:8765", "msi.tail1.ts.net/",
+                                  "你的电脑.xxxx.ts.net", "a b.ts.net", "-bad.ts.net", ""])
+def test_malformed_allowed_host_is_refused_at_startup(env, monkeypatch, name):
+    monkeypatch.setattr(remote_access.paths, "REMOTE_KEYS_PATH", env.keystore.path)
+    env.keystore.add("甲")
+    with pytest.raises(SystemExit) as info:
+        remote_server.main(["--behind-proxy", f"--allowed-host={name}"])   # 用等號寫法，開頭是 - 的值才不會被當成參數
+    assert "--allowed-host" in str(info.value)
+
+
+def test_allowed_host_without_behind_proxy_is_refused(env, monkeypatch):
+    monkeypatch.setattr(remote_access.paths, "REMOTE_KEYS_PATH", env.keystore.path)
+    env.keystore.add("甲")
+    with pytest.raises(SystemExit):
+        remote_server.main(["--allowed-host", "x.ts.net"])
 
 
 def test_login_without_json_body_fails(env):
@@ -234,6 +335,162 @@ def test_session_cap(env, monkeypatch):
     assert app.test_client().post("/api/login", json={"key": key}).status_code == 503
 
 
+PROXY = {"base_url": "https://funnel.example.ts.net"}
+
+
+def proxy_client(env, **kwargs):
+    return env.app(behind_proxy=True, allowed_hosts={"funnel.example.ts.net"}, **kwargs).test_client()
+
+
+def fail_login(client, xff=None, peer=None, **kwargs):
+    headers = {"X-Forwarded-For": xff} if xff else {}
+    environ = {"REMOTE_ADDR": peer} if peer else {}
+    return client.post("/api/login", json={"key": "wrong"}, headers=headers, environ_overrides=environ, **kwargs)
+
+
+def test_proxy_mode_uses_host_prefixed_secure_cookie_and_hsts(env):
+    client = proxy_client(env)
+    key = env.keystore.add("小明")
+    r = client.post("/api/login", json={"key": key}, **PROXY)
+    cookie = r.headers["Set-Cookie"]
+    assert r.status_code == 200 and cookie.startswith("__Host-sa_remote=")
+    assert "Secure" in cookie and "HttpOnly" in cookie and "SameSite=Strict" in cookie and "Domain" not in cookie
+    assert "max-age" in r.headers["Strict-Transport-Security"]
+    assert client.get("/api/state", **PROXY).status_code == 200
+
+
+def test_proxy_mode_never_accepts_the_plain_cookie_name(env):
+    app = env.app(behind_proxy=True, allowed_hosts={"funnel.example.ts.net"})
+    client, other = app.test_client(), app.test_client()      # 同一個 app：會話是共用的
+    key = env.keystore.add("小明")
+    token = client.post("/api/login", json={"key": key}, **PROXY).headers["Set-Cookie"].split("=")[1].split(";")[0]
+    assert client.get("/api/state", **PROXY).status_code == 200
+    other.set_cookie("sa_remote", token, domain="funnel.example.ts.net")
+    assert other.get("/api/state", **PROXY).status_code == 401     # 用一般名稱帶同一個代碼不被接受
+    other.set_cookie("__Host-sa_remote", token, domain="funnel.example.ts.net")
+    assert other.get("/api/state", **PROXY).status_code == 200     # 對照組：用對的名稱就成功，證明代碼本身有效
+
+
+def test_direct_mode_has_no_hsts_and_plain_cookie(env):
+    client = env.app().test_client()
+    key = env.keystore.add("小明")
+    r = client.post("/api/login", json={"key": key})
+    assert r.headers["Set-Cookie"].startswith("sa_remote=") and "Strict-Transport-Security" not in r.headers
+
+
+def test_proxy_mode_counts_failures_per_forwarded_address(env):
+    client = proxy_client(env)
+    key = env.keystore.add("小明")
+    for _ in range(5):
+        fail_login(client, xff="198.51.100.7", **PROXY)
+    assert fail_login(client, xff="198.51.100.7", **PROXY).status_code == 429
+    ok = client.post("/api/login", json={"key": key}, headers={"X-Forwarded-For": "198.51.100.8"}, **PROXY)
+    assert ok.status_code == 200      # 另一個來源不受影響
+
+
+def test_proxy_mode_uses_the_rightmost_forwarded_entry_so_a_forged_left_part_does_not_help(env):
+    client = proxy_client(env)
+    for i in range(5):
+        fail_login(client, xff=f"10.0.0.{i}, 198.51.100.7", **PROXY)
+    assert fail_login(client, xff="10.9.9.9, 198.51.100.7", **PROXY).status_code == 429
+
+
+def test_forwarded_header_is_ignored_when_not_behind_a_proxy(env):
+    client = env.app().test_client()
+    for i in range(5):
+        fail_login(client, xff=f"198.51.100.{i}")
+    assert fail_login(client, xff="198.51.100.99").status_code == 429
+
+
+def test_forwarded_header_is_ignored_when_the_connection_is_not_from_the_local_proxy(env):
+    client = proxy_client(env)
+    for i in range(5):
+        fail_login(client, xff=f"198.51.100.{i}", peer="203.0.113.9", **PROXY)
+    assert fail_login(client, xff="198.51.100.99", peer="203.0.113.9", **PROXY).status_code == 429
+
+
+def test_garbage_forwarded_header_falls_back_to_the_connection_address(env):
+    client = proxy_client(env)
+    for _ in range(5):
+        fail_login(client, xff="not-an-ip", **PROXY)
+    assert fail_login(client, xff="also-garbage", **PROXY).status_code == 429
+
+
+def test_global_failure_budget_stops_logins_even_when_the_source_keeps_changing(env):
+    budget = remote_access.FailureBudget(max_failures=4, window=600, block_seconds=120)
+    client = proxy_client(env, budget=budget)
+    key = env.keystore.add("小明")
+    for i in range(4):
+        assert fail_login(client, xff=f"198.51.100.{i}", **PROXY).status_code == 401
+    assert fail_login(client, xff="203.0.113.50", **PROXY).status_code == 429      # 換新來源也一樣被擋
+    ok = client.post("/api/login", json={"key": key}, headers={"X-Forwarded-For": "203.0.113.50"}, **PROXY)
+    assert ok.status_code == 200               # 但正確的金鑰不受影響
+    env.now += 121
+    assert fail_login(client, xff="203.0.113.51", **PROXY).status_code == 401      # 預算期滿，恢復計次
+
+
+def test_per_address_table_does_not_grow_without_limit(env, monkeypatch):
+    monkeypatch.setattr(remote_server, "MAX_GUARDS", 3)
+    client = proxy_client(env)
+    for i in range(10):
+        assert fail_login(client, xff=f"198.51.100.{i}", **PROXY).status_code in (401, 429)
+
+
+def test_sessions_end_after_the_absolute_lifetime_even_with_activity(env):
+    client = env.app().test_client()
+    env.login(client, "小明")
+    start, status = env.now, 200
+    while status == 200 and env.now - start < remote_server.SESSION_MAX_SECONDS + 3600:
+        env.now += remote_server.SESSION_IDLE_SECONDS - 60
+        status = client.get("/api/state").status_code
+    assert status == 401
+    assert env.now - start >= remote_server.SESSION_MAX_SECONDS
+
+
+def test_expired_key_cannot_log_in(env):
+    client = env.app().test_client()
+    key = env.keystore.add("小明", days=1, now=env.now)
+    assert client.post("/api/login", json={"key": key}).status_code == 200
+    env.now += 86400 + 1
+    assert env.app().test_client().post("/api/login", json={"key": key}).status_code == 401
+
+
+def test_login_events_are_recorded_without_keys(env):
+    client = env.app().test_client()
+    key = env.login(client, "小明")
+    fail_login(client)
+    text = open(env.events.path, encoding="utf-8").read()
+    assert '"login_ok"' in text and '"login_fail"' in text and "小明" in text
+    assert key not in text and "wrong" not in text
+
+
+def test_robots_blocks_indexing_and_extra_headers_are_sent(env):
+    client = env.app().test_client()
+    r = client.get("/robots.txt")
+    assert r.status_code == 200 and "Disallow: /" in r.get_data(as_text=True)
+    page = client.get("/")
+    assert "noindex" in page.headers["X-Robots-Tag"] and "camera=()" in page.headers["Permissions-Policy"]
+    assert page.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+
+
+@pytest.mark.parametrize("extra", [["--host", "100.64.0.1", "--allowed-host", "x.ts.net"], ["--host", "127.0.0.1"]])
+def test_proxy_mode_needs_loopback_host_and_a_public_name(env, monkeypatch, extra):
+    monkeypatch.setattr(remote_access.paths, "REMOTE_KEYS_PATH", env.keystore.path)
+    env.keystore.add("甲")
+    with pytest.raises(SystemExit):
+        remote_server.main(["--behind-proxy", *extra])
+
+
+def test_list_keys_shows_expiry(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(remote_access.paths, "REMOTE_KEYS_PATH", str(tmp_path / "k.json"))
+    remote_server.main(["--add-key", "短期", "--days", "2"])
+    remote_server.main(["--add-key", "長期", "--days", "0"])
+    capsys.readouterr()
+    remote_server.main(["--list-keys"])
+    out = capsys.readouterr().out
+    assert "短期" in out and "到期" in out and "長期　不會到期" in out
+
+
 def test_post_must_be_json(env):
     client = env.app().test_client()
     key = env.keystore.add("小明")
@@ -261,6 +518,16 @@ def test_host_header_must_be_in_the_allowlist(env):
     key = env.keystore.add("小明")
     bad = client.post("/api/login", json={"key": key}, headers={"Host": "rebind.example"})
     assert bad.status_code == 400
+
+
+def test_rejected_hosts_are_printed_once_and_capped(env, capsys, monkeypatch):
+    monkeypatch.setattr(remote_server, "MAX_REJECTED_HOSTS_SHOWN", 3)
+    client = remote_server.create_app(env.keystore, env.factory, remote_access.Gate(), env.log,
+                                      clock=lambda: env.now, allowed_hosts={"localhost"}).test_client()
+    for host in ["a.example", "a.example", "b.example", "c.example", "d.example", "e.example\x1b[31m"]:
+        assert client.get("/", headers={"Host": host}).status_code == 400
+    out = capsys.readouterr().out
+    assert out.count("拒絕不在白名單的 Host") == 3 and out.count("a.example") == 1 and "d.example" not in out
 
 
 def test_factory_turns_off_evidence_paths_for_remote_assistants():
