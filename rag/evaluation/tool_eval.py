@@ -15,7 +15,8 @@ tool_eval.py：評估意圖判斷（router）選工具的表現，需要真的�
 
 串接模組：
   - router：build_prompt、parse_plan（被評估的對象）
-  - llm：build_llm 取得目前設定的語言模型（與正式環境相同）
+  - llm：build_llm 取得目前設定的語言模型；--llm api 時只用雲端本體（不帶備援），
+    呼叫失敗會重試，仍失敗算答錯並另外報告次數
   - stats：Wilson 信賴區間
   - mine_questions：把組員真實問過的題目匯出成待標註的候選題
 執行：python -m rag.evaluation.tool_eval --split dev --runs 3
@@ -24,6 +25,7 @@ import argparse
 import datetime
 import json
 import os
+import time
 from typing import Callable, Dict, List, Optional
 
 from rag import router
@@ -87,19 +89,34 @@ def check(item: dict, plan) -> dict:
             "person": getattr(plan, "person", None), "status": getattr(plan, "status", None)}
 
 
-def evaluate(complete: Callable[[str], str], questions: List[dict], multi: bool = True, runs: int = 1) -> List[dict]:
-    """每題問 runs 次，回傳 [{item, trials: [check 的結果]}]；complete 是 prompt -> 文字的函式。"""
+def _complete_with_retry(complete: Callable[[str], str], prompt: str, pause: tuple) -> str:
+    """呼叫語言模型；失敗就依 pause 的秒數等一下再試，全部失敗才丟出最後一次的例外。"""
+    for wait in (*pause, None):
+        try:
+            return complete(prompt)
+        except Exception:
+            if wait is None:
+                raise
+            time.sleep(wait)
+    raise AssertionError("unreachable")
+
+
+def evaluate(complete: Callable[[str], str], questions: List[dict], multi: bool = True, runs: int = 1,
+             pause: tuple = (3.0, 8.0)) -> List[dict]:
+    """每題問 runs 次，回傳 [{item, trials: [check 的結果]}]；complete 是 prompt -> 文字的函式。
+    呼叫失敗會重試（pause 是每次重試前等幾秒），仍失敗就算這次答錯並標記 error，不讓整個評估中斷。"""
     results = []
     for item in questions:
         trials = []
         for _ in range(runs):
             prompt = router.build_prompt(item["q"], item.get("history", ""), EVAL_DAY, multi=multi)
+            error = False
             try:
-                plan = router.parse_plan(complete(prompt))
-            except Exception as e:   # 呼叫失敗算這次答錯，不讓整個評估中斷
+                plan = router.parse_plan(_complete_with_retry(complete, prompt, pause))
+            except Exception as e:
                 print(f"[tool_eval] {item['id']} 呼叫失敗：{type(e).__name__}")
-                plan = None
-            trials.append(check(item, plan))
+                plan, error = None, True
+            trials.append({**check(item, plan), "error": error})
         results.append({"item": item, "trials": trials})
     return results
 
@@ -162,6 +179,11 @@ def _print_summary(title: str, summary: Dict[str, dict], results: List[dict]):
               f"{row['low']:>9.0%}～{row['high']:<5.0%}{row['target']:>7.0%}  {row['verdict']}")
 
 
+def error_count(results: List[dict]) -> int:
+    """呼叫語言模型失敗（重試後仍失敗）的次數；這些都算答錯，數字高代表結果主要反映服務不穩而不是模型能力。"""
+    return sum(1 for r in results for t in r["trials"] if t.get("error"))
+
+
 def _print_failures(results: List[dict]):
     for f in failures(results):
         got = ["格式不合" if t["got"] is None else "+".join(t["got"]) or "(無)" for t in f["trials"]]
@@ -200,8 +222,10 @@ def main(argv=None):
     model, label = rllm.build_llm(llm_settings.settings_for(args.llm), max_tokens=200)
     if model is None:
         raise SystemExit(f"沒有可用的語言模型：{label}")
-    if args.llm == "api" and not isinstance(model, llm_settings.FailoverLLM):
-        raise SystemExit(f"指定了 --llm api，但雲端目前無法使用，不評估（避免把本機模型的結果當成雲端的）：{label}")
+    if args.llm == "api":
+        if not isinstance(model, llm_settings.FailoverLLM):
+            raise SystemExit(f"指定了 --llm api，但雲端目前無法使用，不評估（避免把本機模型的結果當成雲端的）：{label}")
+        model = model.primary   # 只用雲端本體；備援的本機模型會讓一份結果混了兩個模型
     print(f"語言模型：{label}")
     if args.split != "dev":
         print(f"⚠️ 這是第 {_record_test_run()} 次跑測試集；跑越多次，測試集越不能代表「沒看過的題目」。")
@@ -212,8 +236,9 @@ def main(argv=None):
         summary = summarize(results)
         name = "多步提示詞" if multi else "單步提示詞"
         _print_summary(f"{name}／{args.split}／每題 {args.runs} 次", summary, results)
-        if getattr(model, "switched", False):
-            print("⚠️ 評估途中雲端失敗，改用了備援的本機模型：這份結果混了兩個模型，不能當雲端的結果。")
+        errors = error_count(results)
+        total = sum(len(r["trials"]) for r in results)
+        print(f"呼叫語言模型失敗（重試後仍失敗，已算答錯）：{errors} 次／共 {total} 次")
         _print_failures(results)
         saved[name] = {"summary": summary, "failures": failures(results)}
     with open(args.out, "w", encoding="utf-8") as f:

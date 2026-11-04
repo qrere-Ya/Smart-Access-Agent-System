@@ -176,8 +176,22 @@ def test_prompt_includes_history_and_follows_the_mode():
 
 
 def test_a_failing_call_counts_as_wrong_and_does_not_stop_the_evaluation():
-    results = tool_eval.evaluate(Scripted([RuntimeError("boom")]), [ITEM, {**ITEM, "id": "b"}], runs=1)
+    results = tool_eval.evaluate(Scripted([RuntimeError("boom")]), [ITEM, {**ITEM, "id": "b"}], runs=1, pause=(0, 0))
     assert len(results) == 2 and not any(tool_eval.passed(r["item"], r["trials"][0]) for r in results)
+    assert tool_eval.error_count(results) == 2
+
+
+def test_a_temporary_failure_is_retried_and_then_counts_normally():
+    llm = Scripted([RuntimeError("busy"), RuntimeError("busy"), GOOD])
+    results = tool_eval.evaluate(llm, [ITEM], runs=1, pause=(0, 0))
+    assert tool_eval.passed(ITEM, results[0]["trials"][0]) and tool_eval.error_count(results) == 0
+    assert len(llm.prompts) == 3
+
+
+def test_gives_up_after_the_retries_are_used_up():
+    llm = Scripted([RuntimeError("down")])
+    results = tool_eval.evaluate(llm, [ITEM], runs=1, pause=(0, 0))
+    assert len(llm.prompts) == 3 and results[0]["trials"][0]["error"] is True
 
 
 def make_results(n, wrong, group="one"):
@@ -266,3 +280,26 @@ def test_evaluating_with_api_refuses_when_the_cloud_is_unavailable(monkeypatch):
     monkeypatch.setattr(rllm, "build_llm", lambda settings=None, max_tokens=None: (object(), "本機模型"))
     with pytest.raises(SystemExit, match="雲端目前無法使用"):
         tool_eval.main(["--split", "dev", "--llm", "api"])
+
+
+def test_evaluating_with_api_uses_only_the_cloud_client_without_the_local_backup(monkeypatch, tmp_path):
+    from rag import llm as rllm
+    from rag import llm_settings as ls
+
+    used = []
+
+    class Cloud:
+        def complete(self, prompt):
+            used.append("cloud")
+            return GOOD
+
+    class Local:
+        def complete(self, prompt):
+            used.append("local")
+            return GOOD
+
+    both = ls.FailoverLLM(Cloud(), Local())
+    monkeypatch.setattr(rllm, "build_llm", lambda settings=None, max_tokens=None: (both, "x"))
+    monkeypatch.setattr(tool_eval, "load_questions", lambda path=tool_eval.QUESTIONS_PATH, split="all": [ITEM])
+    tool_eval.main(["--split", "dev", "--runs", "2", "--llm", "api", "--out", str(tmp_path / "o.json")])
+    assert used == ["cloud", "cloud"]
