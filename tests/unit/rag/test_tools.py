@@ -1,0 +1,203 @@
+"""
+tools 單元測試：工具清單與路由白名單一致、參數檢查、請假與假日兩個新工具（區間重疊、單一員工、
+不含備註與已刪除員工、預設時間）、經 Assistant 問「誰請假」「有哪些假日」走完整流程。
+"""
+import datetime
+import json
+import sqlite3
+import zlib
+from contextlib import closing
+
+import numpy as np
+import pytest
+
+from rag import answer, queries, router, tools
+from rag.entity_resolver import NameResolver
+from shared import database_mgr as dbm
+
+TODAY = "2026-10-17"
+DAY = datetime.date(2026, 10, 17)
+
+
+class Delta:
+    def __init__(self, text):
+        self.delta = text
+
+
+class FakeLLM:
+    """意圖判斷（complete）依問題回固定的 JSON；回答（stream_complete）回固定文字。"""
+
+    def __init__(self, route, reply="好的。"):
+        self.route, self.reply, self.answer_prompts = route, reply, []
+
+    def complete(self, prompt):
+        question = prompt.rsplit("問題：", 1)[1].strip()
+        fields = {"docs": False, "data": "none", "person": "", "status": "", "event_type": ""}
+        fields.update(self.route.get(question, {}))
+        return json.dumps(fields, ensure_ascii=False)
+
+    def stream_complete(self, prompt):
+        self.answer_prompts.append(prompt)
+        yield Delta(self.reply)
+
+
+class NoDocs:
+    """這些題目都不查文件，文件庫與重排只要能被呼叫即可。"""
+
+    def search(self, question, n):
+        return []
+
+    def titles(self):
+        return []
+
+    def rerank(self, question, candidates, k):
+        return []
+
+
+def one_hot(texts, size=4096):
+    out = np.zeros((len(texts), size), dtype=np.float32)
+    for row, text in enumerate(texts):
+        out[row, zlib.crc32(text.encode()) % size] = 1.0
+    return out
+
+
+@pytest.fixture
+def store():
+    return NoDocs()
+
+
+def make(store, llm):
+    resolver = NameResolver(["王小明", "李大華"], one_hot)
+    return answer.Assistant(store, store, llm, resolver, today=lambda: DAY)
+
+
+def ask(assistant, question):
+    return "".join(assistant.ask(question))
+
+
+def args(**kw):
+    return tools.ToolArgs(today=TODAY, **kw)
+
+
+@pytest.fixture
+def staff(db, add_user):
+    add_user("王小明", "E1")
+    add_user("李大華", "E2")
+    with closing(sqlite3.connect(db)) as con:
+        ids = {n: con.execute("SELECT id FROM Users WHERE name=?", (n,)).fetchone()[0] for n in ("王小明", "李大華")}
+    dbm.add_leave(ids["王小明"], "2026-10-15", "2026-10-19", "病假", "診斷：很私人的備註")
+    dbm.add_leave(ids["李大華"], "2026-11-02", "2026-11-03", "事假", "")
+    dbm.add_holiday("2026-10-25", "光復節補假")
+    dbm.add_holiday("2027-01-01", "元旦")
+    return ids
+
+
+# --- 清單與驗證 ---
+
+def test_router_whitelist_is_exactly_the_tool_registry():
+    assert router.DATA_TOOLS == tuple(tools.TOOLS)
+    assert {"leaves", "holidays"} <= set(tools.TOOLS)
+
+
+def test_unknown_tool_and_missing_person_are_refused_before_any_query():
+    with pytest.raises(ValueError, match="沒有這個工具"):
+        tools.run("drop_table", args())
+    with pytest.raises(ValueError, match="需要指定員工"):
+        tools.run("records", args())
+
+
+# --- 請假 ---
+
+def test_leaves_overlapping_the_range_are_listed_without_notes(staff):
+    rows = queries.leaves("2026-10-18", "2026-10-18")
+    assert rows == [{"name": "王小明", "start_date": "2026-10-15", "end_date": "2026-10-19", "kind": "病假"}]
+    assert all("note" not in r for r in rows)
+    assert queries.leaves("2026-10-20", "2026-10-31") == []
+
+
+def test_leaves_can_be_limited_to_one_person(staff):
+    rows = queries.leaves("2026-10-01", "2026-12-31", "李大華")
+    assert [r["name"] for r in rows] == ["李大華"]
+
+
+def test_a_deleted_employees_leave_is_not_listed(staff, db):
+    with closing(sqlite3.connect(db)) as con:
+        con.execute("DELETE FROM Users WHERE name='李大華'")
+        con.commit()
+    assert [r["name"] for r in queries.leaves("2026-10-01", "2026-12-31")] == ["王小明"]
+
+
+def test_leaves_tool_defaults_to_today_and_never_prints_the_note(staff):
+    result = tools.run("leaves", args())
+    assert "王小明" in result.text and "病假" in result.text and "很私人" not in result.text
+    assert "李大華" not in result.text
+
+
+def test_leaves_tool_with_a_range_and_a_person(staff):
+    result = tools.run("leaves", args(start="2026-11-01", end="2026-11-30", ranged=True, person="李大華"))
+    assert "李大華　2026-11-02 至 2026-11-03　事假" in result.text and "王小明" not in result.text
+
+
+def test_leaves_with_nobody_says_so(staff):
+    assert "（沒有符合的紀錄）" in tools.run("leaves", args(start="2027-05-01", end="2027-05-02", ranged=True)).text
+
+
+def test_backwards_range_is_a_query_error(staff):
+    with pytest.raises(queries.QueryError):
+        queries.leaves("2026-10-10", "2026-10-01")
+    with pytest.raises(queries.QueryError):
+        queries.holidays("2026-10-10", "bad")
+
+
+# --- 假日 ---
+
+def test_holidays_tool_defaults_to_the_next_year_and_lists_rest_days(staff):
+    result = tools.run("holidays", args())
+    assert "2026-10-25　光復節補假" in result.text and "2027-01-01　元旦" in result.text
+    assert "每週固定休息日：週六、週日" in result.text
+    assert any("今天起一年內" in n for n in result.notes)
+
+
+def test_holidays_tool_respects_the_range(staff):
+    result = tools.run("holidays", args(start="2026-12-01", end="2027-01-31", ranged=True))
+    assert "元旦" in result.text and "光復節" not in result.text and result.notes == []
+
+
+# --- 經 Assistant 的完整流程 ---
+
+def test_who_is_on_leave_goes_through_the_whole_path(store, staff):
+    llm = FakeLLM({"這週誰請假": {"data": "leaves"}}, reply="王小明請病假。")
+    a = make(store, llm)
+    text = ask(a, "這週誰請假")
+    assert "王小明　2026-10-15 至 2026-10-19　病假" in text and a.last.outcome == "answered"
+    assert "很私人" not in llm.answer_prompts[0]
+
+
+def test_a_named_person_narrows_the_leave_list(store, staff):
+    llm = FakeLLM({"李大華11月請假了嗎": {"data": "leaves", "person": "李大華"}}, reply="有。")
+    text = ask(make(store, llm), "李大華11月請假了嗎")
+    assert "李大華　2026-11-02 至 2026-11-03" in text and "王小明" not in text
+
+
+def test_unknown_person_on_leave_question_is_reported(store, staff):
+    llm = FakeLLM({"張三請假了嗎": {"data": "leaves", "person": "張三"}})
+    a = make(store, llm)
+    assert "員工名單裡找不到「張三」" in ask(a, "張三請假了嗎")
+    assert a.last.outcome == "clarify"
+
+
+def test_holiday_question_goes_through_the_whole_path(store, staff):
+    llm = FakeLLM({"今年有哪些假日": {"data": "holidays"}}, reply="有光復節補假。")
+    text = ask(make(store, llm), "今年有哪些假日")
+    assert "2026-10-25　光復節補假" in text and "每週固定休息日" in text
+
+
+@pytest.mark.parametrize("question,tool", [("這週誰請假", "leaves"), ("請假名單給我", "leaves"),
+                                           ("公司有哪些假日", "holidays"), ("假日清單", "holidays")])
+def test_keyword_fallback_picks_the_new_tools(question, tool):
+    assert router.heuristic_plan(question).data == tool
+
+
+def test_leave_regulation_questions_still_go_to_documents():
+    plan = router.heuristic_plan("請假要怎麼申請")
+    assert plan.data is None and plan.docs is True

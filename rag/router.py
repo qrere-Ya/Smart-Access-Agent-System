@@ -17,7 +17,9 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-DATA_TOOLS = ("records", "count", "status_list", "summary", "anomalies", "roster")
+from rag import tools
+
+DATA_TOOLS = tuple(tools.TOOLS)
 STATUS_ALIASES = {"遲到": "遲到", "早退": "早退", "上班": "上班", "下班": "下班",
                   "加班": "下班 (加班)", "下班 (加班)": "下班 (加班)"}
 EVENT_TYPES = ("tailgate", "no_scan_walkby")
@@ -25,7 +27,8 @@ _WEEKDAYS = "一二三四五六日"
 _MAX_PERSON_CHARS = 20
 
 _DATA_WORDS = ("打卡", "出勤", "遲到", "早退", "缺勤", "沒打卡", "上班時間", "下班時間", "加班時數", "考勤",
-               "異常", "尾隨", "員工名單", "有哪些員工", "幾位員工", "幾個員工")
+               "異常", "尾隨", "員工名單", "有哪些員工", "幾位員工", "幾個員工", "誰請假", "請假名單", "誰休假",
+               "哪些假日", "假日清單", "放假日")
 _DOC_WORDS = ("規定", "法", "條", "辦法", "要點", "規則", "權益", "補償", "資遣", "特休", "休假", "請假", "工資",
               "薪資", "怎麼", "如何", "可以嗎", "合法", "違法", "應該", "是否", "多少", "幾天", "幾小時", "幾年",
               "條件", "程序", "流程", "文件")
@@ -56,6 +59,10 @@ _EXAMPLES = """範例：
 {"docs": false, "data": "anomalies", "person": "", "status": "", "event_type": "tailgate"}
 問題：公司有哪些員工？
 {"docs": false, "data": "roster", "person": "", "status": "", "event_type": ""}
+問題：這週誰請假？
+{"docs": false, "data": "leaves", "person": "", "status": "", "event_type": ""}
+問題：今年有哪些假日？
+{"docs": false, "data": "holidays", "person": "", "status": "", "event_type": ""}
 問題：陳志遠這個月遲到五次，公司可以怎麼處理？
 {"docs": true, "data": "count", "person": "陳志遠", "status": "遲到", "event_type": ""}
 問題：你好
@@ -71,7 +78,8 @@ def build_prompt(question: str, history: str, today: datetime.date) -> str:
         "- docs：問題需要查公司文件、法規、辦法的內容就是 true，否則 false。\n"
         "- data：要查資料庫時填一種：records（某人的打卡紀錄）、count（某人各種狀態的次數）、"
         "status_list（某段時間誰遲到、早退、加班）、summary（某天的出勤摘要或誰沒打卡）、"
-        "anomalies（異常、尾隨事件）、roster（員工名單）；不需要查資料庫填 none。\n"
+        "anomalies（異常、尾隨事件）、roster（員工名單）、leaves（某段時間誰請假）、"
+        "holidays（公司登錄的假日與休息日）；不需要查資料庫填 none。請假的法規規定是 docs，不是 leaves。\n"
         "- person：問題裡提到的人名，沒有就留空字串。\n"
         "- status：遲到、早退、上班、下班、加班 其中之一，沒有就留空字串。\n"
         "- event_type：問尾隨事件填 tailgate、問經過鏡頭未打卡填 no_scan_walkby、問一般異常留空，否則留空字串。\n"
@@ -123,6 +131,10 @@ def heuristic_plan(question: str) -> Plan:
     if wants_data:
         if "異常" in question or "尾隨" in question:
             tool = "anomalies"
+        elif any(w in question for w in ("誰請假", "請假名單", "誰休假")):
+            tool = "leaves"
+        elif any(w in question for w in ("哪些假日", "假日清單", "放假日")):
+            tool = "holidays"
         elif "員工名單" in question or "有哪些員工" in question or "幾位員工" in question:
             tool = "roster"
         elif "誰" in question and status:

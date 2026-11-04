@@ -3,12 +3,12 @@ queries.py：給助理用的固定查詢函式（考勤、異常、名單）。
 
 主要功能：
   - 所有查詢都是寫死的參數化 SQL，LLM 不會寫 SQL；資料庫連線是唯讀（mode=ro）
-  - 只讀取需要的欄位：員工名單只取姓名、編號、是否在職，人臉特徵欄位永遠不會被選出來
+  - 只讀取需要的欄位：員工名單只取姓名、編號、是否在職，人臉特徵欄位永遠不會被選出來；請假不取備註（自由文字）
   - 日期參數一律先驗證為 YYYY-MM-DD，區間包含結束當天整天；筆數有上限
 
 串接模組：
-  - shared.database_mgr：資料庫路徑與資料表結構（Attendance、Users、AnomalyEvents）
-  - router / answer（之後）：由意圖判斷選出要呼叫的函式，把結果交給 LLM 轉成人話
+  - shared.database_mgr：資料庫路徑與資料表結構（Attendance、Users、AnomalyEvents、Holidays、Leaves）
+  - tools：工具清單，把這裡的函式包成可由意圖判斷選用的唯讀工具
 """
 import datetime
 import pathlib
@@ -196,3 +196,37 @@ def anomaly_events(start: Optional[str] = None, end: Optional[str] = None,
             f"SELECT timestamp, event_type, detail, evidence_path FROM AnomalyEvents {where}"  # noqa: S608
             "ORDER BY timestamp DESC, id DESC LIMIT ?", (*params, _limit(limit))).fetchall()
     return [{"timestamp": r[0], "event_type": r[1], "detail": r[2], "evidence_path": r[3]} for r in rows]
+
+
+def leaves(start: str, end: str, name: Optional[str] = None, limit: int = 100) -> List[Dict]:
+    """與區間重疊的請假（誰、起訖日、假別），可只看某位員工；不含備註，已刪除的員工不列。"""
+    first, last = _day(start, "開始日期"), _day(end, "結束日期")
+    if last < first:
+        raise QueryError("結束日期早於開始日期")
+    clauses, params = ["l.end_date >= ?", "l.start_date <= ?"], [first.isoformat(), last.isoformat()]
+    if name:
+        clauses.append("u.name = ?")
+        params.append(name)
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT u.name, l.start_date, l.end_date, l.kind FROM Leaves l JOIN Users u ON u.id = l.user_id "  # noqa: S608
+            f"WHERE {' AND '.join(clauses)} ORDER BY l.start_date, u.name LIMIT ?", (*params, _limit(limit))).fetchall()
+    return [{"name": r[0], "start_date": r[1], "end_date": r[2], "kind": r[3]} for r in rows]
+
+
+def holidays(start: str, end: str, limit: int = 100) -> List[Dict]:
+    """區間內登錄的假日（日期、名稱），由早到晚。"""
+    first, last = _day(start, "開始日期"), _day(end, "結束日期")
+    if last < first:
+        raise QueryError("結束日期早於開始日期")
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT date, name FROM Holidays WHERE date >= ? AND date <= ? ORDER BY date LIMIT ?",
+            (first.isoformat(), last.isoformat(), _limit(limit))).fetchall()
+    return [{"date": r[0], "name": r[1]} for r in rows]
+
+
+def rest_weekdays() -> List[int]:
+    """每週固定休息的星期（0＝週一 … 6＝週日）。"""
+    with closing(_connect()) as conn:
+        return database_mgr.get_rest_weekdays(conn)

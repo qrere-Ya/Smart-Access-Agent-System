@@ -3,14 +3,14 @@ answer.py：企業知識庫與出勤查詢的問答流程（把檢索、固定�
 
 主要功能：
   - 判斷問題類型（router）→ 解析日期（dates）與人名（entity_resolver）
-    → 查資料庫（queries）／檢索文件（doc_store＋rerank）
+    → 呼叫唯讀工具查資料庫（tools）／檢索文件（doc_store＋rerank）
   - 人名不確定時反問「你是指 X 嗎？」，查無此人就直說，不會亂猜；文件分數接近 0 且沒有資料可用時回答「找不到依據」
   - 查詢結果會先原樣列出（讓管理者核對），再由 LLM 用白話整理；LLM 只能根據提供的文件段落與查詢結果回答，並標註段落編號
   - 異常事件只回報證據照片的檔案路徑，不顯示照片
   - 記住最近幾輪對話，「那上週呢？」這類追問可以沿用上一題的對象（會明講沿用了誰）
 
 串接模組：
-  - router、dates、entity_resolver、queries：判斷、日期、人名、固定查詢
+  - router、dates、entity_resolver、tools：判斷、日期、人名、唯讀工具清單（工具再呼叫 queries 的固定查詢）
   - doc_store、rerank：文件檢索與重排
   - llm：回答用的 LLM（需有 stream_complete，可選 pop_notices）
   - admin 聊天視窗（之後）：呼叫 Assistant.ask 取得逐段輸出
@@ -20,8 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 
-from rag import dates, queries, router
-from shared import event_labels
+from rag import dates, queries, router, tools
 
 TOP_K = 5
 CANDIDATES = 20
@@ -34,9 +33,8 @@ OVERLAP_MIN_GRAMS = 8  # 回答短到湊不出幾組字句時不用重疊判斷
 MAX_QUESTION_CHARS = 500
 HISTORY_TURNS = 3
 HISTORY_ANSWER_CHARS = 300
-MAX_LISTED_ROWS = 30
+MAX_LISTED_ROWS = tools.MAX_LISTED_ROWS
 _WEEKDAYS = "一二三四五六日"
-_TOOLS_NEEDING_PERSON = ("records", "count")
 
 HELP_TEXT = ("我可以回答兩類問題：\n"
              "1. 公司文件與法規（例如：特別休假有幾天？加班費怎麼算？）\n"
@@ -361,14 +359,21 @@ class Assistant:
         shown = plan.person or "你提到的人"
         return None, f"員工名單裡找不到「{shown}」。請確認姓名，或問「公司有哪些員工」。"
 
+    def _mentions_person(self, plan, question):
+        """問題有提到員工（LLM 抓到人名，或名單比對得到）；選用人名的工具只在這時才縮小範圍。"""
+        return bool(plan.person) or self.resolver.find_in_message(question).status != "unknown"
+
     def _run_data(self, plan, question, today):
-        """執行固定查詢；回傳 (結果文字, 說明清單)，或需要釐清時回傳字串。"""
+        """執行唯讀工具；回傳 (結果文字, 說明清單)，或需要釐清時回傳字串。"""
         rng = self.last.date_range
-        start, end = (rng.start, rng.end) if rng else (None, None)
         notes: List[str] = []
         self._anomaly_rows = None
+        tool = tools.TOOLS.get(plan.data)
+        if tool is None:
+            return "", notes
         try:
-            if plan.data in _TOOLS_NEEDING_PERSON:
+            person = ""
+            if tool.needs_person or (tool.optional_person and self._mentions_person(plan, question)):
                 name, msg = self._resolve_person(plan, question)
                 if name is None:
                     return msg
@@ -376,74 +381,18 @@ class Assistant:
                     notes.append(msg)
                 self._last_person = name
                 self.last.person = name
-                return self._person_report(plan, name, start, end, rng), notes
-            if plan.data == "status_list":
-                status = plan.status or "遲到"
-                if not plan.status:
-                    notes.append("問題沒有指定狀態，預設查「遲到」。")
-                day_start, day_end = (start, end) if rng else (today.isoformat(), today.isoformat())
-                rows = queries.status_events(day_start, day_end, status)
-                return self._lines(f"{self._span_text(day_start, day_end)}　{status}紀錄", [
-                    f"{r['timestamp']}　{r['name']}" for r in rows]), notes
-            if plan.data == "summary":
-                day = start if rng and start == end else today.isoformat()
-                if rng and start != end:
-                    notes.append(f"出勤摘要一次只看一天，已改看 {day}。")
-                return self._summary_text(queries.daily_summary(day)), notes
-            if plan.data == "anomalies":
-                rows = queries.anomaly_events(start, end, plan.event_type)
-                self._anomaly_rows = rows
-                label = f"{self._span_text(start, end)}　" if rng else "最近的"
-                return self._lines(f"{label}異常事件", [
-                    f"{r['timestamp']}　{event_labels.describe(r['event_type'], r['detail'], '　')}"
-                    for r in rows]), notes
-            if plan.data == "roster":
-                people = queries.roster()
-                active = sum(1 for p in people if p["active"])
-                return self._lines(f"員工名單（共 {len(people)} 人，在職 {active} 人）", [
-                    f"{p['name']}（{p['employee_id']}）{'' if p['active'] else '　已停用'}" for p in people]), notes
+                person = name
+            result = tools.run(plan.data, tools.ToolArgs(
+                today=today.isoformat(), person=person, start=rng.start if rng else None,
+                end=rng.end if rng else None, ranged=rng is not None, status=plan.status,
+                event_type=plan.event_type))
         except queries.QueryError as e:
             return f"查詢條件有問題：{e}"
         except Exception as e:
             self.last.outcome = "error"
             return f"查詢資料庫時出了問題（{type(e).__name__}），請稍後再試。"
-        return "", notes
+        if plan.data == "anomalies":
+            self._anomaly_rows = result.rows
+        return result.text, notes + result.notes
 
-    def _person_report(self, plan, name, start, end, rng):
-        span = self._span_text(start, end) if rng else "全部期間"
-        if plan.data == "count":
-            counts = queries.count_by_status(name, start, end)
-            lines = [f"{status}：{n} 次" for status, n in sorted(counts.items())]
-            return self._lines(f"{name}　{span}　各狀態次數", lines, with_total=False)
-        rows = queries.attendance_records(name, start, end, plan.status, limit=queries.MAX_ROWS)
-        return self._lines(f"{name}　{span}　打卡紀錄" + (f"（只看{plan.status}）" if plan.status else ""),
-                           [f"{r['timestamp']}　{r['status']}" for r in rows])
-
-    @staticmethod
-    def _span_text(start, end):
-        return start if start == end else f"{start} 至 {end}"
-
-    @staticmethod
-    def _lines(title: str, lines: List[str], with_total: bool = True) -> str:
-        """標題加上清單；筆數只在每行代表一筆紀錄時才標示，查詢數量碰到上限時寫「至少」。"""
-        if not lines:
-            return f"{title}\n（沒有符合的紀錄）"
-        shown = lines[:MAX_LISTED_ROWS]
-        more = f"\n…還有 {len(lines) - len(shown)} 筆未列出" if len(lines) > len(shown) else ""
-        if not with_total:
-            return f"{title}\n" + "\n".join(shown)
-        total = f"至少 {len(lines)}" if len(lines) >= queries.MAX_ROWS else str(len(lines))
-        return f"{title}（共 {total} 筆）\n" + "\n".join(shown) + more
-
-    @staticmethod
-    def _summary_text(s: dict) -> str:
-        def names(items):
-            return "、".join(f"{p['name']}（{p['timestamp'][11:16]}）" for p in items) or "無"
-
-        head = f"{s['date']}　出勤摘要" + (f"（{s['day_off']}，不用上班）" if s.get("day_off") else "")
-        on_leave = f"請假：{'、'.join(s['on_leave'])}\n" if s.get("on_leave") else ""
-        note = ("（休息日沒有打卡屬正常）" if s.get("day_off")
-                else "（沒有打卡紀錄不等於缺勤：可能是系統尚未登錄的假日或請假）")
-        return (f"{head}\n有打卡人數：{s['punched_count']}\n遲到：{names(s['late'])}\n"
-                f"早退：{names(s['early_leave'])}\n加班：{names(s['overtime'])}\n{on_leave}"
-                f"在職但當天沒有打卡紀錄：{'、'.join(s['no_record']) or '無'}\n{note}")
+    _summary_text = staticmethod(tools.summary_text)
