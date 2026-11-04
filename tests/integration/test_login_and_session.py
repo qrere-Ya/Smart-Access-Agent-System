@@ -3,7 +3,6 @@
 驗證：人臉通過後建立工作階段、非活體失敗與鎖定並留下紀錄、初次設定第一位管理者、鏡頭打不開的說明、
 後台登出與閒置逾時、助理視窗跟著登出而關閉、助理視窗沒有登入代碼就拒絕開啟。
 """
-import gc
 import sqlite3
 import time
 import types
@@ -12,9 +11,11 @@ import numpy as np
 import pytest
 
 pytestmark = pytest.mark.integration
+ctk = pytest.importorskip("customtkinter")
 
 ONES = np.ones(4, dtype=np.float32)
-FACE = {"x1": 10, "y1": 10, "x2": 90, "y2": 90}
+FACE = {"x1": 100, "y1": 100, "x2": 260, "y2": 280, "left_eye": (140, 150), "right_eye": (220, 150),
+        "nose": (180, 190), "left_lip": (150, 230), "right_lip": (210, 230)}
 
 
 class FakeCamera:
@@ -54,38 +55,6 @@ def pump(win, until, seconds=8.0):
             return True
         time.sleep(0.01)
     return False
-
-
-@pytest.fixture(scope="module")
-def _tk_root():
-    """整個模組共用一個主視窗：同一個行程反覆建立 ttkbootstrap 視窗會讓 Tk 中止（正式程式也只建一個）。"""
-    import tkinter
-
-    import ttkbootstrap as ttk
-
-    try:
-        app = ttk.Window(themename="superhero")
-    except tkinter.TclError:
-        pytest.skip("沒有可用的顯示器")
-    app.withdraw()
-    yield app
-    try:
-        app.destroy()
-    except tkinter.TclError:
-        pass
-    gc.collect()
-
-
-@pytest.fixture
-def root(_tk_root):
-    yield _tk_root
-    for child in _tk_root.winfo_children():
-        child.destroy()
-    _tk_root.unbind_all("<Key>")
-    _tk_root.unbind_all("<Button>")
-    _tk_root.unbind_all("<Motion>")
-    _tk_root.withdraw()
-    gc.collect()
 
 
 @pytest.fixture
@@ -164,10 +133,10 @@ def test_a_missing_camera_is_explained_and_can_be_retried(root, db, add_user, cl
 # --- 初次設定 ---
 
 def test_with_no_admin_the_first_one_is_chosen_then_logs_in_by_face(root, db, add_user, clean_session, monkeypatch):
-    from tkinter import messagebox
+    from shared import ui_theme
 
     add_user("組員乙", "E2", embedding=ONES)
-    monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(ui_theme, "confirm", lambda *a, **k: True)
     window, _ = make_login(root)
     assert pump(root, lambda: hasattr(window, "setup_button"))
     window.setup_button.invoke()
@@ -178,7 +147,7 @@ def test_with_no_admin_the_first_one_is_chosen_then_logs_in_by_face(root, db, ad
 
 def test_with_no_employees_the_setup_screen_explains_what_to_do(root, db, clean_session):
     window, _ = make_login(root)
-    texts = [w.cget("text") for w in window.body.winfo_children() if "text" in w.keys()]
+    texts = [w.cget("text") for w in window.body.winfo_children() if isinstance(w, ctk.CTkLabel)]
     assert any("還沒有可用的員工" in t for t in texts)
     window._cancel()
 
@@ -288,3 +257,23 @@ def test_the_assistant_window_refuses_to_start_without_a_login_code(monkeypatch)
     except tkinter.TclError:
         pytest.skip("沒有可用的顯示器")
     assert stop.value.code == 2 and shown and "管理後台" in shown[0][1]
+
+
+def test_login_and_backend_share_one_root_across_a_relogin(root, db, add_user, clean_session, monkeypatch):
+    """登入 → 後台 → 登出 → 清畫面 → 再登入 → 後台：全程只用同一個主視窗。"""
+    from admin import service_manager
+    from admin.backend_main import BackendManagerApp
+
+    monkeypatch.setattr(service_manager, "stop_assistant_window", lambda: True)
+    add_user("管理者甲", "A1", embedding=ONES, role="admin")
+    for _ in range(2):
+        window, _cam = make_login(root)
+        assert pump(root, lambda w=window: w.session is not None)
+        root.deiconify()
+        app = BackendManagerApp(root, window.session)
+        root.update()
+        app.logout()
+        assert app.relogin is True
+        app.teardown()
+        root.withdraw()
+        assert not [w for w in root.winfo_children() if w.winfo_exists() and w.winfo_class() == "Toplevel"]

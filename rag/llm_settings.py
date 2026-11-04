@@ -59,11 +59,12 @@ def load_settings():
 
 
 def effective_api_key(s):
-    """設定檔金鑰優先；沒填且是 NVIDIA 網址時才退回環境變數 NVIDIA_API_KEY"""
-    key = (s.get("api_key") or "").strip()
+    """金鑰只走環境變數：LLM_API_KEY（任何網址），或 NVIDIA 網址的 NVIDIA_API_KEY；
+    舊版設定檔裡殘留的金鑰只在環境變數都沒設時才沿用（不再寫入）"""
+    key = (os.environ.get("LLM_API_KEY") or "").strip()
     if not key and "nvidia" in (s.get("api_base") or "").lower():
         key = (os.environ.get("NVIDIA_API_KEY") or "").strip()
-    return key
+    return key or (s.get("api_key") or "").strip()
 
 
 def local_host(s):
@@ -74,17 +75,13 @@ def local_host(s):
     return host
 
 
-def save_settings(new, clear_key=False):
-    """儲存設定：只更新 new 內有的欄位；api_key 留空保留原本的，clear_key=True 才清除"""
+def save_settings(new):
+    """儲存設定：只更新 new 內有的欄位；金鑰一律不寫進檔案，舊版殘留的金鑰存檔時一併清掉"""
     s = load_settings()
-    old_key = s.get("api_key", "")
     for k in DEFAULTS:
         if k in new and isinstance(new[k], str):
             s[k] = new[k].strip()
-    if clear_key:
-        s["api_key"] = ""
-    elif not (new.get("api_key") or "").strip():
-        s["api_key"] = old_key
+    s["api_key"] = ""
     if s["mode"] not in ("api", "local"):
         s["mode"] = "local"
     # 先寫暫存檔再取代，避免寫到一半損壞
@@ -101,11 +98,13 @@ def save_settings(new, clear_key=False):
 
 def key_status_text(s):
     """回傳金鑰狀態的說明文字（不顯示金鑰本身）"""
-    if (s.get("api_key") or "").strip():
-        return "已儲存金鑰（為了安全不顯示；留空代表沿用）"
-    if effective_api_key(s):
+    if (os.environ.get("LLM_API_KEY") or "").strip():
+        return "使用環境變數 LLM_API_KEY 的金鑰"
+    if "nvidia" in (s.get("api_base") or "").lower() and (os.environ.get("NVIDIA_API_KEY") or "").strip():
         return "使用環境變數 NVIDIA_API_KEY 的金鑰"
-    return "尚未設定金鑰"
+    if (s.get("api_key") or "").strip():
+        return "⚠️ 金鑰存在舊版設定檔裡，建議改設環境變數（再儲存一次設定會把檔案裡的金鑰清掉）"
+    return "尚未設定金鑰：請設定環境變數 NVIDIA_API_KEY（其他網址用 LLM_API_KEY）後重開視窗"
 
 
 # --- 錯誤分類與白話說明 ---
@@ -293,6 +292,17 @@ class OllamaChatLLM:
     def label(self):
         return f"本機模型（{self.model}）"
 
+    def free_memory(self, timeout=15.0):
+        """請 Ollama 卸載模型、把它占的記憶體還回去（下次提問時會自動重新載入）；回傳是否成功"""
+        body = {"model": self.model, "keep_alive": 0}
+        req = urllib.request.Request(f"{self.host}/api/generate", data=json.dumps(body).encode("utf-8"),  # noqa: S310
+                                     method="POST", headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=timeout).read()  # noqa: S310
+            return True
+        except Exception:
+            return False
+
     def stream_complete(self, prompt):
         """串流呼叫，逐段產生 Delta；錯誤轉成 LLMCallError"""
         options = {"temperature": self.temperature, "num_ctx": LOCAL_NUM_CTX}
@@ -348,6 +358,15 @@ class FailoverLLM:
 
     def label(self):
         return (self.fallback if self.switched else self.primary).label()
+
+    def free_memory(self):
+        """請本機模型卸載以釋放記憶體（雲端那端沒有這回事）；有任何一個成功就回傳 True"""
+        freed = False
+        for backend in (self.primary, self.fallback):
+            release = getattr(backend, "free_memory", None)
+            if release is not None:
+                freed = release() or freed
+        return freed
 
     def pop_notices(self):
         """取出並清空待顯示的切換通知"""

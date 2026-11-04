@@ -18,6 +18,7 @@ def settings_file(tmp_path, monkeypatch):
     path = tmp_path / "llm_settings.json"
     monkeypatch.setattr(ls, "SETTINGS_PATH", str(path))
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     return path
 
@@ -62,29 +63,39 @@ def test_corrupt_settings_file_falls_back_to_defaults(settings_file):
 
 
 def test_save_merges_strips_and_normalizes(settings_file):
-    saved = ls.save_settings({"mode": "api", "local_model": "  llama3  ", "api_key": " k1 "})
-    assert saved["local_model"] == "llama3" and saved["api_key"] == "k1" and saved["mode"] == "api"
+    saved = ls.save_settings({"mode": "api", "local_model": "  llama3  "})
+    assert saved["local_model"] == "llama3" and saved["mode"] == "api"
     assert json.loads(settings_file.read_text(encoding="utf-8")) == saved
     assert ls.save_settings({"mode": "壞值"})["mode"] == "local"
 
 
-def test_blank_api_key_keeps_the_stored_one_unless_cleared(settings_file):
-    ls.save_settings({"api_key": "secret"})
-    assert ls.save_settings({"api_key": "  ", "local_model": "x"})["api_key"] == "secret"
-    assert ls.save_settings({}, clear_key=True)["api_key"] == ""
+def test_the_key_is_never_written_to_the_settings_file(settings_file):
+    saved = ls.save_settings({"api_key": "nvapi-SECRET", "local_model": "x"})
+    assert saved["api_key"] == "" and "nvapi-SECRET" not in settings_file.read_text(encoding="utf-8")
+
+
+def test_saving_clears_a_key_left_in_an_old_settings_file(settings_file):
+    settings_file.write_text(json.dumps({"api_key": "old-secret", "mode": "api"}), encoding="utf-8")
+    assert ls.load_settings()["api_key"] == "old-secret"          # 舊版殘留的金鑰仍可讀，升級後不會突然失效
+    ls.save_settings({"mode": "local"})
+    assert "old-secret" not in settings_file.read_text(encoding="utf-8")
 
 
 def test_effective_api_key_sources(settings_file, monkeypatch):
-    assert ls.effective_api_key({"api_key": "  abc  ", "api_base": ls.NVIDIA_BASE}) == "abc"
+    assert ls.effective_api_key({"api_key": "  abc  ", "api_base": ls.NVIDIA_BASE}) == "abc"   # 舊版設定檔殘留
     monkeypatch.setenv("NVIDIA_API_KEY", "from-env")
     assert ls.effective_api_key({"api_key": "", "api_base": ls.NVIDIA_BASE}) == "from-env"
+    assert ls.effective_api_key({"api_key": "old", "api_base": ls.NVIDIA_BASE}) == "from-env"   # 環境變數優先
     assert ls.effective_api_key({"api_key": "", "api_base": "https://example.com/v1"}) == ""
+    monkeypatch.setenv("LLM_API_KEY", "generic")
+    assert ls.effective_api_key({"api_key": "", "api_base": "https://example.com/v1"}) == "generic"
+    assert ls.effective_api_key({"api_key": "", "api_base": ls.NVIDIA_BASE}) == "generic"
 
 
 def test_key_status_text_never_shows_the_key(settings_file, monkeypatch):
     assert "尚未設定" in ls.key_status_text({"api_key": "", "api_base": "https://example.com"})
     saved = ls.key_status_text({"api_key": "topsecret", "api_base": ls.NVIDIA_BASE})
-    assert "已儲存" in saved and "topsecret" not in saved
+    assert "舊版設定檔" in saved and "topsecret" not in saved
     monkeypatch.setenv("NVIDIA_API_KEY", "envkey")
     assert "環境變數" in ls.key_status_text({"api_key": "", "api_base": ls.NVIDIA_BASE})
 
@@ -184,6 +195,24 @@ def test_ollama_streams_and_sends_the_shared_context_size(fake_llm_server):
     assert path == "/api/chat" and body["model"] == "qwen2:7b"
     assert body["options"]["num_ctx"] == ls.LOCAL_NUM_CTX and body["options"]["num_predict"] == 8
     assert body["think"] is False  # 關閉思考模式，qwen3 的推理過程才不會混進回答
+
+
+def test_ollama_free_memory_asks_the_server_to_unload_and_reports_failure(fake_llm_server):
+    base, requests = fake_llm_server
+    assert ls.OllamaChatLLM(base, "qwen2:7b").free_memory() is True
+    path, body = requests[-1]
+    assert path == "/api/generate" and body == {"model": "qwen2:7b", "keep_alive": 0}
+    assert ls.OllamaChatLLM("http://127.0.0.1:1", "qwen2:7b").free_memory(timeout=1) is False
+
+
+def test_failover_free_memory_only_touches_the_local_backend(fake_llm_server):
+    base, requests = fake_llm_server
+    cloud = ls.OpenAICompatLLM(base, "good-key", "m")
+    failover = ls.FailoverLLM(cloud, ls.OllamaChatLLM(base, "qwen2:7b"))
+    before = len(requests)
+    assert failover.free_memory() is True
+    assert [path for path, _ in requests[before:]] == ["/api/generate"]
+    assert ls.FailoverLLM(cloud, None).free_memory() is False
 
 
 def test_ollama_missing_model_and_unreachable_server(fake_llm_server):

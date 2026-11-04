@@ -1,12 +1,11 @@
 """
-console_panel 與 backend_main 的單元測試：小終端機的寫入與行數上限、顏色混合計算。
-這兩個模組需要 Tkinter 與 ttkbootstrap，環境沒有時整個檔案略過。
+console_panel 的單元測試：小終端機的寫入與行數上限（用假的文字框，不開視窗）。
+這個模組需要 Tkinter 與 customtkinter，環境沒有時整個檔案略過。
 """
 import pytest
 
 pytest.importorskip("tkinter")
-pytest.importorskip("ttkbootstrap")
-pytest.importorskip("PIL")
+pytest.importorskip("customtkinter")
 
 from admin import console_panel  # noqa: E402
 
@@ -60,13 +59,15 @@ def test_append_line_keeps_only_the_latest_500_lines():
     assert widget.deleted[0] == ("1.0", "1.0")
 
 
-def test_blend_hex_interpolates_between_two_colors():
-    pytest.importorskip("pyqrcode")
-    pytest.importorskip("png")
-    from admin.backend_main import BackendManagerApp
+def test_append_line_makes_a_readonly_box_writable_only_while_inserting():
+    class Box(FakeText):
+        def __init__(self):
+            super().__init__()
+            self.states = []
 
-    blend = BackendManagerApp._blend_hex
-    assert blend("#000000", "#ffffff", 0.5) == "#808080"
-    assert blend("#102030", "#ffffff", 0) == "#102030"
-    assert blend("#102030", "#ffffff", 1) == "#ffffff"
-    assert blend("ff0000", "#0000ff", 0.5) == "#800080"
+        def configure(self, **kw):
+            self.states.append(kw["state"])
+
+    box = Box()
+    console_panel.append_line(box, "x")
+    assert box.states == ["normal", "disabled"]

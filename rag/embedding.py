@@ -5,6 +5,8 @@ embedding.py：bge-m3 向量模型的資源包裝。
   - ManagedEmbedder：自己不持有模型，每次呼叫才向資源協調器借用，閒置或顯存不足時模型可以被釋放
   - 呼叫它把一批文字轉成正規化後的向量（numpy 陣列），可直接當 DocStore、NameResolver 的 embed_fn
   - 預設走 GPU 並轉 fp16 省顯存；沒有 CUDA 時退回 CPU；環境變數 RAG_EMBED_DEVICE、RAG_EMBED_IDLE_TTL 可調整
+  - 旁邊有轉好的 fp16 safetensors 資料夾（<模型>-fp16，由 rag.convert_embedding 產生）就優先用它：
+    原始 pytorch_model.bin 要整個讀進 RAM（載入尖峰約 3.3GB），safetensors 約 2.1GB
 
 串接模組：
   - shared.resource_manager：ManagedResource 資源協調
@@ -19,6 +21,13 @@ from shared.resource_manager import ManagedResource, cuda_available
 EMBED_DEVICE = os.environ.get("RAG_EMBED_DEVICE", "cuda")
 EMBED_IDLE_TTL = float(os.environ.get("RAG_EMBED_IDLE_TTL", "300"))
 BATCH_SIZE = 10
+FP16_SUFFIX = "-fp16"
+
+
+def fp16_source(model_source):
+    """旁邊已有轉好的 fp16 safetensors 資料夾就回傳它，否則回傳原本的模型資料夾。"""
+    candidate = os.path.normpath(str(model_source)) + FP16_SUFFIX
+    return candidate if os.path.isfile(os.path.join(candidate, "model.safetensors")) else str(model_source)
 
 
 class _EmbedResource(ManagedResource):
@@ -33,7 +42,8 @@ class _EmbedResource(ManagedResource):
                          est_ram_mb=2600 if device == "cpu" else 1200,
                          est_vram_mb=0 if device == "cpu" else 1300,
                          idle_ttl=EMBED_IDLE_TTL)
-        self._source, self._device = model_source, device
+        self._source = fp16_source(model_source) if device.startswith("cuda") else str(model_source)
+        self._device = device
 
     def _load(self):
         from sentence_transformers import SentenceTransformer

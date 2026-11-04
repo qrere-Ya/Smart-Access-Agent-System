@@ -2,7 +2,6 @@
 import json
 
 from admin import anomaly_notifier as an
-from admin import notification_bar
 
 
 def _ev(i):
@@ -74,5 +73,54 @@ def test_corrupt_state_and_fetch_failure(tmp_path):
 
 
 def test_popup_text_truncates():
-    text = notification_bar.format_popup_text([_ev(i) for i in range(8)])
-    assert text.count("\n") == notification_bar.MAX_LINES and "另有 3 筆" in text
+    text = an.format_popup_text([_ev(i) for i in range(8)])
+    assert text.count("\n") == an.MAX_LINES and "另有 3 筆" in text
+
+
+# --- 證據路徑安全檢查與列表文字 ---
+
+def _photo(folder, name="tailgate_1.jpg"):
+    path = folder / name
+    path.write_bytes(b"x")
+    return path
+
+
+def test_evidence_path_inside_the_folder_is_accepted(tmp_path):
+    photo = _photo(tmp_path)
+    assert an.safe_evidence_path(str(photo), str(tmp_path)) == str(photo.resolve())
+    assert an.safe_evidence_path(photo.name, str(tmp_path)) == str(photo.resolve())   # 相對路徑
+
+
+def test_evidence_path_outside_the_folder_is_rejected(tmp_path):
+    folder = tmp_path / "evidence"
+    folder.mkdir()
+    secret = _photo(tmp_path, "secret.txt")
+    assert an.safe_evidence_path(str(secret), str(folder)) is None            # 資料夾外的檔案
+    assert an.safe_evidence_path("..\\secret.txt", str(folder)) is None       # 用 .. 跳出去
+    assert an.safe_evidence_path("../secret.txt", str(folder)) is None
+    sibling = tmp_path / "evidence_other"                                                   # 名稱前綴相同的別的資料夾
+    sibling.mkdir()
+    assert an.safe_evidence_path(str(_photo(sibling)), str(folder)) is None
+
+
+def test_evidence_path_must_be_an_existing_file(tmp_path):
+    assert an.safe_evidence_path(str(tmp_path / "missing.jpg"), str(tmp_path)) is None
+    assert an.safe_evidence_path(str(tmp_path), str(tmp_path)) is None         # 資料夾本身不是檔案
+    assert an.safe_evidence_path("", str(tmp_path)) is None
+    assert an.safe_evidence_path(None, str(tmp_path)) is None
+
+
+def test_event_row_marks_unread_and_flattens_the_detail(tmp_path):
+    photo = _photo(tmp_path)
+    event = {"id": 5, "timestamp": "2026-11-03 20:21:19", "event_type": "tailgate",
+             "detail": "畫面有 2 人\n  只辨識到 1 張臉", "evidence_path": str(photo), "event_count": 5}
+    assert an.event_row(event, 3, str(tmp_path)) == (
+        "● 未讀", "2026-11-03 20:21:19", "尾隨", "畫面有 2 人 只辨識到 1 張臉", 5, "有")
+    assert an.event_row(event, 5, str(tmp_path))[0] == "已讀"
+    assert an.event_row(event, None, str(tmp_path))[0] == "已讀"      # 沒有已讀基準時不亂標未讀
+
+
+def test_event_row_without_photo_or_count(tmp_path):
+    event = {"id": 1, "timestamp": "t", "event_type": "no_scan_walkby", "detail": None, "evidence_path": None,
+             "event_count": None}
+    assert an.event_row(event, 0, str(tmp_path)) == ("● 未讀", "t", "經過鏡頭未打卡", "", 1, "無")

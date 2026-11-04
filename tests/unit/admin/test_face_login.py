@@ -5,7 +5,8 @@ import pytest
 
 from admin import face_login as fl
 
-FACE = {"x1": 10, "y1": 10, "x2": 90, "y2": 90}
+FACE = {"x1": 100, "y1": 100, "x2": 260, "y2": 280, "left_eye": (140, 150), "right_eye": (220, 150),
+        "nose": (180, 190), "left_lip": (150, 230), "right_lip": (210, 230)}
 
 
 class FakeVision:
@@ -35,6 +36,7 @@ def verifier(script, who=("王小明", 0.4), **kwargs):
         state["i"] += 1
         return result
 
+    kwargs.setdefault("ready_frames", 0)         # 一般測試不管正面穩定等待；專門的測試再打開
     return fl.FaceLoginVerifier(FakeVision(script), recognize=recognize, **kwargs)
 
 
@@ -113,3 +115,89 @@ def test_no_admin_resets_the_progress_so_it_cannot_carry_over():
     steps = run(v, 6)
     assert steps[3].status == fl.NO_ADMIN
     assert steps[-1].status == fl.VERIFYING and steps[-1].progress == pytest.approx(0.4)   # 重新累計，不是延續
+
+
+# --- 正面檢查 ---
+
+def turned(**changes):
+    """複製標準正面臉，改掉指定的關鍵點或臉框。"""
+    face = dict(FACE)
+    face.update(changes)
+    return face
+
+
+class FaceVision(FakeVision):
+    """每幀回傳指定的臉（用來測試不夠正面的情況）。"""
+
+    def __init__(self, face):
+        super().__init__([])
+        self.face = face
+
+    def detect(self, frame):
+        return "rgb", [dict(self.face)]
+
+
+def not_frontal_cases():
+    return [
+        turned(nose=(215, 190)),                              # 轉頭：鼻子偏向一側
+        turned(left_eye=(140, 120), right_eye=(220, 180)),    # 歪頭：雙眼連線傾斜
+        turned(nose=(180, 160)),                              # 仰頭：鼻子太靠近眼睛
+        turned(nose=(180, 225)),                              # 低頭：鼻子太靠近嘴巴
+        turned(x2=150),                                       # 臉太小
+        {k: v for k, v in FACE.items() if k != "nose"},       # 缺關鍵點
+    ]
+
+
+@pytest.mark.parametrize("face", not_frontal_cases())
+def test_a_face_that_is_not_frontal_is_never_compared_and_never_fails(face):
+    calls = []
+    v = fl.FaceLoginVerifier(FaceVision(face), recognize=lambda e, t: calls.append(1) or ("王小明", 0.4))
+    steps = run(v, 30)
+    assert {s.status for s in steps} == {fl.NOT_FRONTAL}
+    assert calls == []                                        # 沒有拿去比對
+    assert steps[0].message and steps[0].pose is not None
+
+
+def test_comparison_starts_only_after_the_frontal_face_has_been_steady():
+    calls = []
+    v = fl.FaceLoginVerifier(FaceVision(FACE), recognize=lambda e, t: calls.append(1) or ("王小明", 0.4))
+    steps = run(v, fl.READY_FRAMES - 1 + 5)      # 前幾幀等穩定，之後連續 5 幀比對
+    assert [s.status for s in steps[:fl.READY_FRAMES - 1]] == [fl.ALIGNING] * (fl.READY_FRAMES - 1)
+    assert len(calls) == 5 and steps[-1].status == fl.SUCCESS
+
+
+def test_turning_away_in_the_middle_restarts_the_steady_wait():
+    side = turned(nose=(215, 190))
+
+    class Switching(FaceVision):
+        def __init__(self):
+            super().__init__(FACE)
+            self.turn = 0
+
+        def detect(self, frame):
+            self.turn += 1
+            return "rgb", [dict(side if self.turn == 4 else FACE)]
+
+    v = fl.FaceLoginVerifier(Switching(), recognize=lambda e, t: ("王小明", 0.4))
+    statuses = [s.status for s in run(v, 6)]
+    assert statuses[3] == fl.NOT_FRONTAL and fl.SUCCESS not in statuses
+
+
+# --- 平均距離 ---
+
+def test_the_login_needs_the_average_distance_not_each_frame_below_the_limit():
+    dists = [("王小明", d) for d in (0.99, 0.80, 0.85, 0.79, 0.87)]      # 單幀都小於 1.0，平均 0.86
+    steps = run(verifier([], who=dists), 5)
+    assert steps[-1].status == fl.SUCCESS and steps[-1].distance == 0.86
+
+
+def test_frames_that_are_each_close_enough_but_average_too_far_count_as_a_failure():
+    dists = [("王小明", d) for d in (0.95, 0.96, 0.97, 0.98, 0.99)]      # 平均 0.97 ≥ 0.9
+    steps = run(verifier([], who=dists), 5)
+    assert steps[-1].status == fl.FAILED and steps[-1].admin_name is None
+    assert steps[-1].distance == 0.97
+
+
+def test_a_single_frame_beyond_the_frame_limit_is_not_matched():
+    steps = run(verifier([], who=("Unknown", 1.05)), 8)
+    assert steps[-1].status == fl.FAILED

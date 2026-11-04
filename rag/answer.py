@@ -1,5 +1,5 @@
 """
-answer.py：管理者助理的問答流程（把檢索、固定查詢與 LLM 串起來）。
+answer.py：企業知識庫與出勤查詢的問答流程（把檢索、固定查詢與 LLM 串起來）。
 
 主要功能：
   - 判斷問題類型（router）→ 解析日期（dates）與人名（entity_resolver）
@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 
 from rag import dates, queries, router
+from shared import event_labels
 
 TOP_K = 5
 CANDIDATES = 20
@@ -214,7 +215,13 @@ class Assistant:
 
     def _search_documents(self, question: str):
         candidates = self.store.search(question, CANDIDATES)
-        return self.reranker.rerank(question, candidates, TOP_K)
+        try:
+            return self.reranker.rerank(question, candidates, TOP_K)
+        except RuntimeError:  # 記憶體不夠載入重排模型（常是本機語言模型占著）：請它先卸載，回答時會自動重載，再試一次
+            release = getattr(self.llm, "free_memory", None)
+            if release is None or not release():
+                raise
+            return self.reranker.rerank(question, candidates, TOP_K)
 
     def _stream(self, prompt: str) -> Iterator[str]:
         try:
@@ -388,7 +395,8 @@ class Assistant:
                 self._anomaly_rows = rows
                 label = f"{self._span_text(start, end)}　" if rng else "最近的"
                 return self._lines(f"{label}異常事件", [
-                    f"{r['timestamp']}　{r['event_type']}　{r['detail'] or ''}" for r in rows]), notes
+                    f"{r['timestamp']}　{event_labels.describe(r['event_type'], r['detail'], '　')}"
+                    for r in rows]), notes
             if plan.data == "roster":
                 people = queries.roster()
                 active = sum(1 for p in people if p["active"])
@@ -432,7 +440,10 @@ class Assistant:
         def names(items):
             return "、".join(f"{p['name']}（{p['timestamp'][11:16]}）" for p in items) or "無"
 
-        return (f"{s['date']}　出勤摘要\n有打卡人數：{s['punched_count']}\n遲到：{names(s['late'])}\n"
-                f"早退：{names(s['early_leave'])}\n加班：{names(s['overtime'])}\n"
-                f"在職但當天沒有打卡紀錄：{'、'.join(s['no_record']) or '無'}\n"
-                "（沒有打卡紀錄不等於缺勤：系統沒有假日與請假資料）")
+        head = f"{s['date']}　出勤摘要" + (f"（{s['day_off']}，不用上班）" if s.get("day_off") else "")
+        on_leave = f"請假：{'、'.join(s['on_leave'])}\n" if s.get("on_leave") else ""
+        note = ("（休息日沒有打卡屬正常）" if s.get("day_off")
+                else "（沒有打卡紀錄不等於缺勤：可能是系統尚未登錄的假日或請假）")
+        return (f"{head}\n有打卡人數：{s['punched_count']}\n遲到：{names(s['late'])}\n"
+                f"早退：{names(s['early_leave'])}\n加班：{names(s['overtime'])}\n{on_leave}"
+                f"在職但當天沒有打卡紀錄：{'、'.join(s['no_record']) or '無'}\n{note}")
