@@ -571,3 +571,62 @@ def test_key_management_cli(tmp_path, monkeypatch, capsys):
     assert "小明" in capsys.readouterr().out
     remote_server.main(["--revoke-key", "小明"])
     assert remote_access.KeyStore(path).labels() == []
+
+
+# --- 語言模型模式（--llm）---
+
+class FakeRuntime:
+    def __init__(self, llm):
+        from types import SimpleNamespace
+
+        self.assistant = SimpleNamespace(store=None, reranker=None, llm=llm, resolver=None, router_llm=llm,
+                                         roster_provider=None)
+        self.llm_note, self.closed = "助理使用測試模型", False
+
+    def close(self):
+        self.closed = True
+
+
+def start_with(monkeypatch, env, llm, *args):
+    """用假的零件啟動 main；回傳 (收到的設定, 假 runtime, run_simple 有沒有被呼叫)。"""
+    from rag import bootstrap
+
+    monkeypatch.setattr(remote_access.paths, "REMOTE_KEYS_PATH", env.keystore.path)
+    env.keystore.add("甲")
+    seen, runtime, served = {}, FakeRuntime(llm), []
+
+    def fake_create(progress=print, settings=None, **kw):
+        seen["settings"] = settings
+        return runtime
+
+    monkeypatch.setattr(bootstrap, "create_runtime", fake_create)
+    import werkzeug.serving as serving
+
+    monkeypatch.setattr(serving, "run_simple", lambda *a, **k: served.append(a))
+    remote_server.main(list(args))
+    return seen, runtime, served
+
+
+def test_llm_api_flag_overrides_only_this_process_and_starts_when_the_cloud_works(env, monkeypatch):
+    from rag import llm_settings
+
+    seen, _, served = start_with(monkeypatch, env, llm_settings.FailoverLLM(object(), None), "--llm", "api")
+    assert seen["settings"]["mode"] == "api" and served       # 有進到 run_simple，代表沒有被拒絕啟動
+    assert not os.path.exists(llm_settings.SETTINGS_PATH)       # 沒有寫回設定檔
+
+
+def test_llm_api_flag_refuses_to_start_when_the_cloud_is_down_and_a_local_model_took_over(env, monkeypatch):
+    served = []
+    import werkzeug.serving as serving
+
+    monkeypatch.setattr(serving, "run_simple", lambda *a, **k: served.append(a))
+    with pytest.raises(SystemExit, match="--llm api"):
+        start_with(monkeypatch, env, object(), "--llm", "api")
+    assert served == []                                       # 沒有啟動伺服器
+
+
+def test_without_the_flag_the_settings_file_decides(env, monkeypatch):
+    from rag import llm_settings
+
+    seen, _, served = start_with(monkeypatch, env, object())
+    assert seen["settings"] == llm_settings.load_settings() and served

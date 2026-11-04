@@ -249,3 +249,20 @@ def test_follow_up_without_an_expectation_is_judged_on_tools_only():
     for flag in (True, False):
         trial = tool_eval.check(item, plan_of(data="count", same_period=flag))
         assert trial["period_ok"] is None and tool_eval.passed(item, trial)
+
+
+def test_llm_override_applies_only_to_this_process(monkeypatch):
+    from rag import llm_settings
+
+    assert llm_settings.settings_for("api")["mode"] == "api" and llm_settings.settings_for("local")["mode"] == "local"
+    assert llm_settings.settings_for() == llm_settings.load_settings()
+    assert llm_settings.settings_for("settings") == llm_settings.load_settings()
+    assert not __import__("os").path.exists(llm_settings.SETTINGS_PATH)
+
+
+def test_evaluating_with_api_refuses_when_the_cloud_is_unavailable(monkeypatch):
+    from rag import llm as rllm
+
+    monkeypatch.setattr(rllm, "build_llm", lambda settings=None, max_tokens=None: (object(), "本機模型"))
+    with pytest.raises(SystemExit, match="雲端目前無法使用"):
+        tool_eval.main(["--split", "dev", "--llm", "api"])

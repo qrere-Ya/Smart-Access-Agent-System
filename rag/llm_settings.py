@@ -58,6 +58,14 @@ def load_settings():
     return s
 
 
+def settings_for(mode=None):
+    """目前的設定；指定 api 或 local 時，只在這個行程內改用該模式，不寫回設定檔（給遠端伺服器與評估用）。"""
+    s = load_settings()
+    if mode in ("api", "local"):
+        s["mode"] = mode
+    return s
+
+
 def effective_api_key(s):
     """金鑰只走環境變數：LLM_API_KEY（任何網址），或 NVIDIA 網址的 NVIDIA_API_KEY；
     舊版設定檔裡殘留的金鑰只在環境變數都沒設時才沿用（不再寫入）"""

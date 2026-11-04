@@ -380,6 +380,9 @@ def main(argv=None):
     parser.add_argument("--host", default="127.0.0.1",
                         help="綁定位址；用 Tailscale Funnel 對外時維持 127.0.0.1，只讓本機的代理連入")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--llm", choices=("settings", "api", "local"), default="settings",
+                        help="語言模型：settings＝照 runtime/llm_settings.json；api＝這個行程改用雲端（不改設定檔，"
+                             "雲端起不來就不啟動）；local＝本機 Ollama")
     parser.add_argument("--behind-proxy", action="store_true",
                         help="經本機代理（例如 Tailscale Funnel）對外：Cookie 加 Secure、送 HSTS、依代理給的來源計次")
     parser.add_argument("--allowed-host", action="append", default=[], metavar="名稱",
@@ -405,10 +408,14 @@ def main(argv=None):
     if not keystore.labels():
         raise SystemExit("還沒有任何金鑰。請先執行：python -m rag.remote_server --add-key 組員名稱")
 
-    from rag import bootstrap
+    from rag import bootstrap, llm_settings
 
-    runtime = bootstrap.create_runtime(progress=print)
+    runtime = bootstrap.create_runtime(progress=print, settings=llm_settings.settings_for(args.llm))
     print(f"[remote] {runtime.llm_note}")
+    if args.llm == "api" and not isinstance(runtime.assistant.llm, llm_settings.FailoverLLM):
+        runtime.close()   # 指定只用雲端，但雲端目前不能用而退回本機模型：不要悄悄用本機模型吃掉這台電腦的記憶體
+        raise SystemExit("指定了 --llm api，但雲端 API 目前無法使用，不啟動。請先確認 NVIDIA_API_KEY 與網路，"
+                         "或改用 --llm local。")
     allowed = {args.host, "localhost", "127.0.0.1", *args.allowed_host}
     app = create_app(keystore, make_assistant_factory(runtime), remote_access.Gate(),
                      remote_access.QuestionLog(enabled=not args.no_log, with_answers=not args.no_log_answers),

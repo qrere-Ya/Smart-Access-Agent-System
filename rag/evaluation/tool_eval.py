@@ -186,6 +186,8 @@ def main(argv=None):
     parser.add_argument("--split", choices=("dev", "test", "all"), default="dev")
     parser.add_argument("--runs", type=int, default=3, help="每題問幾次")
     parser.add_argument("--mode", choices=("multi", "single", "both"), default="multi")
+    parser.add_argument("--llm", choices=("settings", "api", "local"), default="settings",
+                        help="語言模型：settings＝照 runtime/llm_settings.json；api／local＝只在這次評估改用該模式")
     parser.add_argument("--confirm-test", action="store_true", help="確認要跑封存測試集（調整完成後才跑）")
     parser.add_argument("--out", default=LAST_RUN_PATH, help="把完整結果存成 JSON")
     args = parser.parse_args(argv)
@@ -193,10 +195,13 @@ def main(argv=None):
         raise SystemExit("測試集是封存的，只用來報告、不能拿來調整提示詞。確定要跑請加 --confirm-test。")
 
     from rag import llm as rllm
+    from rag import llm_settings
 
-    model, label = rllm.build_llm(max_tokens=200)
+    model, label = rllm.build_llm(llm_settings.settings_for(args.llm), max_tokens=200)
     if model is None:
         raise SystemExit(f"沒有可用的語言模型：{label}")
+    if args.llm == "api" and not isinstance(model, llm_settings.FailoverLLM):
+        raise SystemExit(f"指定了 --llm api，但雲端目前無法使用，不評估（避免把本機模型的結果當成雲端的）：{label}")
     print(f"語言模型：{label}")
     if args.split != "dev":
         print(f"⚠️ 這是第 {_record_test_run()} 次跑測試集；跑越多次，測試集越不能代表「沒看過的題目」。")
@@ -207,6 +212,8 @@ def main(argv=None):
         summary = summarize(results)
         name = "多步提示詞" if multi else "單步提示詞"
         _print_summary(f"{name}／{args.split}／每題 {args.runs} 次", summary, results)
+        if getattr(model, "switched", False):
+            print("⚠️ 評估途中雲端失敗，改用了備援的本機模型：這份結果混了兩個模型，不能當雲端的結果。")
         _print_failures(results)
         saved[name] = {"summary": summary, "failures": failures(results)}
     with open(args.out, "w", encoding="utf-8") as f:

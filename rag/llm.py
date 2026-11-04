@@ -4,6 +4,7 @@ llm.py：助理用的 LLM 取得（本機 Ollama 或雲端 API，雲端失效自
 主要功能：
   - 依 runtime/llm_settings.json 的設定組出可串流呼叫的 LLM
   - 模式 api 且金鑰可用 → 用雲端 API，本機模型待命當備援；否則用本機 Ollama
+  - 雲端的輸出上限至少 API_MIN_TOKENS（推理型模型會先思考，限制太小會得到空回應）
   - 兩個都不能用時回傳 None 與白話說明，由呼叫端顯示
 
 串接模組：
@@ -18,6 +19,8 @@ from typing import Optional, Tuple
 from rag import llm_settings as ls
 
 HEALTH_CACHE_SECONDS = 10.0
+API_MIN_TOKENS = 2000   # 雲端的輸出上限下限：推理型模型會先思考，上限太小就沒有可見的輸出（實測 200 時多半是空的）；
+                        # 本機模型沒有這個問題，照呼叫端要求的上限（意圖判斷要快）
 _health_cache = {}
 
 
@@ -48,7 +51,8 @@ def build_llm(settings: Optional[dict] = None, max_tokens: Optional[int] = None)
     if s["mode"] == "api":
         ok, err, _text, _sec = api_check
         if ok:
-            api = ls.OpenAICompatLLM(s["api_base"], ls.effective_api_key(s), s["api_model"], max_tokens=max_tokens)
+            limit = None if max_tokens is None else max(max_tokens, API_MIN_TOKENS)
+            api = ls.OpenAICompatLLM(s["api_base"], ls.effective_api_key(s), s["api_model"], max_tokens=limit)
             return ls.FailoverLLM(api, local), f"助理使用{api.label()}" + ("，失效時自動改用本機模型" if local else "")
         what, _ = ls.explain(err, s)
         note = f"雲端 API 目前無法使用（{what}），已改用本機模型。"

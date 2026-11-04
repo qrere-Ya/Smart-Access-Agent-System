@@ -82,3 +82,15 @@ def test_the_health_checks_run_once_for_the_two_llms_built_back_to_back(monkeypa
     llm.build_llm({**settings, "local_model": "other"})        # 設定改了就要重新檢查
     assert calls == {"local": 2, "api": 2}
     llm.clear_health_cache()
+
+
+def test_cloud_output_limit_is_raised_so_reasoning_models_still_produce_visible_text(fake_checks):
+    model, _ = llm.build_llm({**SETTINGS, "mode": "api"}, max_tokens=200)
+    assert model.primary.max_tokens == llm.API_MIN_TOKENS
+    assert llm.build_llm({**SETTINGS, "mode": "api"}, max_tokens=5000)[0].primary.max_tokens == 5000
+    assert llm.build_llm({**SETTINGS, "mode": "api"})[0].primary.max_tokens is None
+
+
+def test_local_output_limit_stays_tight_even_when_the_cloud_limit_is_raised(fake_checks):
+    model, _ = llm.build_llm({**SETTINGS, "mode": "api"}, max_tokens=200)
+    assert model.fallback.max_tokens == 200
