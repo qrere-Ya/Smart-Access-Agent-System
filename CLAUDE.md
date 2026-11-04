@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾隨偵測）＋ 管理者助理（查公司文件、考勤與異常事件的聊天視窗）。專案文件（README 等）已移除，待開發到一定階段再重新撰寫。
+Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾隨偵測）＋ 企業知識庫與出勤查詢（原「管理者助理」，只有 RAG 功能：查公司文件、考勤與異常事件的聊天視窗）。專案文件（README 等）已移除，待開發到一定階段再重新撰寫。
 
 ## 1. 專案要點
 
@@ -8,7 +8,7 @@ Smart Access Agent System：門禁子系統（人臉辨識、活體偵測、尾�
   - `shared/`：資料庫（`database_mgr`）、資源管理器（`resource_manager`）、統一路徑（`paths`）、後台登入的工作階段與失敗鎖定（`auth`，後台與助理視窗共用）
   - `access/`：門禁，包含人臉辨識與活體（`vision_core`）、尾隨偵測（`security`）、語音（`audio_player`）、QR 註冊伺服器（`web_server`）、現場主程式（`terminal_app`）
   - `admin/`：Tkinter 管理後台（`backend_main`）與背景服務管理（`service_manager`）；後台啟動先人臉登入（`login_window` 畫面、`face_login` 逐幀判斷），管理者在 `account_admin` 設定，最後一位管理者不能被取消、停用或刪除
-  - `rag/`：管理者助理，只給後台管理者使用。文件讀取與切塊 `ingest`、向量庫 `doc_store`（FAISS + BM25）、向量模型 `embedding`（bge-m3）、重排 `rerank`、意圖判斷 `router`、日期解析 `dates`、人名比對 `entity_resolver`、唯讀固定查詢 `queries`（LLM 不寫 SQL）、問答流程 `answer`、語言模型設定與呼叫 `llm_settings`／`llm`、組裝 `bootstrap`、對話控制 `chat_session`、題庫與評估 `evaluation/`（`python -m rag.evaluation.retrieval_eval`）。聊天視窗是 `rag/chat_window`（CustomTkinter，`python -m rag.chat_window`，後台按「管理者助理」另開行程）
+  - `rag/`：企業知識庫與出勤查詢（只有 RAG，不做排程；每日日報排程將放在 `admin/`），只給後台管理者使用。文件讀取與切塊 `ingest`、向量庫 `doc_store`（FAISS + BM25）、向量模型 `embedding`（bge-m3）、重排 `rerank`、意圖判斷 `router`、日期解析 `dates`、人名比對 `entity_resolver`、唯讀固定查詢 `queries`（LLM 不寫 SQL）、問答流程 `answer`、語言模型設定與呼叫 `llm_settings`／`llm`、組裝 `bootstrap`、對話控制 `chat_session`、題庫與評估 `evaluation/`（`python -m rag.evaluation.retrieval_eval`）。聊天視窗是 `rag/chat_window`（CustomTkinter，`python -m rag.chat_window`，後台按「企業知識庫與出勤查詢」另開行程）
   - 活體偵測模型的訓練已拆成獨立 repo：本機與本專案並列的 `Antispoof-Training` 資料夾（尚未推送到 GitHub）。正式系統只使用它匯出的 ONNX 檔，放在 `models/`，不直接依賴那邊的程式
 - 啟動方式：一律在專案根目錄用 `python -m` 啟動，例如 `python -m admin.backend_main`、`python -m access.terminal_app`、`python -m rag.chat_window`、`python -m access.web_server`，不要直接執行檔案路徑。
 - 路徑一律取自 `shared/paths.py`，不要在各檔自行用 `__file__` 推算。助理讀取的文件放 `data/docs/`（PDF、Word、txt、md）。執行期資料放 `runtime/`（資料庫、助理的向量庫、證據照片、LLM 設定）。

@@ -2,7 +2,7 @@
 service_manager.py：背景服務管理層。
 
 主要功能：
-  - 啟動、停止、監控子服務：人臉辨識（terminal_app.py）、QR 註冊（web_server.py）、管理者助理視窗與它用到的 Ollama
+  - 啟動、停止、監控子服務：人臉辨識（terminal_app.py）、QR 註冊（web_server.py）、企業知識庫視窗與它用到的 Ollama
   - 以 port 判斷服務是否已在執行，避免重複啟動；只停止自己啟動的行程，外部啟動的改用 port 找 PID
   - 在背景執行緒讀取子行程輸出，以 callback 交給呼叫端
   - 偵測本機區網 IP，供 QR Code 網址使用
@@ -207,7 +207,7 @@ def start_ollama(on_output_line):
         return None, f"Ollama 啟動失敗：{e}"
 
 
-# --- 管理者助理聊天視窗：rag.chat_window ---
+# --- 企業知識庫聊天視窗：rag.chat_window ---
 def assistant_window_running():
     """聊天視窗行程是否還活著，已結束的殘留 Popen 順便清掉。"""
     proc = _service_procs.get("assistant")
@@ -219,11 +219,11 @@ def assistant_window_running():
 
 def start_assistant_window(on_output_line, session_token=None):
     """
-    另開一個行程顯示管理者助理聊天視窗（模型在那個行程裡載入，不拖慢後台）。回傳 (成功與否, 訊息)。
+    另開一個行程顯示企業知識庫聊天視窗（模型在那個行程裡載入，不拖慢後台）。回傳 (成功與否, 訊息)。
     session_token 是後台登入的工作階段代碼，用環境變數交給視窗；沒有有效代碼時視窗會拒絕開啟。
     """
     if assistant_window_running():
-        return False, "管理者助理視窗已經開著了，請到工作列找它。"
+        return False, "企業知識庫視窗已經開著了，請到工作列找它。"
     python_exe = _project_python_exe()
     try:
         proc = subprocess.Popen(  # noqa: S603
@@ -235,9 +235,9 @@ def start_assistant_window(on_output_line, session_token=None):
         )
         _service_procs["assistant"] = proc
         _start_output_reader_thread(proc, on_output_line)
-        return True, "管理者助理視窗已開啟，第一次載入模型需要一點時間。"
+        return True, "企業知識庫視窗已開啟，第一次載入模型需要一點時間。"
     except Exception as e:
-        return False, f"管理者助理視窗開啟失敗：{e}"
+        return False, f"企業知識庫視窗開啟失敗：{e}"
 
 
 def stop_assistant_window():

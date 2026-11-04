@@ -2,18 +2,18 @@
 backend_main.py：門禁系統管理後台主程式（CustomTkinter，套用 shared/ui_theme）。
 
 主要功能：
-  - 主選單：六張功能卡片、即時時鐘、底部 CPU/RAM 狀態列與異常通知
+  - 主選單：五張功能卡片、即時時鐘、底部 CPU/RAM 狀態列與異常通知
   - 營運狀態與尾隨監控：今日打卡統計、異常件數、人臉辨識終端機開關與即時輸出
-  - 員工帳號管理（account_panel）、每日出勤報告（report_panel）、假日與請假（calendar_panel）
+  - 員工帳號管理（account_panel）、出勤報告與假日請假（calendar_panel，內嵌 report_panel）
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
-  - 管理者助理：另開聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
+  - 企業知識庫與出勤查詢：另開聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
   - 登入保護：啟動先用人臉登入（login_window），閒置 15 分鐘或按「登出」就回到登入畫面
   整個行程只建立一個主視窗，登入畫面與主畫面共用。只負責畫面，實際工作轉發給其他模組。
 
 串接模組：
   - service_manager：啟動、停止、監控背景服務與 IP 偵測
   - login_window、auth：人臉登入、工作階段與閒置逾時
-  - account_panel、report_panel、calendar_panel：各功能視窗
+  - account_panel、calendar_panel：各功能視窗
   - console_panel：內建終端機文字框；notification_bar：異常通知
   - dashboard_stats：儀表板統計查詢
   - ui_theme：色彩、字型、元件與對話框
@@ -38,7 +38,6 @@ from admin import (
     dashboard_stats,
     login_window,
     notification_bar,
-    report_panel,
     service_manager,
 )
 from shared import auth, paths, ui_theme
@@ -115,10 +114,9 @@ class BackendManagerApp:
             ("📊", "營運狀態與尾隨監控", "今日打卡統計、安全警報、人臉辨識即時輸出", "success", self.open_dashboard),
             ("👤", "員工帳號管理", "列出、停用、啟用、刪除員工帳號與角色", "info", self.open_account_admin),
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", "warning", self.open_qr_registration),
-            ("🤖", "管理者助理", "用聊天查公司文件與法規、考勤紀錄、異常事件", "primary", self.open_assistant_window),
-            ("📋", "每日出勤報告", "指定日期彙整準時、遲到、早退、缺勤，並可匯出 CSV", "info",
-             lambda: report_panel.open_report_window(self.root)),
-            ("🗓️", "假日與請假", "登錄假日、員工請假與每週休息日，出勤報告依此判斷缺勤", "success",
+            ("🤖", "企業知識庫與出勤查詢", "用聊天查公司文件與法規、考勤紀錄、異常事件", "primary",
+             self.open_assistant_window),
+            ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
              lambda: calendar_panel.open_calendar_window(self.root)),
         ]
         for idx, (icon, title, desc, accent, cmd) in enumerate(modules):
@@ -433,12 +431,12 @@ class BackendManagerApp:
         bar = self.notification_bar
         self.anomaly_win = anomaly_panel.open_anomaly_window(self.root, bar.notifier, bar.mark_all_read)
 
-    # --- 視窗 3：管理者助理（另開行程的聊天視窗） ---
+    # --- 視窗 3：企業知識庫與出勤查詢（另開行程的聊天視窗） ---
     def open_assistant_window(self):
-        """開啟管理者助理聊天視窗；模型在那個行程裡載入，這裡只負責啟動與提示。"""
+        """開啟企業知識庫聊天視窗；模型在那個行程裡載入，這裡只負責啟動與提示。"""
         token = self.session.token if self.session is not None else None
-        ok, message = service_manager.start_assistant_window(lambda line: print(f"[管理者助理] {line}"), token)
-        ui_theme.show_message(self.root, "管理者助理", message, "info" if ok else "warning")
+        ok, message = service_manager.start_assistant_window(lambda line: print(f"[企業知識庫] {line}"), token)
+        ui_theme.show_message(self.root, "企業知識庫與出勤查詢", message, "info" if ok else "warning")
 
     # --- 視窗 4：手機遠端 QR Code 註冊 ---
     def open_qr_registration(self):

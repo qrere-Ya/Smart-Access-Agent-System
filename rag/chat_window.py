@@ -1,5 +1,5 @@
 """
-chat_window.py：管理者助理的聊天視窗入口與組裝（CustomTkinter，深色現代風格）。
+chat_window.py：企業知識庫與出勤查詢的聊天視窗入口與組裝（CustomTkinter，深色現代風格）。
 
 主要功能：
   - 氣泡式對話：你的問題靠右、助理的回答靠左，回答逐字串流顯示；文字可以選取複製
@@ -319,8 +319,8 @@ def main():
 
         root = tkinter.Tk()
         root.withdraw()
-        messagebox.showerror("需要登入", "管理者助理只能從管理後台開啟。"
-                             + chr(10) + "請先執行 python -m admin.backend_main 登入，再按「管理者助理」。")
+        messagebox.showerror("需要登入", "企業知識庫只能從管理後台開啟。"
+                             + chr(10) + "請先執行 python -m admin.backend_main 登入，再按「企業知識庫與出勤查詢」。")
         root.destroy()
         sys.exit(2)
     AssistantWindow(session_token=token).mainloop()

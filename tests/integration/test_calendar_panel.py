@@ -226,7 +226,7 @@ def test_main_menu_card_opens_the_calendar_window(root, db, monkeypatch):
     def find(widget):
         for child in widget.winfo_children():
             try:
-                if child.cget("text") == "假日與請假":
+                if child.cget("text") == "出勤報告與假日請假":
                     return child
             except Exception:  # noqa: BLE001  不是每種元件都有 text
                 pass
@@ -241,3 +241,19 @@ def test_main_menu_card_opens_the_calendar_window(root, db, monkeypatch):
     root.update()
     assert opened == [root]
     app.teardown()
+
+
+def test_the_daily_report_is_the_first_tab_and_is_requeried_when_selected(panel, db, monkeypatch):
+    from admin import attendance_report
+
+    assert panel.tabs.get() == "每日出勤報告"
+    assert panel.report_panel.report is not None
+    calls = []
+    real = attendance_report.build_report
+    monkeypatch.setattr(attendance_report, "build_report", lambda d: calls.append(d) or real(d))
+    panel.tabs.set("假日")
+    panel._on_tab_change()
+    assert calls == []
+    panel.tabs.set("每日出勤報告")
+    panel._on_tab_change()
+    assert len(calls) == 1

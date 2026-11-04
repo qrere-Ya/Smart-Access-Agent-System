@@ -21,7 +21,8 @@ class StatusBar(ctk.CTkFrame):
 
     def __init__(self, master, on_new, on_refresh, on_settings):
         super().__init__(master, corner_radius=0, height=56, fg_color=ui_theme.pair("card"))
-        ctk.CTkLabel(self, text="🤖  管理者助理", font=ui_theme.font(ui_theme.FONT_SIZE_TITLE, bold=True)).pack(
+        ctk.CTkLabel(
+            self, text="🤖  企業知識庫與出勤查詢", font=ui_theme.font(ui_theme.FONT_SIZE_TITLE, bold=True)).pack(
             side="left", padx=18, pady=12)
         self.settings_btn = ui_theme.secondary_button(self, "⚙️", on_settings, width=40)
         self.settings_btn.pack(side="right", padx=(6, 14))

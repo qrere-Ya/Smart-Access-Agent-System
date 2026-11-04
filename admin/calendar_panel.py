@@ -1,7 +1,8 @@
 """
-calendar_panel.py：假日、請假與每週休息日的輸入畫面（CustomTkinter）。
+calendar_panel.py：每日出勤報告、假日、請假與每週休息日的視窗（CustomTkinter）。
 
 主要功能：
+  - 「每日出勤報告」分頁：內嵌 report_panel（報告依下面三個分頁的資料判斷缺勤，切到此分頁時重查）
   - 「假日」分頁：新增或更新（同一天只會有一筆）、刪除所選、列表（含星期）
   - 「請假」分頁：選員工、起訖日、假別、備註後新增；列表與刪除所選
   - 「每週休息日」分頁：七個勾選，儲存後出勤報告與助理就依此判斷是否要上班
@@ -12,6 +13,7 @@ calendar_panel.py：假日、請假與每週休息日的輸入畫面（CustomTki
   - calendar_logic：輸入驗證與顯示格式（純邏輯）
   - database_mgr：假日、請假、每週休息日的讀寫
   - account_admin：員工清單
+  - report_panel：每日出勤報告面板
   - ui_theme：色彩、字型、按鈕、表格、對話框
   - backend_main：用 open_calendar_window 開啟
 """
@@ -21,11 +23,12 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from admin import account_admin, calendar_logic
+from admin import account_admin, calendar_logic, report_panel
 from shared import database_mgr as db
 from shared import ui_theme
 
 GENERIC_ERROR = "操作失敗，請稍後再試。"
+REPORT_TAB = "每日出勤報告"
 
 
 def _today():
@@ -44,8 +47,8 @@ class CalendarPanel(ctk.CTkFrame):
         self._leave_ids = {}                 # 請假表格的列 iid -> 請假紀錄 id
         self._user_choices = {}              # 下拉選單文字 -> 員工 id
         pad = ui_theme.PAD_LG
-        ui_theme.section_title(self, "🗓️ 假日與請假").pack(anchor="w", padx=pad, pady=(pad, 0))
-        ui_theme.muted_label(self, "出勤報告會依這裡的設定判斷缺勤：假日、請假與每週休息日都不算缺勤。").pack(
+        ui_theme.section_title(self, "🗓️ 出勤報告與假日請假").pack(anchor="w", padx=pad, pady=(pad, 0))
+        ui_theme.muted_label(self, "出勤報告會依假日、請假與每週休息日的設定判斷缺勤，這些日子都不算缺勤。").pack(
             anchor="w", padx=pad, pady=(2, 8))
         self.tabs = ctk.CTkTabview(
             self, fg_color=ui_theme.pair("card"), border_width=1, border_color=ui_theme.pair("border"),
@@ -54,12 +57,14 @@ class CalendarPanel(ctk.CTkFrame):
             segmented_button_selected_hover_color=ui_theme.pair("primary_hover"),
             segmented_button_unselected_color=ui_theme.pair("secondary"),
             segmented_button_unselected_hover_color=ui_theme.pair("secondary_hover"),
-            text_color=ui_theme.pair("text"), command=self.refresh_all)
+            text_color=ui_theme.pair("text"), command=self._on_tab_change)
         try:
             self.tabs._segmented_button.configure(font=ui_theme.font(bold=True))   # CTkTabview 沒有公開的字型參數
         except (AttributeError, tk.TclError, ValueError):
             pass
         self.tabs.pack(fill="both", expand=True, padx=pad, pady=(0, pad))
+        self.report_panel = report_panel.ReportPanel(self.tabs.add(REPORT_TAB), embedded=True)
+        self.report_panel.pack(fill="both", expand=True)
         self._build_holiday_tab(self.tabs.add("假日"))
         self._build_leave_tab(self.tabs.add("請假"))
         self._build_rest_tab(self.tabs.add("每週休息日"))
@@ -92,8 +97,14 @@ class CalendarPanel(ctk.CTkFrame):
         widget.grid(row=row, column=column + 1, sticky="w", padx=(0, 16), pady=4, **grid)
         return widget
 
+    def _on_tab_change(self):
+        """切換分頁時重新載入資料；切到日報分頁時一併重查（假日、請假可能剛改過）。"""
+        self.refresh_all()
+        if self.tabs.get() == REPORT_TAB:
+            self.report_panel.refresh()
+
     def refresh_all(self, *_):
-        """重新載入三個分頁的資料。"""
+        """重新載入假日、請假與每週休息日分頁的資料。"""
         self.refresh_holidays()
         self.refresh_users()
         self.refresh_leaves()
@@ -277,10 +288,10 @@ class CalendarPanel(ctk.CTkFrame):
 
 
 def open_calendar_window(root):
-    """開啟假日與請假視窗並回傳它。"""
+    """開啟出勤報告與假日請假視窗並回傳它。"""
     win = ctk.CTkToplevel(root)
-    win.title("假日與請假")
-    win.geometry("900x640")
+    win.title("出勤報告與假日請假")
+    win.geometry("900x700")
     ui_theme.style_window(win)
     CalendarPanel(win).pack(fill="both", expand=True)
     return win
