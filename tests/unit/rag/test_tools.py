@@ -257,3 +257,121 @@ def test_the_single_step_prompt_has_no_also_rule():
 
     single = router.build_prompt("你好", "", dt.date(2026, 10, 17), multi=False)
     assert "also" not in single and "also" in router.build_prompt("你好", "", dt.date(2026, 10, 17))
+
+
+# --- 追問沿用上一題的日期（same_period）---
+
+def test_same_period_is_read_only_for_a_strict_true_and_only_with_a_data_query():
+    base = {"docs": False, "data": "status_list", "status": "早退"}
+    assert router.parse_plan(json.dumps({**base, "same_period": True})).same_period is True
+    for bad in (False, "true", 1, None, "是"):
+        assert router.parse_plan(json.dumps({**base, "same_period": bad})).same_period is False
+    assert router.parse_plan(json.dumps({"docs": True, "data": "none", "same_period": True})).same_period is False
+    assert router.parse_plan(json.dumps(base)).same_period is False
+
+
+def test_prompt_explains_same_period_and_the_weekly_rest_days_tool():
+    import datetime as dt
+
+    prompt = router.build_prompt("那有人早退嗎", "使用者：這個月誰遲到", dt.date(2026, 10, 17))
+    assert "same_period" in prompt and "週休" in prompt and "星期幾休息" in prompt
+
+
+@pytest.mark.parametrize("question", ["公司的週休是星期幾", "我們的休息日是哪幾天", "週休二日嗎，星期幾休息"])
+def test_keyword_fallback_sends_weekly_rest_day_questions_to_the_holidays_tool(question):
+    assert router.heuristic_plan(question).data == "holidays"
+
+
+def test_a_follow_up_without_its_own_time_reuses_the_previous_range_and_says_so(db):
+    llm = FakeLLM({"這個月誰遲到": {"data": "status_list", "status": "遲到"},
+                   "那有人早退嗎": {"data": "status_list", "status": "早退", "same_period": True}})
+    assistant = make(NoDocs(), llm)
+    ask(assistant, "這個月誰遲到")
+    text = ask(assistant, "那有人早退嗎")
+    assert (assistant.last.date_range.start, assistant.last.date_range.end) == ("2026-10-01", "2026-10-31")
+    assert "沿用上一題的「這個月」（2026-10-01 至 2026-10-31）" in text
+    assert "2026-10-01 至 2026-10-31　早退紀錄" in text
+
+
+def test_without_the_same_period_flag_the_default_range_is_used(db):
+    llm = FakeLLM({"這個月誰遲到": {"data": "status_list", "status": "遲到"},
+                   "那有人早退嗎": {"data": "status_list", "status": "早退"}})
+    assistant = make(NoDocs(), llm)
+    ask(assistant, "這個月誰遲到")
+    text = ask(assistant, "那有人早退嗎")
+    assert assistant.last.date_range is None and "沿用上一題" not in text and "2026-10-17　早退紀錄" in text
+
+
+def test_a_range_in_the_question_wins_over_the_previous_one(db):
+    llm = FakeLLM({"這個月誰遲到": {"data": "status_list", "status": "遲到"},
+                   "那昨天有人早退嗎": {"data": "status_list", "status": "早退", "same_period": True}})
+    assistant = make(NoDocs(), llm)
+    ask(assistant, "這個月誰遲到")
+    text = ask(assistant, "那昨天有人早退嗎")
+    assert assistant.last.date_range.start == "2026-10-16" and "沿用上一題" not in text
+
+
+def test_only_the_immediately_previous_turn_counts(db):
+    llm = FakeLLM({"這個月誰遲到": {"data": "status_list", "status": "遲到"},
+                   "公司有哪些員工": {"data": "roster"},
+                   "那有人早退嗎": {"data": "status_list", "status": "早退", "same_period": True}})
+    assistant = make(NoDocs(), llm)
+    ask(assistant, "這個月誰遲到")
+    ask(assistant, "公司有哪些員工")
+    text = ask(assistant, "那有人早退嗎")
+    assert assistant.last.date_range is None and "沿用上一題" not in text
+
+
+def test_a_follow_up_as_the_first_question_has_nothing_to_reuse(db):
+    llm = FakeLLM({"那有人早退嗎": {"data": "status_list", "status": "早退", "same_period": True}})
+    assistant = make(NoDocs(), llm)
+    text = ask(assistant, "那有人早退嗎")
+    assert assistant.last.date_range is None and "沿用上一題" not in text
+
+
+def test_new_chat_forgets_the_previous_range(db):
+    llm = FakeLLM({"這個月誰遲到": {"data": "status_list", "status": "遲到"},
+                   "那有人早退嗎": {"data": "status_list", "status": "早退", "same_period": True}})
+    assistant = make(NoDocs(), llm)
+    ask(assistant, "這個月誰遲到")
+    assistant.reset()
+    ask(assistant, "那有人早退嗎")
+    assert assistant.last.date_range is None
+
+
+def test_the_roster_never_inherits_a_range(db):
+    llm = FakeLLM({"這個月誰遲到": {"data": "status_list", "status": "遲到"},
+                   "那員工有哪些": {"data": "roster", "same_period": True}})
+    assistant = make(NoDocs(), llm)
+    ask(assistant, "這個月誰遲到")
+    ask(assistant, "那員工有哪些")
+    assert assistant.last.date_range is None
+
+
+# --- 說明的時間範圍不能超出實際查詢的範圍 ---
+
+def test_a_narration_claiming_a_wider_period_than_queried_is_dropped_but_the_table_stays(db):
+    llm = FakeLLM({"有人早退嗎": {"data": "status_list", "status": "早退"}}, reply="這個月沒有早退紀錄。")
+    assistant = make(NoDocs(), llm)
+    text = ask(assistant, "有人早退嗎")
+    assert "2026-10-17　早退紀錄" in text and "（沒有符合的紀錄）" in text and "這個月沒有早退紀錄" not in text
+    assert "超出實際查詢的範圍" in assistant.last.note
+
+
+def test_a_narration_matching_the_queried_period_is_kept(db):
+    llm = FakeLLM({"有人早退嗎": {"data": "status_list", "status": "早退"}}, reply="今天沒有早退紀錄。")
+    assert "今天沒有早退紀錄" in ask(make(NoDocs(), llm), "有人早退嗎")
+
+
+def test_a_narration_citing_a_day_inside_the_queried_range_is_kept(db, add_user, add_attendance):
+    add_user("王小明", "E1")
+    add_attendance("王小明", "2026-10-05 08:30:00", "遲到")
+    llm = FakeLLM({"這個月誰遲到": {"data": "status_list", "status": "遲到"}}, reply="王小明 2026-10-05 遲到。")
+    assistant = make(NoDocs(), llm)
+    assert "王小明 2026-10-05 遲到。" in ask(assistant, "這個月誰遲到") and assistant.last.note == ""
+
+
+def test_the_narration_prompt_forbids_borrowing_a_period_from_the_conversation(db):
+    llm = FakeLLM({"有人早退嗎": {"data": "status_list", "status": "早退"}})
+    ask(make(NoDocs(), llm), "有人早退嗎")
+    assert "只能用查詢結果標題上的日期" in llm.answer_prompts[0]

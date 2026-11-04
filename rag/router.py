@@ -30,7 +30,7 @@ _MAX_PERSON_CHARS = 20
 
 _DATA_WORDS = ("打卡", "出勤", "遲到", "早退", "缺勤", "沒打卡", "上班時間", "下班時間", "加班時數", "考勤",
                "異常", "尾隨", "員工名單", "有哪些員工", "幾位員工", "幾個員工", "誰請假", "請假名單", "誰休假",
-               "哪些假日", "假日清單", "放假日")
+               "哪些假日", "假日清單", "放假日", "週休", "周休", "休息日", "星期幾休息", "星期幾上班")
 _DOC_WORDS = ("規定", "法", "條", "辦法", "要點", "規則", "權益", "補償", "資遣", "特休", "休假", "請假", "工資",
               "薪資", "怎麼", "如何", "可以嗎", "合法", "違法", "應該", "是否", "多少", "幾天", "幾小時", "幾年",
               "條件", "程序", "流程", "文件")
@@ -54,6 +54,7 @@ class Plan:
     event_type: Optional[str] = None
     source: str = "llm"  # llm 或 heuristic
     steps: List[Step] = field(default_factory=list)  # 追加的查詢，順序即執行順序
+    same_period: bool = False  # 追問且沒有自己的時間說法：沿用上一題的日期區間（由 LLM 依對話判斷）
 
 
 _MULTI_RULE = (
@@ -86,6 +87,11 @@ _EXAMPLES = """範例：
 {"docs": false, "data": "none", "person": "", "status": "", "event_type": ""}"""
 
 
+_FOLLOWUP_EXAMPLE = """前面的對話：使用者：這個月誰請假？
+問題：那誰遲到？
+{"docs": false, "data": "status_list", "person": "", "status": "遲到", "event_type": "", "same_period": true}"""
+
+
 _MULTI_EXAMPLES = """問題：明天誰請假，順便列出員工名單
 {"docs": false, "data": "leaves", "person": "", "status": "", "event_type": "", "also": [{"data": "roster", "person": "", "status": "", "event_type": ""}]}
 問題：這個月有哪些假日，以及李大華這個月的打卡紀錄
@@ -102,13 +108,16 @@ def build_prompt(question: str, history: str, today: datetime.date, multi: bool 
         "- data：要查資料庫時填一種：records（某人的打卡紀錄）、count（某人各種狀態的次數）、"
         "status_list（某段時間誰遲到、早退、加班）、summary（某天的出勤摘要或誰沒打卡）、"
         "anomalies（異常、尾隨事件）、roster（員工名單）、leaves（某段時間誰請假）、"
-        "holidays（公司登錄的假日與休息日）；不需要查資料庫填 none。請假的法規規定是 docs，不是 leaves。\n"
+        "holidays（公司登錄的假日，以及每週固定休息日：問週休、星期幾休息、哪幾天不用上班都是這個）；"
+        "不需要查資料庫填 none。請假的法規規定是 docs，不是 leaves。\n"
         "- person：問題裡提到的人名，沒有就留空字串。\n"
         "- status：遲到、早退、上班、下班、加班 其中之一，沒有就留空字串。\n"
         "- event_type：問尾隨事件填 tailgate、問經過鏡頭未打卡填 no_scan_walkby、問一般異常留空，否則留空字串。\n"
+        "- same_period：「前面的對話」裡有上一題，而且這題是接著它追問、自己沒有說時間"
+        "（常見句型像「那…呢」），問的是相同的時間範圍才填 true；其他情況填 false。\n"
         "日期由別的程式處理，不用輸出。\n"
         f"{_MULTI_RULE if multi else ''}"
-        f"{_EXAMPLES}\n{_MULTI_EXAMPLES if multi else ''}"
+        f"{_EXAMPLES}\n{_FOLLOWUP_EXAMPLE}\n{_MULTI_EXAMPLES if multi else ''}"
         f"今天是 {today.isoformat()}（星期{weekday}）。\n"
         f"{('前面的對話：' + history + chr(10)) if history else ''}"
         f"問題：{question}\n"
@@ -169,7 +178,8 @@ def parse_plan(text: str) -> Optional[Plan]:
         return None
     data, person, status, event_type = call
     steps = _parse_steps(raw.get("also"), call) if data else []
-    return Plan(docs=raw["docs"], data=data, person=person, status=status, event_type=event_type, steps=steps)
+    return Plan(docs=raw["docs"], data=data, person=person, status=status, event_type=event_type, steps=steps,
+                same_period=bool(data) and raw.get("same_period") is True)
 
 
 def heuristic_plan(question: str) -> Plan:
@@ -182,7 +192,8 @@ def heuristic_plan(question: str) -> Plan:
             tool = "anomalies"
         elif any(w in question for w in ("誰請假", "請假名單", "誰休假")):
             tool = "leaves"
-        elif any(w in question for w in ("哪些假日", "假日清單", "放假日")):
+        elif any(w in question for w in ("哪些假日", "假日清單", "放假日", "週休", "周休", "休息日", "星期幾休息",
+                                         "星期幾上班")):
             tool = "holidays"
         elif "員工名單" in question or "有哪些員工" in question or "幾位員工" in question:
             tool = "roster"

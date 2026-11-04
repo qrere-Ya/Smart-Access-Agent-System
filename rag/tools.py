@@ -151,6 +151,9 @@ def _holidays(a: ToolArgs) -> ToolResult:
     return ToolResult(f"{text}\n每週固定休息日：{rest}", notes)
 
 
+# 問題沒有時間說法時，預設只看今天的工具（其餘工具沒有時間就看全部期間或最近）
+TODAY_BY_DEFAULT = ("status_list", "leaves", "summary")
+
 TOOLS = {t.name: t for t in (
     Tool("records", "某位員工的打卡紀錄", _records, needs_person=True),
     Tool("count", "某位員工各種打卡狀態的次數", _count, needs_person=True),
