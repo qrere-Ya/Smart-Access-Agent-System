@@ -99,8 +99,8 @@ def save_settings(new):
     os.replace(tmp, SETTINGS_PATH)
     try:
         os.chmod(SETTINGS_PATH, 0o600)
-    except Exception:  # noqa: S110
-        pass
+    except Exception as e:
+        _log(f"無法把設定檔權限改成只有自己可讀（略過）：{type(e).__name__}")
     return s
 
 
@@ -282,8 +282,8 @@ class OpenAICompatLLM:
         finally:
             try:
                 resp.close()
-            except Exception:  # noqa: S110
-                pass
+            except Exception as e:
+                _log(f"關閉連線時出錯（略過）：{type(e).__name__}")
 
     def complete(self, prompt):
         return "".join(d.delta for d in self.stream_complete(prompt))
@@ -349,8 +349,8 @@ class OllamaChatLLM:
         finally:
             try:
                 resp.close()
-            except Exception:  # noqa: S110
-                pass
+            except Exception as e:
+                _log(f"關閉連線時出錯（略過）：{type(e).__name__}")
 
     def complete(self, prompt):
         return "".join(d.delta for d in self.stream_complete(prompt))
