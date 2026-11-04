@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>企業知識庫與出勤查詢</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main id="login" class="card">
+  <h1>企業知識庫與出勤查詢</h1>
+  <p class="muted">測試入口。請輸入管理者給你的存取金鑰。</p>
+  <form id="login-form">
+    <input id="key" type="password" autocomplete="off" placeholder="存取金鑰" required>
+    <button type="submit">登入</button>
+  </form>
+  <p id="login-error" class="error" hidden></p>
+  <p class="muted small">注意：你的提問（不含回答內容）會被記錄，用來改善測試題庫。</p>
+</main>
+
+<div id="chat" hidden>
+  <header>
+    <strong>企業知識庫與出勤查詢</strong>
+    <span id="who" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="new-chat" type="button" class="ghost">新對話</button>
+    <button id="logout" type="button" class="ghost">登出</button>
+  </header>
+  <section id="messages" aria-live="polite"></section>
+  <p id="status" class="muted small"></p>
+  <form id="ask-form">
+    <textarea id="question" rows="2" maxlength="1000" placeholder="輸入問題，例如：這個月誰遲到？"></textarea>
+    <button id="send" type="submit">送出</button>
+  </form>
+  <p class="muted small">這是測試版，回答可能有誤，重要數字請對照原始資料。問題會被記錄。</p>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
