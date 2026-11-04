@@ -201,3 +201,59 @@ def test_keyword_fallback_picks_the_new_tools(question, tool):
 def test_leave_regulation_questions_still_go_to_documents():
     plan = router.heuristic_plan("請假要怎麼申請")
     assert plan.data is None and plan.docs is True
+
+
+# --- 一題多個工具（router 的 also 欄位） ---
+
+def two_calls(**extra):
+    return {"data": "leaves", "also": [{"data": "roster", "person": "", "status": "", "event_type": ""}]} | extra
+
+
+def test_two_tools_run_in_order_and_their_results_are_merged(store, staff):
+    llm = FakeLLM({"誰請假，另外列出員工": two_calls()}, reply="王小明請病假。")
+    a = make(store, llm)
+    text = ask(a, "誰請假，另外列出員工")
+    assert text.index("王小明　2026-10-15") < text.index("員工名單（共 2 人") and a.last.tools == ["leaves", "roster"]
+    assert a.last.outcome == "answered"
+
+
+def test_an_extra_step_that_needs_an_unknown_person_is_explained_and_the_main_result_still_shows(store, staff):
+    also = [{"data": "records", "person": "張三", "status": "", "event_type": ""}]
+    llm = FakeLLM({"誰請假，以及張三的打卡": {"data": "leaves", "also": also}})
+    a = make(store, llm)
+    text = ask(a, "誰請假，以及張三的打卡")
+    assert "王小明　2026-10-15" in text and "員工名單裡找不到「張三」" in text and a.last.tools == ["leaves"]
+
+
+@pytest.mark.parametrize("bad", [
+    "roster", [{"data": "drop_table"}], [{"data": "roster"}, "x"],   # 不是清單、不在白名單、項目型別錯
+    [{"data": "leaves"}],                                              # 重複主查詢
+    [{"data": "roster"}, {"data": "holidays"}, {"data": "summary"}],   # 超過上限
+    [{"data": "none"}], [],
+])
+def test_a_bad_also_list_is_ignored_and_the_main_query_still_runs(bad):
+    plan = router.parse_plan(json.dumps({"docs": False, "data": "leaves", "also": bad}))
+    assert plan is not None and plan.data == "leaves" and plan.steps == []
+
+
+def test_a_valid_also_list_is_parsed_and_capped_at_three_tools_total():
+    plan = router.parse_plan(json.dumps({"docs": False, "data": "leaves", "also": [
+        {"data": "roster"}, {"data": "records", "person": "李大華", "status": "遲到"}]}))
+    assert [(x.data, x.person, x.status) for x in plan.steps] == [("roster", "", None), ("records", "李大華", "遲到")]
+    assert 1 + len(plan.steps) <= router.MAX_STEPS
+
+
+def test_also_without_a_main_query_is_dropped():
+    assert router.parse_plan(json.dumps({"docs": True, "data": "none", "also": [{"data": "roster"}]})).steps == []
+
+
+def test_nested_json_is_parsed_whole_and_text_around_it_is_tolerated():
+    text = "好的\n" + json.dumps({"docs": False, "data": "leaves", "also": [{"data": "roster"}]}) + "\n以上"
+    assert router.parse_plan(text).steps[0].data == "roster"
+
+
+def test_the_single_step_prompt_has_no_also_rule():
+    import datetime as dt
+
+    single = router.build_prompt("你好", "", dt.date(2026, 10, 17), multi=False)
+    assert "also" not in single and "also" in router.build_prompt("你好", "", dt.date(2026, 10, 17))

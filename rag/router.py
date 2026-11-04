@@ -3,6 +3,8 @@ router.py：判斷一個問題要「查文件」、「查資料庫」，還是�
 
 主要功能：
   - 請 LLM 只輸出一段 JSON：要不要查文件、要用哪個固定查詢、問的是誰、什麼狀態、什麼事件類型
+  - 問題明確問到兩件以上不同的事時，可在 also 欄位多帶幾個查詢（合計最多 MAX_STEPS 個）；also 格式不合就整個忽略，
+    退回只做主查詢，所以多步規劃壞掉也不會讓原本能回答的題目失敗
   - LLM 的輸出一律先驗證：查詢種類、狀態只接受白名單內的值，人名長度有限制，格式不對就當作失敗
   - LLM 失敗或輸出不合格時，退回用關鍵字判斷，所以意圖判斷不會讓整個流程中斷
   - 日期和人名不在這裡決定：日期由 dates 解析、人名由 entity_resolver 對照名單
@@ -13,13 +15,13 @@ router.py：判斷一個問題要「查文件」、「查資料庫」，還是�
 """
 import datetime
 import json
-import re
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 from rag import tools
 
 DATA_TOOLS = tuple(tools.TOOLS)
+MAX_STEPS = 3
 STATUS_ALIASES = {"遲到": "遲到", "早退": "早退", "上班": "上班", "下班": "下班",
                   "加班": "下班 (加班)", "下班 (加班)": "下班 (加班)"}
 EVENT_TYPES = ("tailgate", "no_scan_walkby")
@@ -35,6 +37,15 @@ _DOC_WORDS = ("規定", "法", "條", "辦法", "要點", "規則", "權益", "�
 
 
 @dataclass
+class Step:
+    """主查詢之外追加的一個唯讀工具呼叫。"""
+    data: str
+    person: str = ""
+    status: Optional[str] = None
+    event_type: Optional[str] = None
+
+
+@dataclass
 class Plan:
     docs: bool
     data: Optional[str] = None
@@ -42,7 +53,13 @@ class Plan:
     status: Optional[str] = None
     event_type: Optional[str] = None
     source: str = "llm"  # llm 或 heuristic
+    steps: List[Step] = field(default_factory=list)  # 追加的查詢，順序即執行順序
 
+
+_MULTI_RULE = (
+    "- also：只有問題明確問到兩件以上不同的事（例如同時問誰請假與員工名單）才填，是最多 2 個查詢的清單，"
+    "每個查詢的欄位同 data、person、status、event_type；一件事就不要填。\n"
+)
 
 _EXAMPLES = """範例：
 問題：特別休假有幾天？
@@ -69,8 +86,14 @@ _EXAMPLES = """範例：
 {"docs": false, "data": "none", "person": "", "status": "", "event_type": ""}"""
 
 
-def build_prompt(question: str, history: str, today: datetime.date) -> str:
-    """意圖判斷的提示詞：說明欄位、給範例，只要求輸出 JSON。"""
+_MULTI_EXAMPLES = """問題：明天誰請假，順便列出員工名單
+{"docs": false, "data": "leaves", "person": "", "status": "", "event_type": "", "also": [{"data": "roster", "person": "", "status": "", "event_type": ""}]}
+問題：這個月有哪些假日，以及李大華這個月的打卡紀錄
+{"docs": false, "data": "holidays", "person": "", "status": "", "event_type": "", "also": [{"data": "records", "person": "李大華", "status": "", "event_type": ""}]}"""  # noqa: E501
+
+
+def build_prompt(question: str, history: str, today: datetime.date, multi: bool = True) -> str:
+    """意圖判斷的提示詞：說明欄位、給範例，只要求輸出 JSON；multi=False 時不含多步查詢的說明（評估比較用）。"""
     weekday = _WEEKDAYS[today.weekday()]
     return (
         "你是門禁與人資系統的意圖判斷器。判斷使用者的問題，只輸出一行 JSON，不要任何其他文字。\n"
@@ -84,23 +107,17 @@ def build_prompt(question: str, history: str, today: datetime.date) -> str:
         "- status：遲到、早退、上班、下班、加班 其中之一，沒有就留空字串。\n"
         "- event_type：問尾隨事件填 tailgate、問經過鏡頭未打卡填 no_scan_walkby、問一般異常留空，否則留空字串。\n"
         "日期由別的程式處理，不用輸出。\n"
-        f"{_EXAMPLES}\n"
+        f"{_MULTI_RULE if multi else ''}"
+        f"{_EXAMPLES}\n{_MULTI_EXAMPLES if multi else ''}"
         f"今天是 {today.isoformat()}（星期{weekday}）。\n"
         f"{('前面的對話：' + history + chr(10)) if history else ''}"
         f"問題：{question}\n"
     )
 
 
-def parse_plan(text: str) -> Optional[Plan]:
-    """從 LLM 輸出取出 JSON 並驗證；格式不對或欄位不合法回傳 None。"""
-    match = re.search(r"\{.*?\}", text or "", re.DOTALL)
-    if not match:
-        return None
-    try:
-        raw = json.loads(match.group(0))
-    except ValueError:
-        return None
-    if not isinstance(raw, dict) or not isinstance(raw.get("docs"), bool):
+def _parse_call(raw) -> Optional[tuple]:
+    """驗證一個查詢的欄位（data、person、status、event_type）；回傳 (data, person, status, event_type) 或 None。"""
+    if not isinstance(raw, dict):
         return None
     data = raw.get("data") or "none"
     if data == "none":
@@ -119,8 +136,40 @@ def parse_plan(text: str) -> Optional[Plan]:
     person = person.strip()
     if len(person) > _MAX_PERSON_CHARS:
         return None
-    return Plan(docs=raw["docs"], data=data, person=person, status=STATUS_ALIASES.get(status),
-                event_type=event_type or None)
+    return data, person, STATUS_ALIASES.get(status), event_type or None
+
+
+def _parse_steps(raw_steps, main) -> List[Step]:
+    """驗證 also 清單；只要有一項不合格、不是清單或重複主查詢，整個忽略（退回單步）。最多追加 MAX_STEPS - 1 個。"""
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return []
+    steps: List[Step] = []
+    for raw in raw_steps:
+        call = _parse_call(raw)
+        if call is None or call[0] is None or call in [main] + [(x.data, x.person, x.status, x.event_type)
+                                                                for x in steps]:
+            return []
+        steps.append(Step(*call))
+    return steps if len(steps) <= MAX_STEPS - 1 else []
+
+
+def parse_plan(text: str) -> Optional[Plan]:
+    """從 LLM 輸出取出 JSON 並驗證；格式不對或欄位不合法回傳 None。"""
+    start = (text or "").find("{")
+    if start < 0:
+        return None
+    try:
+        raw, _ = json.JSONDecoder().raw_decode(text[start:])
+    except ValueError:
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("docs"), bool):
+        return None
+    call = _parse_call(raw)
+    if call is None:
+        return None
+    data, person, status, event_type = call
+    steps = _parse_steps(raw.get("also"), call) if data else []
+    return Plan(docs=raw["docs"], data=data, person=person, status=status, event_type=event_type, steps=steps)
 
 
 def heuristic_plan(question: str) -> Plan:

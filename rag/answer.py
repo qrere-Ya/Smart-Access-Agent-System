@@ -3,7 +3,7 @@ answer.py：企業知識庫與出勤查詢的問答流程（把檢索、固定�
 
 主要功能：
   - 判斷問題類型（router）→ 解析日期（dates）與人名（entity_resolver）
-    → 呼叫唯讀工具查資料庫（tools）／檢索文件（doc_store＋rerank）
+    → 呼叫唯讀工具查資料庫（tools；一題最多 router.MAX_STEPS 個工具，依序執行再合併結果）／檢索文件（doc_store＋rerank）
   - 人名不確定時反問「你是指 X 嗎？」，查無此人就直說，不會亂猜；文件分數接近 0 且沒有資料可用時回答「找不到依據」
   - 查詢結果會先原樣列出（讓管理者核對），再由 LLM 用白話整理；LLM 只能根據提供的文件段落與查詢結果回答，並標註段落編號
   - 異常事件只回報證據照片的檔案路徑，不顯示照片
@@ -69,6 +69,7 @@ class Trace:
     person: str = ""
     hits: list = field(default_factory=list)
     data_text: str = ""
+    tools: list = field(default_factory=list)   # 本題實際執行的工具名稱（依序）
     outcome: str = ""   # answered、clarify、no_basis、help、error
     note: str = ""      # 內部提示，例如 LLM 的說明因為數字對不上而沒有採用
 
@@ -82,6 +83,7 @@ class Assistant:
         self._last_person = ""
         self._anomaly_rows: Optional[list] = None
         self.roster_provider = None  # 可選：回傳目前員工姓名清單，每題開始前更新人名比對
+        self.show_evidence_paths = True  # 異常事件的回答是否附上證據照片的存放路徑；遠端入口關閉
         self.last = Trace()
 
     # --- 對外 ---
@@ -140,6 +142,7 @@ class Assistant:
                 yield outcome
                 return
             data_text, notes = outcome
+            data_text, notes = self._run_extra_steps(plan, question, today, data_text, notes)
             self.last.data_text = data_text
 
         hits = []
@@ -206,7 +209,7 @@ class Assistant:
         if shown:
             yield lead + "📎 出處\n" + "\n".join(f"[{usable.index(h) + 1}] {h.label}" for h in shown)
         paths = [row["evidence_path"] for row in (self._anomaly_rows or []) if row.get("evidence_path")]
-        if plan.data == "anomalies" and paths:
+        if plan.data == "anomalies" and paths and self.show_evidence_paths:
             yield ("\n\n" if shown else lead) + "🗂️ 證據照片存放位置（不在此顯示照片）：\n" \
                 + "\n".join(paths[:MAX_LISTED_ROWS])
         self.last.outcome = "answered"
@@ -359,6 +362,25 @@ class Assistant:
         shown = plan.person or "你提到的人"
         return None, f"員工名單裡找不到「{shown}」。請確認姓名，或問「公司有哪些員工」。"
 
+    def _run_extra_steps(self, plan, question, today, data_text, notes):
+        """主查詢之後依序執行追加的工具（含主查詢最多 MAX_STEPS 個），結果接在後面；追加查詢要釐清或出錯只加說明。"""
+        rows = self._anomaly_rows
+        for step in plan.steps[:router.MAX_STEPS - 1]:
+            sub_plan = router.Plan(docs=False, data=step.data, person=step.person, status=step.status,
+                                   event_type=step.event_type)
+            outcome = self._run_data(sub_plan, question, today)
+            if isinstance(outcome, str):
+                notes = notes + [f"另一項查詢（{step.data}）沒有執行：{outcome}"]
+                if self.last.outcome == "error":
+                    break
+                continue
+            extra_text, extra_notes = outcome
+            data_text = f"{data_text}\n\n{extra_text}" if extra_text else data_text
+            notes = notes + extra_notes
+            rows = rows or self._anomaly_rows
+        self._anomaly_rows = rows
+        return data_text, notes
+
     def _mentions_person(self, plan, question):
         """問題有提到員工（LLM 抓到人名，或名單比對得到）；選用人名的工具只在這時才縮小範圍。"""
         return bool(plan.person) or self.resolver.find_in_message(question).status != "unknown"
@@ -391,6 +413,8 @@ class Assistant:
         except Exception as e:
             self.last.outcome = "error"
             return f"查詢資料庫時出了問題（{type(e).__name__}），請稍後再試。"
+        self.last.tools.append(plan.data)
+        print(f"[tools] {plan.data} 人={person or '-'} 區間={rng.start + '~' + rng.end if rng else '-'}")
         if plan.data == "anomalies":
             self._anomaly_rows = result.rows
         return result.text, notes + result.notes
