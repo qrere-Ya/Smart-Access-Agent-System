@@ -3,6 +3,7 @@ demo_data.py：產生與移除示範用的假資料（假員工、假出勤、�
 
 主要功能：
   - add：新增 5 位假員工與近兩週的出勤、請假、異常事件（請假那幾天沒有打卡）；已經有假員工時不重複新增
+  - extend：把假員工的出勤補到今天起的前方幾天（展示當天的日報才有內容）；請假日、週末、已有打卡的不補
   - remove：只刪除假資料（員工編號 DEMO- 開頭的員工與他們的出勤、請假，以及標註示範的異常事件），真實資料不動
   - 假員工的人臉特徵是長度極大的向量，距離任何真實人臉都遠大於門檻，不會被門禁誤認成其他人；
     維度跟資料庫裡現有的特徵一致（空資料庫用 512），避免門禁比對時維度不合出錯
@@ -10,7 +11,7 @@ demo_data.py：產生與移除示範用的假資料（假員工、假出勤、�
 
 串接模組：
   - shared.database_mgr：沿用它的資料表與 DB_PATH
-執行：python -m rag.demo_data add／remove（只在你明確要時才執行，會寫入 runtime/database.db）
+執行：python -m rag.demo_data add／extend／remove（只在你明確要時才執行，會寫入 runtime/database.db）
 """
 import datetime
 import random
@@ -47,6 +48,18 @@ def exists() -> bool:
         return conn.execute("SELECT 1 FROM Users WHERE employee_id LIKE ?", (EMP_PREFIX + "%",)).fetchone() is not None
 
 
+def _day_punches(rng) -> list:
+    """一位員工一天的打卡 [(時間, 狀態)]；這天沒來回傳空清單。"""
+    roll = rng.random()
+    if roll < 0.08:
+        return []
+    late = roll < 0.30
+    in_time = f"08:{rng.randint(10, 40):02d}:00" if late else f"07:{rng.randint(45, 59):02d}:00"
+    early = rng.random() < 0.12
+    out_time = f"17:{rng.randint(0, 20):02d}:00" if early else f"18:{rng.randint(0, 30):02d}:00"
+    return [(in_time, "遲到" if late else "上班"), (out_time, "早退" if early else "下班")]
+
+
 def add(today: datetime.date = None) -> dict:
     """新增假資料，回傳各類筆數；已存在假員工時不動作（回傳全 0）。"""
     today = today or datetime.date.today()
@@ -74,15 +87,7 @@ def add(today: datetime.date = None) -> dict:
             for name, user_id in ids.items():
                 if (name, day) in leave_days:
                     continue                                  # 請假那天沒有打卡，資料才前後一致
-                roll = rng.random()
-                if roll < 0.08:
-                    continue                                  # 這天沒來
-                late = roll < 0.30
-                in_time = f"08:{rng.randint(10, 40):02d}:00" if late else f"07:{rng.randint(45, 59):02d}:00"
-                early = rng.random() < 0.12
-                out_time = f"17:{rng.randint(0, 20):02d}:00" if early else f"18:{rng.randint(0, 30):02d}:00"
-                rows = [(in_time, "遲到" if late else "上班"), (out_time, "早退" if early else "下班")]
-                for clock, status in rows:
+                for clock, status in _day_punches(rng):
                     conn.execute("INSERT INTO Attendance (name, timestamp, status, user_id) VALUES (?, ?, ?, ?)",
                                  (name, f"{day.isoformat()} {clock}", status, user_id))
                     counts["attendance"] += 1
@@ -97,6 +102,38 @@ def add(today: datetime.date = None) -> dict:
                          "VALUES (?, 'tailgate', ?, NULL)",
                          (when.strftime("%Y-%m-%d %H:%M:%S"), "偵測到尾隨" + DEMO_MARK))
             counts["anomalies"] += 1
+        conn.commit()
+    return counts
+
+
+def extend(today: datetime.date = None, days_ahead: int = 2) -> dict:
+    """把假員工的出勤補到 today 起 days_ahead 天內（含今天）；請假日、週末、已經有打卡的日子不補，可重複執行。
+    每個人每天的內容由日期與假員工編號（DEMO-001…）決定，同一天重跑結果一致。"""
+    today = today or datetime.date.today()
+    counts = {"attendance": 0, "days": 0}
+    with _connect() as conn:
+        people = conn.execute("SELECT id, name, employee_id FROM Users WHERE employee_id LIKE ? ORDER BY id",
+                              (EMP_PREFIX + "%",)).fetchall()
+        for offset in range(days_ahead + 1):
+            day = today + datetime.timedelta(days=offset)
+            if day.weekday() >= 5:
+                continue
+            filled = False
+            for user_id, name, emp_id in people:
+                start, end = f"{day.isoformat()} 00:00:00", f"{(day + datetime.timedelta(days=1)).isoformat()} 00:00:00"
+                has_punch = conn.execute("SELECT 1 FROM Attendance WHERE user_id=? AND timestamp>=? AND timestamp<?",
+                                         (user_id, start, end)).fetchone()
+                on_leave = conn.execute("SELECT 1 FROM Leaves WHERE user_id=? AND start_date<=? AND end_date>=?",
+                                        (user_id, day.isoformat(), day.isoformat())).fetchone()
+                if has_punch or on_leave:
+                    continue
+                seed = day.toordinal() * 1000 + int(emp_id[len(EMP_PREFIX):])
+                for clock, status in _day_punches(random.Random(seed)):  # noqa: S311  # nosec B311
+                    conn.execute("INSERT INTO Attendance (name, timestamp, status, user_id) VALUES (?, ?, ?, ?)",
+                                 (name, f"{day.isoformat()} {clock}", status, user_id))
+                    counts["attendance"] += 1
+                    filled = True
+            counts["days"] += 1 if filled else 0
         conn.commit()
     return counts
 
@@ -118,11 +155,11 @@ def remove() -> dict:
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
-    if args not in (["add"], ["remove"]):
-        raise SystemExit("用法：python -m rag.demo_data add　或　python -m rag.demo_data remove")
+    if args not in (["add"], ["extend"], ["remove"]):
+        raise SystemExit("用法：python -m rag.demo_data add／extend／remove")
     database_mgr.init_db()
-    result = add() if args == ["add"] else remove()
-    print(("新增" if args == ["add"] else "刪除") + f"完成：{result}")
+    result = {"add": add, "extend": extend, "remove": remove}[args[0]]()
+    print({"add": "新增", "extend": "補出勤", "remove": "刪除"}[args[0]] + f"完成：{result}")
 
 
 if __name__ == "__main__":

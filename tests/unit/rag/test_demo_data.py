@@ -85,3 +85,32 @@ def test_nobody_has_attendance_on_a_day_they_are_on_leave(db):
             (name, start, end)).fetchone()[0]
         assert clash == 0, (name, start, end)
     con.close()
+
+
+def test_extend_fills_the_days_ahead_once_and_skips_leave_days_and_weekends(db):
+    demo_data.add(TODAY)                                   # 2026-11-04（週三）；乙 11-05 請病假
+    first = demo_data.extend(TODAY, days_ahead=3)          # 11-04 已有打卡；11-05 乙請假；11-06 週五；11-07 週六
+    assert first["attendance"] > 0
+    assert demo_data.extend(TODAY, days_ahead=3) == {"attendance": 0, "days": 0}
+    con = sqlite3.connect(db)
+    rows = con.execute("SELECT name, substr(timestamp, 1, 10) FROM Attendance "
+                       "WHERE timestamp >= '2026-11-05'").fetchall()
+    con.close()
+    days = {d for _, d in rows}
+    assert "2026-11-06" in days and "2026-11-07" not in days
+    assert ("測試乙", "2026-11-05") not in set(rows)
+
+
+def test_extend_is_deterministic_per_day_and_removed_with_the_demo_people(db):
+    demo_data.add(TODAY)
+    demo_data.extend(TODAY, days_ahead=2)
+    con = sqlite3.connect(db)
+    first = con.execute("SELECT name, timestamp, status FROM Attendance ORDER BY id").fetchall()
+    con.close()
+    demo_data.remove()
+    assert count(db, "Attendance") == 0
+    demo_data.add(TODAY)
+    demo_data.extend(TODAY, days_ahead=2)
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT name, timestamp, status FROM Attendance ORDER BY id").fetchall() == first
+    con.close()

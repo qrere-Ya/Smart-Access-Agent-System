@@ -34,7 +34,7 @@ SEARCH_BACK_DAYS = 14         # 往前找上班日最多找幾天
 _CN_COUNT = re.compile(r"[一二兩三四五六七八九十]+\s*(?:位|人|筆|次|天|件)")
 
 
-def _who(row):
+def who(row):
     """名單裡的一個人：遲到與早退附時間，請假只附假別。"""
     status = row["status"]
     if status == report_mod.STATUS_LATE and row["clock_in"]:
@@ -56,7 +56,7 @@ def build_facts(report) -> str:
     parts = [f"{s} {counts[s]}" for s in _STATUS_ORDER if counts.get(s)]
     lines.append(f"在職 {total} 人：" + ("、".join(parts) if parts else "沒有資料"))
     for status, label in _LISTED:
-        people = [_who(r) for r in report["rows"] if r["status"] == status]
+        people = [who(r) for r in report["rows"] if r["status"] == status]
         if people:
             shown = "、".join(people[:MAX_NAMES]) + (f" 等 {len(people)} 人" if len(people) > MAX_NAMES else "")
             lines.append(f"{label}：{shown}")

@@ -2,8 +2,12 @@
 digest_store.py：每日出勤日報的存取與顯示文字（後台寫入、企業知識庫視窗讀取，不碰畫面元件）。
 
 主要功能：
-  - save／load：最新一份日報存成 runtime/daily_digest.json（先寫暫存檔再 os.replace，原子寫入），壞掉或欄位不對當作沒有
-  - load_time／save_time：每天產生日報的時間（HH:MM，預設 18:00），存在 runtime/digest_settings.json，格式不對退回預設
+  - save／load：最新一份日報存成 runtime/daily_digest.json（先寫暫存檔再 os.replace，原子寫入），
+    壞掉或欄位不對當作沒有；
+    晨報同樣用 save_brief／load_brief 存成 runtime/morning_brief.json
+  - load_time／save_time（日報，預設 18:00）、load_morning_time／save_morning_time（晨報，預設 08:30）：
+    HH:MM，存在 runtime/digest_settings.json 的不同欄位，改一個不會洗掉另一個，格式不對退回預設；
+    load_news_feeds 讀新聞來源
   - unread_anomaly_count：還沒標為已讀的異常事件數（讀後台的已讀進度檔，沒有進度檔就不算）
   - welcome_text：企業知識庫視窗開啟時顯示的文字（最新日報與待處理異常）；沒有日報回傳空字串
 
@@ -20,9 +24,11 @@ from shared import database_mgr
 from shared import paths
 
 DEFAULT_TIME = "18:00"
+DEFAULT_MORNING_TIME = "08:30"
 MAX_AGE_DAYS = 7          # 超過這麼多天的日報不在開窗時顯示，避免把舊資料當成最新
 _TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _FIELDS = ("date", "generated_at", "facts")
+_BRIEF_FIELDS = ("date", "generated_at", "yesterday")
 
 
 def _atomic_write(path, data):
@@ -42,37 +48,82 @@ def save(digest, path=None):
         return False
 
 
-def load(path=None):
-    """讀取最新日報；沒有、壞掉或缺欄位回傳 None。"""
+def _load_checked(path, fields):
     try:
-        with open(path or paths.DIGEST_PATH, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or not all(isinstance(data.get(k), str) and data[k] for k in _FIELDS):
+    if not isinstance(data, dict) or not all(isinstance(data.get(k), str) and data[k] for k in fields):
         return None
     return data
+
+
+def load(path=None):
+    """讀取最新日報；沒有、壞掉或缺欄位回傳 None。"""
+    return _load_checked(path or paths.DIGEST_PATH, _FIELDS)
+
+
+def save_brief(brief, path=None):
+    """寫入最新晨報；回傳是否成功。"""
+    return save(brief, path or paths.BRIEF_PATH)
+
+
+def load_brief(path=None):
+    """讀取最新晨報；沒有、壞掉或缺欄位回傳 None。"""
+    return _load_checked(path or paths.BRIEF_PATH, _BRIEF_FIELDS)
 
 
 def valid_time(text) -> bool:
     return isinstance(text, str) and _TIME_PATTERN.match(text) is not None
 
 
-def load_time(path=None):
-    """每天產生日報的時間（HH:MM）；沒設定或格式不對回傳預設。"""
+def _settings(path):
     try:
         with open(path or paths.DIGEST_SETTINGS_PATH, encoding="utf-8") as f:
-            value = json.load(f).get("time")
-    except (OSError, ValueError, AttributeError):
-        return DEFAULT_TIME
-    return value if valid_time(value) else DEFAULT_TIME
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_time(key, default, path):
+    value = _settings(path).get(key)
+    return value if valid_time(value) else default
+
+
+def _save_time(key, text, path):
+    if not valid_time(text):
+        raise ValueError("時間格式需為 HH:MM（24 小時制）")
+    data = _settings(path)
+    data[key] = text
+    _atomic_write(path or paths.DIGEST_SETTINGS_PATH, data)
+
+
+def load_time(path=None):
+    """每天產生日報的時間（HH:MM）；沒設定或格式不對回傳預設。"""
+    return _load_time("time", DEFAULT_TIME, path)
 
 
 def save_time(text, path=None):
-    """儲存產生時間；格式不對丟 ValueError。"""
-    if not valid_time(text):
-        raise ValueError("時間格式需為 HH:MM（24 小時制）")
-    _atomic_write(path or paths.DIGEST_SETTINGS_PATH, {"time": text})
+    """儲存日報產生時間；格式不對丟 ValueError。"""
+    _save_time("time", text, path)
+
+
+def load_morning_time(path=None):
+    """每天產生晨報的時間（HH:MM）；沒設定或格式不對回傳預設。"""
+    return _load_time("morning_time", DEFAULT_MORNING_TIME, path)
+
+
+def save_morning_time(text, path=None):
+    """儲存晨報產生時間；格式不對丟 ValueError。"""
+    _save_time("morning_time", text, path)
+
+
+def load_news_feeds(path=None):
+    """新聞來源網址清單（只接受字串）；沒設定回傳空清單，由 news_feed 用預設來源。"""
+    feeds = _settings(path).get("news_feeds")
+    return [f for f in feeds if isinstance(f, str)] if isinstance(feeds, list) else []
 
 
 def unread_anomaly_count(seen_path=None, fetch=None):
