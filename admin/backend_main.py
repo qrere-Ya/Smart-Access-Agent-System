@@ -39,6 +39,7 @@ from admin import (
     digest_window,
     login_window,
     notification_bar,
+    schedule_window,
     service_manager,
 )
 from shared import auth, paths, ui_theme
@@ -119,6 +120,8 @@ class BackendManagerApp:
              self.open_assistant_window),
             ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
              lambda: calendar_panel.open_calendar_window(self.root)),
+            ("📰", "日報與晨報", "設定每天自動產生的時間、立即產生、查看每日出勤與生成式 AI 早報", "info",
+             self.open_schedule),
         ]
         for idx, (icon, title, desc, accent, cmd) in enumerate(modules):
             row, col = divmod(idx, 2)
@@ -234,10 +237,10 @@ class BackendManagerApp:
                      text_color=ui_theme.pair("text_muted")).pack(side="left")
         self.notification_bar = notification_bar.NotificationBar(footer, on_open=self.open_anomalies)  # 紅點與彈窗
         self.notification_bar.frame.pack(side="right")
-        self.digest_runner = digest_window.digest_runner(self.root, on_new=self._on_new_digest)
-        self.morning_runner = digest_window.morning_runner(self.root, on_new=self._on_new_digest)
-        ui_theme.link_button(footer, "📰 日報／晨報", self.open_digest, width=90, height=24).pack(side="right",
-                                                                                              padx=(0, 10))
+        self.digest_runner = digest_window.digest_runner(self.root, on_new=lambda r: self.open_report("digest"))
+        self.morning_runner = digest_window.morning_runner(self.root, on_new=lambda r: self.open_report("morning"))
+        ui_theme.link_button(footer, "📰 日報／晨報", lambda: self.open_report("morning"), width=90,
+                             height=24).pack(side="right", padx=(0, 10))
         self.root.after(5000, self._tick_digest)
         self._tick_system_status()
 
@@ -439,17 +442,22 @@ class BackendManagerApp:
         self.digest_runner.tick()
         self.root.after(60000, self._tick_digest)
 
-    def _on_new_digest(self, digest):
-        """排程產生了新的晨報或日報：彈出視窗。"""
-        self.open_digest()
+    def open_report(self, kind):
+        """開啟日報／晨報查看視窗並切到 kind（"morning" 或 "digest"）；已開著就切分頁。排程產生新報告時也走這裡彈出。"""
+        win = getattr(self, "report_win", None)
+        if win is not None and win.winfo_exists():
+            win.show(kind)
+            return
+        self.report_win = digest_window.open_report_window(self.root, self.digest_runner, self.morning_runner, kind)
 
-    def open_digest(self):
-        """開啟日報與晨報視窗（已開著就拉到最前面）。"""
-        win = getattr(self, "digest_win", None)
+    def open_schedule(self):
+        """開啟「日報與晨報」模組視窗（已開著就拉到最前面）。"""
+        win = getattr(self, "schedule_win", None)
         if win is not None and win.winfo_exists():
             win.lift()
             return
-        self.digest_win = digest_window.open_digest_window(self.root, self.digest_runner, self.morning_runner)
+        self.schedule_win = schedule_window.open_schedule_window(self.root, self.digest_runner, self.morning_runner,
+                                                                 self.open_report)
 
     def open_anomalies(self):
         """開啟異常事件列表（已開著就拉到最前面）；在這裡標為已讀會同步清掉通知列的紅點。"""

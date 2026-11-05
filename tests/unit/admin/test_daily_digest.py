@@ -207,3 +207,43 @@ def test_unread_count_needs_a_progress_file(tmp_path):
     assert digest_store.unread_anomaly_count(str(tmp_path / "none.json"), fetch) == 0
     (tmp_path / "seen.json").write_text(json.dumps({"last_seen_id": 4}), encoding="utf-8")
     assert digest_store.unread_anomaly_count(str(tmp_path / "seen.json"), fetch) == 2
+
+
+def test_atomic_write_retries_a_busy_target_and_leaves_no_temp_file(tmp_path, monkeypatch):
+    import os
+
+    path = str(tmp_path / "d.json")
+    real_replace, failures = os.replace, {"left": 2}
+
+    def flaky(src, dst):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise PermissionError("WinError 32")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    monkeypatch.setattr(digest_store.time, "sleep", lambda s: None)
+    digest = {"date": DAY, "generated_at": "x", "facts": "f"}
+    assert digest_store.save(digest, path) is True and digest_store.load(path) == digest
+    failures["left"] = 99
+    assert digest_store.save(digest, path) is False                 # 一直失敗就放棄，回報失敗而不是丟例外
+    assert [f.name for f in tmp_path.iterdir()] == ["d.json"]       # 暫存檔都清掉了
+
+
+def test_two_writers_use_different_temp_files(tmp_path):
+    import threading
+
+    path = str(tmp_path / "d.json")
+    errors = []
+
+    def write(n):
+        try:
+            for i in range(30):
+                digest_store._atomic_write(path, {"n": n, "i": i})
+        except OSError as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=write, args=(n,)) for n in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not errors and [f.name for f in tmp_path.iterdir()] == ["d.json"]

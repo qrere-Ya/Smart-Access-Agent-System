@@ -6,8 +6,7 @@ digest_store.py：每日出勤日報的存取與顯示文字（後台寫入、�
     壞掉或欄位不對當作沒有；
     晨報同樣用 save_brief／load_brief 存成 runtime/morning_brief.json
   - load_time／save_time（日報，預設 18:00）、load_morning_time／save_morning_time（晨報，預設 08:30）：
-    HH:MM，存在 runtime/digest_settings.json 的不同欄位，改一個不會洗掉另一個，格式不對退回預設；
-    load_news_feeds 讀新聞來源
+    HH:MM，存在 runtime/digest_settings.json 的不同欄位，改一個不會洗掉另一個，格式不對退回預設
   - unread_anomaly_count：還沒標為已讀的異常事件數（讀後台的已讀進度檔，沒有進度檔就不算）
   - welcome_text：企業知識庫視窗開啟時顯示的文字（最新日報與待處理異常）；沒有日報回傳空字串
 
@@ -19,6 +18,8 @@ import datetime
 import json
 import os
 import re
+import threading
+import time
 
 from shared import database_mgr
 from shared import paths
@@ -31,11 +32,26 @@ _FIELDS = ("date", "generated_at", "facts")
 _BRIEF_FIELDS = ("date", "generated_at", "yesterday")
 
 
+REPLACE_TRIES = 6   # Windows 上目標檔剛好被別的行程或執行緒讀取時 os.replace 會暫時失敗，稍等再試
+
+
 def _atomic_write(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, path)
+    """先寫到每個寫入者各自的暫存檔再取代目標檔；暫存檔名不共用，同時寫入不會互相蓋掉。"""
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        for attempt in range(REPLACE_TRIES):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def save(digest, path=None):
@@ -118,12 +134,6 @@ def load_morning_time(path=None):
 def save_morning_time(text, path=None):
     """儲存晨報產生時間；格式不對丟 ValueError。"""
     _save_time("morning_time", text, path)
-
-
-def load_news_feeds(path=None):
-    """新聞來源網址清單（只接受字串）；沒設定回傳空清單，由 news_feed 用預設來源。"""
-    feeds = _settings(path).get("news_feeds")
-    return [f for f in feeds if isinstance(f, str)] if isinstance(feeds, list) else []
 
 
 def unread_anomaly_count(seen_path=None, fetch=None):

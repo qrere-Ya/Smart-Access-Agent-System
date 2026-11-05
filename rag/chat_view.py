@@ -2,7 +2,8 @@
 chat_view.py：聊天視窗的對話區與輸入列元件（訊息氣泡、歡迎畫面、提示列、輸入框與送出鈕）。
 
 主要功能：
-  - Bubble：一則訊息，圓角底色加可選取複製的文字，高度跟著換行後的行數伸縮，出處等灰字行另標色
+  - Bubble：一則訊息，圓角底色加可選取複製的文字，高度跟著換行後的行數伸縮，出處等灰字行另標色；
+    滾輪在訊息上也會捲動外層的對話區（文字框本身不吃掉滾輪）；linkify() 可把通過檢查的 https 網址變成可點擊的連結
   - build_welcome()：歡迎畫面與範例問題按鈕；bubble_width()：依對話區寬度算氣泡寬度
   - make_note()：對話區中央的灰色提示列；build_input_row()：輸入框加送出鈕
   - 只放畫面，不放問答邏輯；顏色字型取自 shared.ui_theme
@@ -10,7 +11,9 @@ chat_view.py：聊天視窗的對話區與輸入列元件（訊息氣泡、歡�
 串接模組：
   - shared.ui_theme：色彩 token 與字型；rag.chat_window：組裝這些元件並管理對話狀態
 """
+import re
 import tkinter.font as tkfont
+import webbrowser
 
 import customtkinter as ctk
 
@@ -25,6 +28,8 @@ META_BLOCK_PREFIXES = ("📎", "🗂️")
 USER_COLOR = ui_theme.pair("primary")
 BOT_COLOR = ui_theme.pair("secondary")
 META_COLOR = ui_theme.pair("text_muted")
+_URL = re.compile(r"https://[^\s<>\"'（）「」【】，。、]+")
+WHEEL_UNITS = 6   # 滾輪一格（delta 120）捲動的單位數的倒數：和 CTkScrollableFrame 自己的算法一致
 
 
 class Bubble(ctk.CTkFrame):
@@ -39,6 +44,9 @@ class Bubble(ctk.CTkFrame):
         self.box.pack(padx=6, pady=4)
         self.box._textbox.tag_config("meta", foreground=ui_theme.color("text_muted"))
         self._last_width = 0
+        self._link_safe = lambda url: False
+        self._link_opener = None            # None 表示點的當下才用 webbrowser.open
+        self.box._textbox.bind("<MouseWheel>", self._on_wheel)
         # 視窗真正排版出來、或寬度改變後，換行的行數會變，要重算高度（寬度沒變時略過，避免高度改變又觸發自己）
         self.box._textbox.bind("<Configure>", self._on_box_configure, add="+")
         if text:
@@ -49,6 +57,57 @@ class Bubble(ctk.CTkFrame):
         if event.width != self._last_width:
             self._last_width = event.width
             self.after_idle(self.fit)
+
+    def _scroll_parent(self):
+        """往上找最近的捲動容器（CTkScrollableFrame）的畫布；沒有就回傳 None。"""
+        widget = self.master
+        while widget is not None:
+            canvas = getattr(widget, "_parent_canvas", None)
+            if canvas is not None:
+                return canvas
+            widget = getattr(widget, "master", None)
+        return None
+
+    def _on_wheel(self, event):
+        """滾輪轉給外層捲動容器，文字框自己不捲（它的高度本來就跟著內容）。"""
+        canvas = self._scroll_parent()
+        if canvas is not None and canvas.yview() != (0.0, 1.0):
+            canvas.yview("scroll", -int(event.delta / WHEEL_UNITS), "units")
+        return "break"
+
+    def linkify(self, is_safe, opener=None):
+        """把文字裡的 https 網址標成可點擊的連結（藍色底線、滑過變手形、點了用 opener 開）；
+        只有 is_safe(網址) 為 True 的才會變成連結，點的當下會再檢查一次。呼叫要在 set_text 之後。"""
+        self._link_safe, self._link_opener = is_safe, opener
+        text = self.box._textbox
+        text.tag_remove("link", "1.0", "end")
+        text.tag_config("link", foreground=ui_theme.color("info"), underline=True)
+        seen = set()
+        for match in _URL.finditer(self.get_text()):
+            url = match.group(0).rstrip(".,;:!?)]}")
+            if url in seen or not is_safe(url):
+                continue
+            seen.add(url)
+            start = "1.0"
+            while True:
+                index = text.search(url, start, stopindex="end")
+                if not index:
+                    break
+                start = f"{index}+{len(url)}c"
+                text.tag_add("link", index, start)
+        text.tag_bind("link", "<Button-1>", self._on_link_click)
+        text.tag_bind("link", "<Enter>", lambda e: text.configure(cursor="hand2"))
+        text.tag_bind("link", "<Leave>", lambda e: text.configure(cursor=""))
+
+    def _on_link_click(self, event):
+        """點到連結：取出該段文字當網址，再檢查一次才開。"""
+        text = self.box._textbox
+        spot = text.index(f"@{event.x},{event.y}")
+        span = text.tag_prevrange("link", f"{spot}+1c")
+        if span:
+            url = text.get(*span)
+            if self._link_safe(url):
+                (self._link_opener or webbrowser.open)(url)
 
     def get_text(self):
         """取出目前的全文。"""
