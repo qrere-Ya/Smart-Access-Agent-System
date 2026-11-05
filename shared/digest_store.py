@@ -1,0 +1,110 @@
+"""
+digest_store.py：每日出勤日報的存取與顯示文字（後台寫入、企業知識庫視窗讀取，不碰畫面元件）。
+
+主要功能：
+  - save／load：最新一份日報存成 runtime/daily_digest.json（先寫暫存檔再 os.replace，原子寫入），壞掉或欄位不對當作沒有
+  - load_time／save_time：每天產生日報的時間（HH:MM，預設 18:00），存在 runtime/digest_settings.json，格式不對退回預設
+  - unread_anomaly_count：還沒標為已讀的異常事件數（讀後台的已讀進度檔，沒有進度檔就不算）
+  - welcome_text：企業知識庫視窗開啟時顯示的文字（最新日報與待處理異常）；沒有日報回傳空字串
+
+串接模組：
+  - admin.daily_digest：產生日報並寫入；admin.digest_window：顯示與設定
+  - rag.chat_window／chat_view：開窗時顯示 welcome_text；database_mgr：讀異常事件
+"""
+import datetime
+import json
+import os
+import re
+
+from shared import database_mgr
+from shared import paths
+
+DEFAULT_TIME = "18:00"
+MAX_AGE_DAYS = 7          # 超過這麼多天的日報不在開窗時顯示，避免把舊資料當成最新
+_TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_FIELDS = ("date", "generated_at", "facts")
+
+
+def _atomic_write(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def save(digest, path=None):
+    """寫入最新日報；回傳是否成功（失敗只印警告，不讓呼叫端中斷）。"""
+    try:
+        _atomic_write(path or paths.DIGEST_PATH, digest)
+        return True
+    except OSError as e:
+        print(f"[日報][WARN] 寫入失敗: {e}")
+        return False
+
+
+def load(path=None):
+    """讀取最新日報；沒有、壞掉或缺欄位回傳 None。"""
+    try:
+        with open(path or paths.DIGEST_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not all(isinstance(data.get(k), str) and data[k] for k in _FIELDS):
+        return None
+    return data
+
+
+def valid_time(text) -> bool:
+    return isinstance(text, str) and _TIME_PATTERN.match(text) is not None
+
+
+def load_time(path=None):
+    """每天產生日報的時間（HH:MM）；沒設定或格式不對回傳預設。"""
+    try:
+        with open(path or paths.DIGEST_SETTINGS_PATH, encoding="utf-8") as f:
+            value = json.load(f).get("time")
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_TIME
+    return value if valid_time(value) else DEFAULT_TIME
+
+
+def save_time(text, path=None):
+    """儲存產生時間；格式不對丟 ValueError。"""
+    if not valid_time(text):
+        raise ValueError("時間格式需為 HH:MM（24 小時制）")
+    _atomic_write(path or paths.DIGEST_SETTINGS_PATH, {"time": text})
+
+
+def unread_anomaly_count(seen_path=None, fetch=None):
+    """未讀異常事件數；沒有已讀進度檔（後台還沒用過）或查詢失敗回傳 0。"""
+    try:
+        with open(seen_path or paths.ANOMALY_SEEN_PATH, encoding="utf-8") as f:
+            last_seen = json.load(f).get("last_seen_id")
+        if not isinstance(last_seen, int):
+            return 0
+        events = (fetch or database_mgr.list_anomaly_events)(limit=200)
+        return sum(1 for e in events if e["id"] > last_seen)
+    except Exception:
+        return 0
+
+
+def welcome_text(today=None, path=None, unread=None):
+    """開窗時顯示的文字：最新日報（摘要與明細）加待處理異常；沒有日報或已超過 MAX_AGE_DAYS 天回傳空字串。"""
+    digest = load(path)
+    if digest is None:
+        return ""
+    today = today or datetime.date.today()
+    try:
+        age = (today - datetime.date.fromisoformat(digest["date"])).days
+    except ValueError:
+        return ""
+    if age > MAX_AGE_DAYS:
+        return ""
+    lines = [f"📰 最新日報（資料日期 {digest['date']}，產生於 {digest['generated_at']}）"]
+    if digest.get("summary"):
+        lines.append(f"AI 摘要（數字與人名已核對）：{digest['summary']}")
+    lines.append(digest["facts"])
+    pending = unread_anomaly_count() if unread is None else unread
+    if pending:
+        lines.append(f"⚠️ 目前有 {pending} 筆異常事件尚未標為已讀，請到後台的異常事件查看。")
+    return "\n".join(lines)

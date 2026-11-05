@@ -109,13 +109,19 @@ def bubble_width(chat):
     return max(300, int(canvas_width * 0.72) - 40) if canvas_width > 1 else 560
 
 
-def build_welcome(chat, on_pick):
-    """建立歡迎畫面；回傳 (歡迎框, 範例問題按鈕清單)，按下範例問題會呼叫 on_pick(問題)。"""
+def build_welcome(chat, on_pick, digest_text=""):
+    """建立歡迎畫面；回傳 (歡迎框, 範例問題按鈕清單)，按下範例問題會呼叫 on_pick(問題)。
+    digest_text 不是空字串時，在範例問題上方顯示最新日報與待處理異常。"""
     welcome = ctk.CTkFrame(chat, fg_color="transparent")
     welcome.pack(pady=(48, 8))
     ctk.CTkLabel(welcome, text="有什麼想查的？", font=ui_theme.font(ui_theme.FONT_SIZE_HERO, bold=True)).pack()
     ctk.CTkLabel(welcome, text="問公司文件與法規，或查考勤與異常紀錄", text_color=META_COLOR,
                  font=ui_theme.font(14)).pack(pady=(4, 18))
+    if digest_text:
+        card = ctk.CTkFrame(welcome, fg_color=BOT_COLOR, corner_radius=12)
+        card.pack(padx=8, pady=(0, 18), fill="x")
+        ctk.CTkLabel(card, text=digest_text, justify="left", anchor="w", wraplength=560, font=ui_theme.font(13),
+                     text_color=ui_theme.pair("on_secondary")).pack(padx=16, pady=12, anchor="w")
     grid = ctk.CTkFrame(welcome, fg_color="transparent")
     grid.pack()
     chips = []

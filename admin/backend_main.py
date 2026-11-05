@@ -36,6 +36,7 @@ from admin import (
     calendar_panel,
     console_panel,
     dashboard_stats,
+    digest_window,
     login_window,
     notification_bar,
     service_manager,
@@ -204,6 +205,8 @@ class BackendManagerApp:
         self._alive = False
         if getattr(self, "notification_bar", None) is not None:
             self.notification_bar.stop()
+        if getattr(self, "digest_runner", None) is not None:
+            self.digest_runner.stop()
         for event in ("<Key>", "<Button>", "<Motion>"):
             self.root.unbind_all(event)
         for child in self.root.winfo_children():
@@ -230,6 +233,9 @@ class BackendManagerApp:
                      text_color=ui_theme.pair("text_muted")).pack(side="left")
         self.notification_bar = notification_bar.NotificationBar(footer, on_open=self.open_anomalies)  # 紅點與彈窗
         self.notification_bar.frame.pack(side="right")
+        self.digest_runner = digest_window.DigestRunner(self.root, on_new=self._on_new_digest)
+        ui_theme.link_button(footer, "📰 日報", self.open_digest, width=60, height=24).pack(side="right", padx=(0, 10))
+        self.root.after(5000, self._tick_digest)
         self._tick_system_status()
 
     def _tick_system_status(self):
@@ -421,6 +427,25 @@ class BackendManagerApp:
         """開啟員工帳號管理視窗，可停用、啟用、刪除所選員工與設定管理者"""
         operator = self.session.admin_name if self.session is not None else None
         self.admin_win = account_panel.open_account_window(self.root, operator)
+
+    def _tick_digest(self):
+        """每分鐘看一次該不該產生每日日報（到時間、當天要上班、還沒有那天的日報才會產生）。"""
+        if not self._alive or not self.root.winfo_exists():
+            return
+        self.digest_runner.tick()
+        self.root.after(60000, self._tick_digest)
+
+    def _on_new_digest(self, digest):
+        """排程產生了新日報：彈出日報視窗。"""
+        self.open_digest()
+
+    def open_digest(self):
+        """開啟每日日報視窗（已開著就拉到最前面）。"""
+        win = getattr(self, "digest_win", None)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            return
+        self.digest_win = digest_window.open_digest_window(self.root, self.digest_runner)
 
     def open_anomalies(self):
         """開啟異常事件列表（已開著就拉到最前面）；在這裡標為已讀會同步清掉通知列的紅點。"""

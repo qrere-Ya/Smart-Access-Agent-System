@@ -4,6 +4,7 @@ chat_window.py：企業知識庫與出勤查詢的聊天視窗入口與組裝（
 主要功能：
   - 氣泡式對話：你的問題靠右、助理的回答靠左，回答逐字串流顯示；文字可以選取複製
   - 開啟時在背景載入模型並顯示進度（本機 Ollama 沒開會自動啟動）；載入完成前可以先看畫面
+  - 歡迎畫面顯示最新日報與待處理異常（shared.digest_store 讀後台產生的日報，沒有日報就不顯示）
   - 範例問題按鈕、Enter 送出（Shift+Enter 換行）、新對話、重新整理文件、語言模型設定（本機／雲端）
   - 關閉視窗時釋放顯存上的模型；後台登出或閒置逾時時跟著關閉
   畫面只負責組裝與事件迴圈；問答、模型組裝、對話控制都在 rag 套件，這裡不放邏輯。
@@ -27,7 +28,7 @@ from rag.chat_settings_dialog import SettingsDialog
 from rag.chat_status_bar import StatusBar, build_footer_hint
 from rag.chat_view import (APP_TITLE, FONT_FAMILY, META_BLOCK_PREFIXES, META_COLOR, META_PREFIXES, SAMPLE_QUESTIONS,
                            Bubble, bubble_width, build_input_row, build_welcome, make_note)
-from shared import auth, ui_theme
+from shared import auth, digest_store, ui_theme
 
 __all__ = ["APP_TITLE", "FONT_FAMILY", "META_BLOCK_PREFIXES", "META_COLOR", "META_PREFIXES", "SAMPLE_QUESTIONS",
            "Bubble", "SettingsDialog", "AssistantWindow", "main"]
@@ -113,7 +114,7 @@ class AssistantWindow(ctk.CTk):
 
     def _build_welcome(self):
         """顯示歡迎畫面與範例問題。"""
-        self.welcome, self.chips = build_welcome(self.chat, self.send)
+        self.welcome, self.chips = build_welcome(self.chat, self.send, digest_store.welcome_text())
 
     def _bubble_width(self):
         """目前氣泡寬度。"""
