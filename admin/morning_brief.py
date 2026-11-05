@@ -1,9 +1,10 @@
 """
-morning_brief.py：每天早上的晨報（昨日出勤＋今天提醒＋新聞標題）的產生與排程判斷（純邏輯，不碰畫面元件）。
+morning_brief.py：每天早上的晨報（昨日出勤＋今天提醒＋生成式 AI 早報）的產生與排程判斷（純邏輯，不碰畫面元件）。
 
 主要功能：
   - build_brief：昨日（前一個上班日）的出勤明細與語言模型摘要（沿用 daily_digest 的核對）、
-    今天的提醒（今天是不是休息日、誰請假）、新聞標題（news_feed）；新聞只原文顯示，不交給語言模型
+    今天的提醒（誰請假）、生成式 AI 早報（news_feed：官方部落格與服務狀態、Hacker News，每則有類別、發生什麼事、
+    為什麼重要、可以怎麼用、來源與原文）；早報文字是來源原文加固定句子，不交給語言模型
   - generate：產生並存檔今天的晨報；新聞抓不到只在晨報裡寫原因，出勤部分照常
   - pending_morning：排程判斷——到了設定時間（預設 08:30）且今天要上班、今天還沒有晨報就產生；
     後台比設定時間晚開（例如開機時已經 10:00）也會在開啟後補產今天的晨報，前幾天沒產生的不補
@@ -44,7 +45,7 @@ def today_lines(report) -> str:
     return "今天沒有人請假。"
 
 
-def build_brief(today, llm=None, feeds=None, is_workday=None, fetch=news_feed.fetch_headlines, now=None):
+def build_brief(today, llm=None, is_workday=None, fetch=news_feed.fetch_ai_news, now=None):
     """組出今天的晨報內容（dict）；昨日出勤查詢失敗會丟例外，新聞失敗不會。"""
     is_workday = is_workday or _default_workday
     prev = previous_workday(today, is_workday)
@@ -54,14 +55,14 @@ def build_brief(today, llm=None, feeds=None, is_workday=None, fetch=news_feed.fe
         yesterday = daily_digest.build_facts(report)
         summary = daily_digest.narrate(yesterday, [r["name"] for r in report["rows"]], llm)
     today_report = report_mod.build_report(today.isoformat())
-    headlines, news_problem = fetch(feeds)
+    cards, news_problem = fetch()
     return {
         "date": today.isoformat(),
         "generated_at": (now or datetime.datetime.now()).strftime("%Y-%m-%d %H:%M"),
         "yesterday": yesterday or "找不到前一個上班日，沒有昨日出勤。",
         "summary": summary,
         "today": today_lines(today_report),
-        "news": [h["title"] for h in headlines],
+        "news": [{k: v for k, v in c.items() if k != "time"} for c in cards],   # 時間不是 JSON 型別，不存檔
         "news_problem": news_problem,
         "ai": bool(summary),
     }
@@ -69,7 +70,7 @@ def build_brief(today, llm=None, feeds=None, is_workday=None, fetch=news_feed.fe
 
 def generate(day, llm=None, now=None, save=digest_store.save_brief):
     """產生並存檔 day（YYYY-MM-DD）的晨報；回傳晨報內容。"""
-    brief = build_brief(datetime.date.fromisoformat(day), llm, digest_store.load_news_feeds(), now=now)
+    brief = build_brief(datetime.date.fromisoformat(day), llm, now=now)
     save(brief)
     return brief
 
@@ -94,9 +95,11 @@ def brief_text(brief) -> str:
         parts.append("AI 摘要（數字與人名已核對）：" + brief["summary"])
     parts.append(brief["yesterday"])
     parts += ["", "【今天提醒】", brief.get("today", "")]
-    parts += ["", "【新聞標題】（來源原文，未經 AI 改寫）"]
+    parts.append("")
     if brief.get("news"):
-        parts += [f"{i}. {title}" for i, title in enumerate(brief["news"], 1)]
+        parts.append(news_feed.format_news(brief["news"], datetime.date.fromisoformat(brief["date"])))
+        parts.append("\n（類別與說明句由固定規則產生，內容是來源原文，未經 AI 改寫）")
     else:
-        parts.append("今天沒有抓到新聞" + (f"（{brief['news_problem']}）" if brief.get("news_problem") else "") + "。")
+        problem = f"（{brief['news_problem']}）" if brief.get("news_problem") else ""
+        parts.append(f"今天沒有抓到生成式 AI 動態{problem}。")
     return "\n".join(parts)
