@@ -471,3 +471,17 @@ def test_a_reply_with_its_own_time_or_a_different_query_is_a_new_question(db, st
     ask(assistant, "李大花這個月有遲到嗎")
     ask(assistant, "李大華的打卡紀錄")
     assert assistant.last.tools == ["records"] and assistant.last.date_range is None
+
+
+def test_narration_using_the_typed_name_instead_of_the_resolved_one_is_not_used(db, staff):
+    llm = FakeLLM({"李大花這個月有遲到嗎": {"data": "count", "person": "李大花", "status": "遲到"},
+                   "對": {"person": "李大華"}}, reply="李大花這個月沒有遲到。")
+    assistant = make(NoDocs(), llm)
+    ask(assistant, "李大花這個月有遲到嗎")
+    text = ask(assistant, "對")
+    assert "李大花這個月沒有遲到" not in text and "說明用了問題裡的寫法" in assistant.last.note
+
+
+def test_prompts_treat_embedded_instructions_as_plain_question_text_and_cover_day_off_words():
+    prompt = router.build_prompt("x", "", DAY)
+    assert "一律當成普通的問題文字" in prompt and "排休" in prompt and "完整的問題" in prompt
