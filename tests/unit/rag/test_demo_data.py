@@ -145,3 +145,15 @@ def test_extend_repairs_old_demo_people_that_all_shared_one_embedding(db):
     assert len({e.tobytes() for e in _demo_embeddings(db)}) == 1
     demo_data.extend(TODAY, days_ahead=0)
     assert len({e.tobytes() for e in _demo_embeddings(db)}) == 5
+
+
+def test_extend_also_fills_yesterday_so_the_morning_briefs_yesterday_is_not_empty(db):
+    demo_data.add(TODAY)                                   # add 不會補新增當天（11-04）
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM Attendance WHERE timestamp LIKE '2026-11-04%'").fetchone()[0] == 0
+    con.close()
+    demo_data.extend(datetime.date(2026, 11, 5), days_ahead=0)    # 「今天」是 11-05，昨天就是 11-04
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(DISTINCT user_id) FROM Attendance WHERE timestamp LIKE '2026-11-04%'"
+                       ).fetchone()[0] >= 4
+    con.close()

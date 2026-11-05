@@ -3,7 +3,8 @@ demo_data.py：產生與移除示範用的假資料（假員工、假出勤、�
 
 主要功能：
   - add：新增 5 位假員工與近兩週的出勤、請假、異常事件（請假那幾天沒有打卡）；已經有假員工時不重複新增
-  - extend：把假員工的出勤補到今天起的前方幾天（展示當天的日報才有內容）；請假日、週末、已有打卡的不補
+  - extend：把假員工的出勤補到昨天起、今天起前方幾天（展示當天的日報與晨報才有內容，晨報的「昨日」也不會是空的）；
+    請假日、週末、已有打卡的不補
   - remove：只刪除假資料（員工編號 DEMO- 開頭的員工與他們的出勤、請假，以及標註示範的異常事件），真實資料不動
   - 假員工的人臉特徵是長度極大的向量，距離任何真實人臉都遠大於門檻，不會被門禁誤認成其他人；
     每位假員工的值各不相同（第 n 位每個維度都是 100×n），他們彼此之間也遠大於門檻，真實資料檢查才不會判成互相混淆；
@@ -112,7 +113,7 @@ def add(today: datetime.date = None) -> dict:
 
 
 def extend(today: datetime.date = None, days_ahead: int = 2) -> dict:
-    """把假員工的出勤補到 today 起 days_ahead 天內（含今天）；請假日、週末、已經有打卡的日子不補，可重複執行。
+    """把假員工的出勤補到昨天起、today 起 days_ahead 天內（含今天）；請假日、週末、已經有打卡的日子不補，可重複執行。
     每個人每天的內容由日期與假員工編號（DEMO-001…）決定，同一天重跑結果一致；
     也會把假員工的人臉特徵修成各不相同（早期版本五位完全一樣）。"""
     today = today or datetime.date.today()
@@ -124,7 +125,7 @@ def extend(today: datetime.date = None, days_ahead: int = 2) -> dict:
         for user_id, _name, emp_id in people:
             conn.execute("UPDATE Users SET embedding=? WHERE id=?",
                          (_far_embedding(dim, int(emp_id[len(EMP_PREFIX):])), user_id))
-        for offset in range(days_ahead + 1):
+        for offset in range(-1, days_ahead + 1):
             day = today + datetime.timedelta(days=offset)
             if day.weekday() >= 5:
                 continue
