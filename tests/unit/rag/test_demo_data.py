@@ -114,3 +114,34 @@ def test_extend_is_deterministic_per_day_and_removed_with_the_demo_people(db):
     con = sqlite3.connect(db)
     assert con.execute("SELECT name, timestamp, status FROM Attendance ORDER BY id").fetchall() == first
     con.close()
+
+
+def _demo_embeddings(db):
+    con = sqlite3.connect(db, detect_types=sqlite3.PARSE_DECLTYPES)
+    rows = [e for (e,) in con.execute("SELECT embedding FROM Users WHERE employee_id LIKE 'DEMO-%' ORDER BY id")]
+    con.close()
+    return rows
+
+
+def test_demo_people_are_far_from_each_other_and_from_real_faces(db, add_user):
+    add_user("王小明", "E001", embedding=np.ones(512, dtype=np.float32) / np.sqrt(512))
+    demo_data.add(TODAY)
+    fakes = _demo_embeddings(db)
+    real = np.ones(512, dtype=np.float32) / np.sqrt(512)
+    assert len(fakes) == 5
+    for i, a in enumerate(fakes):
+        assert np.linalg.norm(a - real) > 100
+        for b in fakes[i + 1:]:
+            assert np.linalg.norm(a - b) > 100              # 門檻是 0.9 左右，遠遠超過
+
+
+def test_extend_repairs_old_demo_people_that_all_shared_one_embedding(db):
+    demo_data.add(TODAY)
+    con = sqlite3.connect(db)
+    same = np.full(512, 100.0, dtype=np.float32)
+    con.execute("UPDATE Users SET embedding=? WHERE employee_id LIKE 'DEMO-%'", (same,))
+    con.commit()
+    con.close()
+    assert len({e.tobytes() for e in _demo_embeddings(db)}) == 1
+    demo_data.extend(TODAY, days_ahead=0)
+    assert len({e.tobytes() for e in _demo_embeddings(db)}) == 5
