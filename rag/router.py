@@ -104,10 +104,11 @@ def build_prompt(question: str, history: str, today: datetime.date, multi: bool 
     return (
         "你是門禁與人資系統的意圖判斷器。判斷使用者的問題，只輸出一行 JSON，不要任何其他文字。\n"
         "欄位：\n"
-        "- docs：問題需要查公司文件、法規、辦法的內容就是 true，否則 false。\n"
+        "- docs：問題需要查已收錄文件（公司文件、法規、辦法、學校或機構的規章與介紹）的內容就是 true，否則 false。\n"
         "- data：要查資料庫時填一種：records（某人的打卡紀錄）、count（某人各種狀態的次數）、"
         "status_list（某段時間誰遲到、早退、加班）、summary（某天的出勤摘要或誰沒打卡）、"
-        "anomalies（異常、尾隨事件）、roster（員工名單）、leaves（某段時間誰請假）、"
+        "anomalies（異常、尾隨事件）、roster（本公司員工的名單或人數；問題在談某個學校、機構或主題、"
+        "沒有問員工本身時不是 roster）、leaves（某段時間誰請假）、"
         "holidays（公司登錄的假日，以及每週固定休息日：問週休、星期幾休息、哪幾天不用上班都是這個）；"
         "不需要查資料庫填 none。請假的法規規定是 docs，不是 leaves。\n"
         "- person：問題裡提到的人名，沒有就留空字串。\n"

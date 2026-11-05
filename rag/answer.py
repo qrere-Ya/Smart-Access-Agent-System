@@ -83,6 +83,9 @@ class Assistant:
         self._last_person = ""
         self._last_range: Optional[dates.DateRange] = None  # 上一題實際查詢用的日期區間（只在上一題查了資料庫時才有）
         self._anomaly_rows: Optional[list] = None
+        self._pending: Optional[tuple] = None   # (問題, 計畫)：上一題因人名不明而反問，這一題的回覆可能是在回答它
+        self._asked_person = False              # 這一題是否因人名不明而反問
+        self._confirmed_person = ""             # 使用者在回覆裡確認過的對象，只用在接續上一題的那一次查詢
         self.roster_provider = None  # 可選：回傳目前員工姓名清單，每題開始前更新人名比對
         self.show_evidence_paths = True  # 異常事件的回答是否附上證據照片的存放路徑；遠端入口關閉
         self.show_internal_details = True  # 語言模型出錯時是否說明模型名稱、位址與設定提示；遠端入口關閉
@@ -93,6 +96,7 @@ class Assistant:
     def reset(self):
         """清除對話記憶。"""
         self._history, self._last_person, self._last_range = [], "", None
+        self._pending, self._confirmed_person = None, ""
 
     def ask(self, question: str) -> Iterator[str]:
         """回答一個問題，逐段產生文字；整個過程不丟例外，錯誤會變成一段說明。"""
@@ -131,6 +135,14 @@ class Assistant:
         self._refresh_roster()
         today = self._today()
         plan = router.make_plan(self.router_llm, question, self._history_text(), today)
+        pending, self._pending, self._confirmed_person = self._pending, None, ""
+        if pending is not None and self._is_reply_to(pending, question, plan, today):
+            # 上一題因人名不明而反問，這一題只是回人名或確認（沒有自己的時間、也沒有另一件要查的事）：
+            # 回到原本的問題，對象改成使用者確認的人，原本的時間說法才不會掉
+            name = self._confirmed_name(question, plan)
+            if name:
+                question, plan = pending
+                self._confirmed_person = name
         self.last.plan = plan
         rng = dates.find_range(question, today)
         inherited = (rng is None and plan.same_period and plan.data not in (None, "roster")
@@ -142,11 +154,14 @@ class Assistant:
             plan.data = "records"  # 問題指名某個人，就查那個人的紀錄，不是全公司的摘要
 
         data_text, notes = "", []
+        self._asked_person = False
         if plan.data:
             outcome = self._run_data(plan, question, today)
             if isinstance(outcome, str):  # 需要使用者釐清、查無此人，或資料庫出錯（出錯時 outcome 已是 error）
                 if self.last.outcome != "error":
                     self.last.outcome = "clarify"
+                    if self._asked_person:
+                        self._pending = (question, plan)   # 下一題若只回人名或「對」，就接著查這一題
                 yield outcome
                 return
             data_text, notes = outcome
@@ -160,6 +175,12 @@ class Assistant:
             hits = self._search_documents(question)
             self.last.hits = hits
         if not plan.docs and not plan.data:
+            if plan.person:   # 問題裡有人名但沒有要查的東西：名單裡沒有這個人就直說，不要只丟一段功能說明
+                name, message = self._resolve_person(plan, question)
+                if name is None:
+                    self.last.outcome = "clarify"
+                    yield message
+                    return
             self.last.outcome = "help"
             yield HELP_TEXT
             return
@@ -381,6 +402,10 @@ class Assistant:
 
     def _resolve_person(self, plan, question):
         """回傳 (姓名, 說明) 或 (None, 要回給使用者的釐清訊息)。"""
+        if self._confirmed_person:
+            confirmed = self.resolver.resolve(self._confirmed_person)
+            if confirmed.resolved:
+                return confirmed.name, f"依你的回覆，查詢對象為：{confirmed.name}（接續你剛才問的「{question}」）。"
         found = self.resolver.find_in_message(question)
         via_plan = False
         if found.status == "unknown" and plan.person:
@@ -397,11 +422,30 @@ class Assistant:
                           "），請一次問一位。")
         if found.status == "ambiguous":
             names = "、".join(f"{n}" for n, _ in found.candidates)
+            self._asked_person = True
             return None, f"你是指「{names}」嗎？請直接回覆正確的姓名。"
         if self._last_person and not plan.person:  # 提到了名單外的人就不能沿用上一位，否則會把別人的資料當成他的
             return self._last_person, f"這題沒有提到人，沿用上一題的對象：{self._last_person}。"
         shown = plan.person or "你提到的人"
+        self._asked_person = True
         return None, f"員工名單裡找不到「{shown}」。請確認姓名，或問「公司有哪些員工」。"
+
+    @staticmethod
+    def _is_reply_to(pending, reply, plan, today) -> bool:
+        """這一題是不是在回答上一題的反問：不查文件、自己沒說時間，而且沒有要查和上一題不同的東西
+        （意圖判斷常依對話自己把「對」補成同一個查詢，所以查詢相同也算）。"""
+        before = pending[1]
+        if plan.docs or dates.find_range(reply, today) is not None:
+            return False
+        return not plan.data or (plan.data == before.data and plan.status == before.status
+                                 and plan.event_type == before.event_type)
+
+    def _confirmed_name(self, reply, plan):
+        """使用者回覆裡明確指到的員工姓名（回覆本身比對得到，或意圖判斷依對話推出且名單裡有）；沒有就回空字串。"""
+        found = self.resolver.find_in_message(reply)
+        if not found.resolved and plan.person:
+            found = self.resolver.resolve(plan.person)
+        return found.name if found.resolved else ""
 
     def _run_extra_steps(self, plan, question, today, data_text, notes):
         """主查詢之後依序執行追加的工具（含主查詢最多 MAX_STEPS 個），結果接在後面；追加查詢要釐清或出錯只加說明。"""
