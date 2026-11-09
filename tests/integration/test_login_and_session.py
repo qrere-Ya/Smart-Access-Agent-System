@@ -243,20 +243,19 @@ def test_the_assistant_window_closes_when_the_session_ends(root, clean_session):
 
 def test_the_assistant_window_refuses_to_start_without_a_login_code(monkeypatch):
     import tkinter
-    from tkinter import messagebox
 
     from rag import chat_window
-    from shared import auth
+    from shared import auth, ui_theme
 
     shown = []
     monkeypatch.delenv(auth.TOKEN_ENV, raising=False)
-    monkeypatch.setattr(messagebox, "showerror", lambda title, text, **k: shown.append((title, text)))
+    monkeypatch.setattr(ui_theme, "show_message", lambda master, title, text, kind="info": shown.append((title, text)))
     try:
         with pytest.raises(SystemExit) as stop:
             chat_window.main()
     except tkinter.TclError:
         pytest.skip("沒有可用的顯示器")
-    assert stop.value.code == 2 and shown and "管理後台" in shown[0][1]
+    assert stop.value.code == 2 and shown and shown[0][0] == "需要登入" and "管理後台" in shown[0][1]
 
 
 def test_login_and_backend_share_one_root_across_a_relogin(root, db, add_user, clean_session, monkeypatch):
