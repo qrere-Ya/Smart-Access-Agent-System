@@ -29,7 +29,7 @@ DEFAULT_MORNING_TIME = "08:30"
 MAX_AGE_DAYS = 7          # 超過這麼多天的日報不在開窗時顯示，避免把舊資料當成最新
 _TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _FIELDS = ("date", "generated_at", "facts")
-_BRIEF_FIELDS = ("date", "generated_at", "yesterday")
+_BRIEF_FIELDS = ("date", "generated_at")
 
 
 REPLACE_TRIES = 6   # Windows 上目標檔剛好被別的行程或執行緒讀取時 os.replace 會暫時失敗，稍等再試

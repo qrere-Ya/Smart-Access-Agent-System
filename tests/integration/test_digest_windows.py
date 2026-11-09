@@ -2,6 +2,7 @@
 日報與晨報的真 Tk 測試：主選單多一張「日報與晨報」卡片（設定與立即產生都在裡面）、底部只有一顆「日報／晨報」按鈕、
 查看視窗只看不設定、時間不合法不儲存且不動到另一個、立即產生會更新畫面與查看視窗、日期欄不合法不產生。
 """
+import datetime
 import time
 import tkinter
 
@@ -46,7 +47,11 @@ def fake_runner(root, name, settings_files, calls):
         calls.append((name, day))
         digest = {"date": day, "generated_at": "2026-11-05 19:00", "facts": f"出勤日報 {day}", "summary": ""}
         if name == "晨報":
-            settings_files.save_brief({**digest, "yesterday": f"昨日明細 {day}", "today": "今天沒有人請假。"})
+            from admin import news_feed
+
+            card = news_feed._to_card({"title": f"測試新聞 {day}", "summary": "", "link": "", "time": None}, "來源")
+            settings_files.save_brief({"date": day, "generated_at": digest["generated_at"], "news": [card],
+                                       "news_problem": "", "news_tries": 1})
         else:
             settings_files.save(digest)
         return digest
@@ -138,11 +143,11 @@ def test_generate_now_updates_the_module_and_an_open_viewer(root, db, settings_f
     assert str(win.digest_button.cget("state")) == "disabled"            # 產生中不能重複按
     win._run_morning()
     end = time.time() + 5
-    while time.time() < end and "昨日明細" not in viewer.bubbles["morning"].get_text():
+    while time.time() < end and "測試新聞" not in viewer.bubbles["morning"].get_text():
         pump(root, 0.1)
     assert ("日報", "2026-11-03") in calls and any(n == "晨報" for n, _ in calls)
     assert "出勤日報 2026-11-03" in viewer.bubbles["digest"].get_text()
-    assert "昨日明細" in viewer.bubbles["morning"].get_text()
+    assert "測試新聞" in viewer.bubbles["morning"].get_text()
     assert "已更新" in win.status.cget("text") and str(win.digest_button.cget("state")) == "normal"
     win.destroy()
     viewer.destroy()
@@ -152,9 +157,9 @@ def long_brief(settings_files, links=5):
     from admin import news_feed
 
     cards = [news_feed._to_card({"title": f"新聞 {i}", "summary": "摘要。" * 30, "link": f"https://example.com/n/{i}",
-                                 "time": None}, "來源", "blog") for i in range(links)]
-    settings_files.save_brief({"date": "2026-11-06", "generated_at": "2026-11-05 19:00", "yesterday": "昨日明細",
-                               "today": "今天沒有人請假。", "news": cards, "news_problem": "", "summary": ""})
+                                 "time": None}, "來源") for i in range(links)]
+    settings_files.save_brief({"date": "2026-11-06", "generated_at": "2026-11-05 19:00", "news": cards,
+                               "news_problem": "", "news_tries": 1})
 
 
 def open_viewer(root, settings_files):
@@ -223,3 +228,26 @@ def test_the_viewer_is_big_and_the_messages_follow_the_window_width(root, db, se
     pump(root, 0.6)
     assert int(bubble.box.cget("width")) > before
     win.destroy()
+
+
+def test_a_brief_without_news_is_retried_later_and_pops_up_only_once_it_has_news(root):
+    from admin import digest_window, morning_brief
+
+    popped, started = [], []
+    now = [datetime.datetime(2026, 10, 14, 8, 40)]
+    runner = digest_window.DigestRunner(root, lambda _n: "2026-10-14", lambda d, _l: None, on_new=popped.append,
+                                        clock=lambda: now[0], make_ai=lambda: None, name="晨報",
+                                        retry_wait=morning_brief.retry_wait)
+    runner.start = lambda day, announce=False: started.append(day) or True
+    failed = {"date": "2026-10-14", "news": [], "news_problem": "x：連線失敗", "news_tries": 1}
+    runner._finish(failed, None, True)
+    # 連不上：先不彈窗，1 分鐘後再試
+    assert popped == [] and runner._retry_at == now[0] + datetime.timedelta(minutes=1)
+    runner.tick()
+    assert started == []                                                                   # 還沒到重試時間
+    now[0] += datetime.timedelta(minutes=2)
+    runner.tick()
+    assert started == ["2026-10-14"]
+    good = {"date": "2026-10-14", "news": [{"title": "t"}], "news_problem": "", "news_tries": 2}
+    runner._finish(good, None, True)
+    assert popped == [good] and runner._retry_at is None                                   # 抓到了才彈窗，不再重試

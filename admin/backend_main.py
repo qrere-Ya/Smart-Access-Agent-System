@@ -120,7 +120,7 @@ class BackendManagerApp:
              self.open_assistant_window),
             ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
              lambda: calendar_panel.open_calendar_window(self.root)),
-            ("📰", "日報與晨報", "設定每天自動產生的時間、立即產生、查看每日出勤與生成式 AI 早報", "info",
+            ("📰", "日報與晨報", "設定每天自動產生的時間、立即產生、查看每日出勤日報與科技早報", "info",
              self.open_schedule),
         ]
         for idx, (icon, title, desc, accent, cmd) in enumerate(modules):

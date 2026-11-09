@@ -1,13 +1,15 @@
 """
-news_feed.py：生成式 AI 早報的資料來源（官方部落格與服務狀態的 RSS、Hacker News），整理成固定的四欄格式。
+news_feed.py：晨報的科技新聞來源（繁中與國際科技媒體、AI 官方部落格、Hacker News 上高分的討論），整理成固定的四欄格式。
 
 主要功能：
-  - fetch_ai_news：同時抓固定的幾個來源（OpenAI 與 Anthropic 服務狀態、OpenAI／DeepMind／AWS／NVIDIA／
-    Hugging Face 的官方部落格、Hacker News 上高分的 AI 討論），挑出最近的幾則，
+  - fetch_ai_news：同時抓固定的幾個來源（iThome、科技報橘、電腦王阿達、The Verge、Ars Technica、TechCrunch、
+    OpenAI／DeepMind／NVIDIA／Hugging Face／AWS 機器學習的官方部落格、Hacker News 高分討論），挑出最近的幾則，
     每則整理成 類別、標題、發生什麼事、為什麼重要、可以怎麼用、來源與原文；
     只有一部分來源失敗也照常出報，失敗原因另外回傳，不讓晨報中斷
-  - 類別、為什麼重要、可以怎麼用都是用來源種類與標題關鍵字決定的固定句子，不是 AI 判斷；
-    「發生什麼事」是來源自己的摘要（去掉 HTML、限制長度）
+  - 暫時性的連線問題（網路剛連上、短暫中斷）每個來源先在原地重試，仍失敗才記成失敗；
+    整份晨報抓不到新聞時由 morning_brief／digest_window 排程稍後再抓
+  - 類別、為什麼重要、可以怎麼用都是用標題關鍵字決定的固定句子，不是 AI 判斷；
+    「發生什麼事」是來源自己的摘要（去掉 HTML、限制長度）；國際來源是英文原文，不翻譯
   - 安全：來源網址是寫死的 https 公開網域，只收 https 的原文連結、不跟隨轉址、每個來源最多讀 2MB、逾時 10 秒；
     解析 XML 前先拒收 DOCTYPE／ENTITY 與非 UTF-8；所有文字都當作不可信的純文字，不交給語言模型、不變成可點的連結
 
@@ -19,6 +21,7 @@ import email.utils
 import html
 import json
 import re
+import time
 # 標準函式庫的 XML 解析器擋不住實體膨脹；parse_feed 在解析前已拒收 DOCTYPE／ENTITY，且讀取有大小上限
 import xml.etree.ElementTree as ET  # nosec B405
 from concurrent.futures import ThreadPoolExecutor
@@ -26,46 +29,58 @@ from urllib.parse import quote, urlparse
 
 import requests
 
-# (顯示名稱, 網址, 種類)；種類：status 服務狀態、blog 官方部落格
+# (顯示名稱, 網址, 種類)；種類：news 科技媒體、blog 官方部落格
 RSS_SOURCES = (
-    ("OpenAI 服務狀態", "https://status.openai.com/feed.rss", "status"),
-    ("Anthropic 服務狀態", "https://status.claude.com/history.rss", "status"),
+    ("iThome", "https://www.ithome.com.tw/rss", "news"),
+    ("科技報橘", "https://techorange.com/feed/", "news"),
+    ("電腦王阿達", "https://www.kocpc.com.tw/feed", "news"),
+    ("The Verge", "https://www.theverge.com/rss/index.xml", "news"),
+    ("Ars Technica", "https://feeds.arstechnica.com/arstechnica/index", "news"),
+    ("TechCrunch", "https://techcrunch.com/feed/", "news"),
     ("OpenAI 新聞", "https://openai.com/news/rss.xml", "blog"),
     ("Google DeepMind", "https://deepmind.google/blog/rss.xml", "blog"),
     ("AWS 機器學習", "https://aws.amazon.com/blogs/machine-learning/feed/", "blog"),
     ("NVIDIA 部落格", "https://blogs.nvidia.com/feed/", "blog"),
     ("Hugging Face", "https://huggingface.co/blog/feed.xml", "blog"),
 )
+RETRY_DELAYS = (1.5, 4.0)          # 秒；連線失敗時在原地重試的等待時間
 HN_MIN_POINTS = 100
 TIMEOUT = (5, 10)
 MAX_BYTES = 2_000_000
 MAX_TITLE_CHARS = 120
 MAX_WHAT_CHARS = 160
-DEFAULT_LIMIT = 5
+DEFAULT_LIMIT = 6
 PER_SOURCE = 2
-WINDOW_HOURS = (36, 24 * 7)        # 先找最近 36 小時，不夠再放寬到 7 天
-MIN_ITEMS = 3
+WINDOW_HOURS = 24 * 7              # 只收最近 7 天內的
+HN_PENALTY = 2                     # Hacker News 的名次往後延，只在其他來源不夠時補位
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 _TAG = re.compile(r"<[^>]+>")
 _IP_HOST = re.compile(r"^[\d.]+$|:")
 _PRIVATE_SUFFIXES = (".local", ".internal", ".lan", ".home", ".localdomain")
 _AI = re.compile(r"\bAI\b|\bLLMs?\b|GPT|Claude|Gemini|OpenAI|Anthropic|Llama|Mistral|DeepSeek|Qwen|Gemma|"
-                 r"diffusion|transformer|inference|agentic|chatbot", re.I)
-_SECURITY = re.compile(r"security|vulnerab|cyber|exploit|breach|CVE-|jailbreak|malware|資安|漏洞", re.I)
-_MODEL = re.compile(r"\bmodel|GPT|Claude|Gemini|Llama|Gemma|Qwen|Mistral|DeepSeek|LLM|inference|模型", re.I)
-_PRODUCT = re.compile(r"launch|introduc|announc|available|release|now |new |api|sdk|agent|推出|發布", re.I)
+                 r"diffusion|transformer|inference|agentic|chatbot|\bmodel|人工智慧|生成式|大型語言|模型|機器學習",
+                 re.I)
+_SECURITY = re.compile(r"security|vulnerab|cyber|exploit|breach|CVE-|jailbreak|malware|ransomware|"
+                       r"\bhack(?:ed|ers?|ing)?\b|資安|漏洞|駭客|惡意|勒索|攻擊|外洩", re.I)
+_HARDWARE = re.compile(r"\bchips?\b|\bGPUs?\b|\bCPUs?\b|semiconductor|processor|laptop|iPhone|MacBook|Android|"
+                       r"Snapdragon|\bRAM\b|\bSSD\b|晶片|處理器|半導體|顯卡|筆電|手機|台積電|記憶體", re.I)
+_SOFTWARE = re.compile(r"open.?source|Linux|\bRust\b|\bPython\b|developer|GitHub|framework|kernel|compiler|"
+                       r"\bAPI\b|\bSDK\b|開源|開發者|程式|作業系統|瀏覽器", re.I)
 
 WHY = {
-    "official": "這是官方來源發布的生成式 AI 動態，可能影響團隊採用、開發或維運判斷。",
-    "community": "此事件具備公開來源與社群訊號，值得團隊進一步確認影響。",
+    "AI": "生成式 AI 與模型的進展，可能影響團隊的工具選擇與開發方式。",
+    "資安": "涉及漏洞或攻擊事件，可能影響正在使用的系統與服務。",
+    "硬體與晶片": "硬體與晶片的變化會影響設備採購與效能規劃。",
+    "軟體與開發": "開發工具與開源生態的變化，可能影響團隊的技術選型。",
+    "產業動態": "科技產業的動態，可作為了解趨勢的參考。",
 }
 HOW = {
-    "服務事件": "確認團隊是否使用受影響的服務，必要時準備備援方案，並持續追蹤官方狀態頁。",
-    "安全事件": "先閱讀原始來源，確認是否涉及團隊使用的服務或版本，再評估是否需要調整權限或更新。",
-    "新模型": "先閱讀原始來源與技術文件，再評估是否需要進行小規模驗證。",
-    "產品更新": "先閱讀原始來源與技術文件，再評估是否需要進行小規模驗證。",
-    "產業動態": "先閱讀原始來源，確認與團隊目前的工作是否相關。",
+    "AI": "先閱讀原文與官方文件，再評估是否值得小規模試用。",
+    "資安": "確認團隊使用的產品或版本是否受影響，必要時更新或調整權限。",
+    "硬體與晶片": "確認是否與目前使用或預計採購的設備相關。",
+    "軟體與開發": "閱讀原文與版本說明，評估是否需要升級或試用。",
+    "產業動態": "閱讀原文，判斷與目前進行的專案是否相關。",
 }
 
 
@@ -156,7 +171,7 @@ def parse_feed(data):
 
 
 def parse_hn(data):
-    """Hacker News（Algolia）的搜尋結果轉成同樣格式的清單（只留標題看得出和 AI 有關的）；格式不對丟 ValueError。"""
+    """Hacker News（Algolia）的搜尋結果轉成同樣格式的清單；格式不對丟 ValueError。"""
     try:
         hits = json.loads(data.decode("utf-8"))["hits"]
     except (UnicodeDecodeError, ValueError, KeyError, TypeError):
@@ -168,7 +183,7 @@ def parse_hn(data):
         title = clean_text(str(hit.get("title") or ""), MAX_TITLE_CHARS)
         points, comments = hit.get("points"), hit.get("num_comments") or 0
         stamp = hit.get("created_at_i")
-        if not title or not _AI.search(title) or not isinstance(points, int) or not isinstance(comments, int):
+        if not title or not isinstance(points, int) or not isinstance(comments, int):
             continue
         when = (datetime.datetime.fromtimestamp(stamp, datetime.timezone.utc) if isinstance(stamp, int) else None)
         items.append({"title": title, "summary": f"Hacker News：{points} 分，{comments} 則留言。",
@@ -184,80 +199,83 @@ def _get(url, get):
     return _read_limited(response)
 
 
-def _load_source(source, get):
+def _load_source(source, get, sleep=time.sleep):
+    """抓一個來源；連線類的暫時性錯誤先在原地重試，內容或回應狀態的問題不重試。"""
     name, url, kind = source
-    try:
-        if kind == "hn":
-            return name, kind, parse_hn(_get(url, get)), ""
-        return name, kind, parse_feed(_get(url, get)), ""
-    except requests.RequestException as e:
-        return name, kind, [], f"{name}：連線失敗（{type(e).__name__}）"
-    except ValueError as e:
-        return name, kind, [], f"{name}：{e}"
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        try:
+            if kind == "hn":
+                return name, kind, parse_hn(_get(url, get)), ""
+            return name, kind, parse_feed(_get(url, get)), ""
+        except requests.RequestException as e:
+            if attempt < len(RETRY_DELAYS):
+                sleep(RETRY_DELAYS[attempt])
+                continue
+            return name, kind, [], f"{name}：連線失敗（{type(e).__name__}）"
+        except ValueError as e:
+            return name, kind, [], f"{name}：{e}"
 
 
 def hn_source(now):
-    since = int((now - datetime.timedelta(hours=WINDOW_HOURS[-1])).timestamp())
+    since = int((now - datetime.timedelta(hours=WINDOW_HOURS)).timestamp())
     url = (f"https://hn.algolia.com/api/v1/search_by_date?tags=story"
            f"&numericFilters={quote(f'points>{HN_MIN_POINTS},created_at_i>{since}')}&hitsPerPage=100")
     return ("Hacker News", url, "hn")
 
 
-def categorize(title, kind):
-    """服務狀態一律是服務事件；其餘依標題關鍵字：資安、模型、產品，都不是就歸產業動態。"""
-    if kind == "status":
-        return "服務事件"
-    if _SECURITY.search(title):
-        return "安全事件"
-    if _MODEL.search(title):
-        return "新模型"
-    if _PRODUCT.search(title):
-        return "產品更新"
+def categorize(title):
+    """依標題關鍵字分類：資安、AI、硬體與晶片、軟體與開發，都不是就歸產業動態。"""
+    for pattern, category in ((_SECURITY, "資安"), (_AI, "AI"), (_HARDWARE, "硬體與晶片"), (_SOFTWARE, "軟體與開發")):
+        if pattern.search(title):
+            return category
     return "產業動態"
 
 
-def _to_card(item, name, kind):
-    category = categorize(item["title"], kind)
+def _to_card(item, name):
+    category = categorize(item["title"])
     link = item["link"] if item["link"] and not link_problem(item["link"]) else ""
     what = clean_text(item["summary"], MAX_WHAT_CHARS) or "（來源沒有提供摘要，請看原文）"
     return {"category": category, "title": item["title"], "what": what,
-            "why": WHY["community" if kind == "hn" else "official"], "how": HOW[category],
+            "why": WHY[category], "how": HOW[category],
             "link": link, "source": name, "time": item["time"]}
 
 
 def pick(loaded, now, limit=DEFAULT_LIMIT):
-    """挑出最近的幾則：先看 36 小時內，不夠 MIN_ITEMS 則放寬到 7 天；每個來源最多 PER_SOURCE 則，新的在前。"""
-    for hours in WINDOW_HOURS:
-        cutoff = now - datetime.timedelta(hours=hours)
-        cards = []
-        for name, kind, items, _problem in loaded:
-            recent = sorted((i for i in items if i["time"] and i["time"] >= cutoff),
-                            key=lambda i: i["time"], reverse=True)
-            cards += [_to_card(i, name, kind) for i in recent[:PER_SOURCE]]
-        cards.sort(key=lambda c: c["time"], reverse=True)
-        if len(cards) >= MIN_ITEMS or hours == WINDOW_HOURS[-1]:
-            seen, unique = set(), []
-            for c in cards:
-                if c["title"] not in seen:
-                    seen.add(c["title"])
-                    unique.append(c)
-            return unique[:limit]
-    return []
+    """挑出最近 WINDOW_HOURS 小時內的幾則：每個來源最新的一則優先，不夠再補各來源第二新的，
+    Hacker News 排在最後補位（只有標題與分數，資訊最少）；重複標題只留一則，最後依時間新的在前。"""
+    cutoff = now - datetime.timedelta(hours=WINDOW_HOURS)
+    ranked = []
+    for name, kind, items, _problem in loaded:
+        recent = sorted((i for i in items if i["time"] and i["time"] >= cutoff),
+                        key=lambda i: i["time"], reverse=True)
+        ranked += [(rank + (HN_PENALTY if kind == "hn" else 0), -item["time"].timestamp(), name, item)
+                   for rank, item in enumerate(recent[:PER_SOURCE])]
+    ranked.sort(key=lambda r: (r[0], r[1]))
+    seen, cards = set(), []
+    for _rank, _age, name, item in ranked:
+        if item["title"] in seen:
+            continue
+        seen.add(item["title"])
+        cards.append(_to_card(item, name))
+        if len(cards) >= limit:
+            break
+    cards.sort(key=lambda c: c["time"], reverse=True)
+    return cards
 
 
-def fetch_ai_news(now=None, get=requests.get, limit=DEFAULT_LIMIT):
+def fetch_ai_news(now=None, get=requests.get, limit=DEFAULT_LIMIT, sleep=time.sleep):
     """回傳 (卡片清單, 原因)；原因是各來源失敗的說明（全部成功是空字串）。"""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     sources = list(RSS_SOURCES) + [hn_source(now)]
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
-        loaded = list(pool.map(lambda s: _load_source(s, get), sources))
+        loaded = list(pool.map(lambda src: _load_source(src, get, sleep), sources))
     return pick(loaded, now, limit), "；".join(p for *_rest, p in loaded if p)
 
 
 def format_news(cards, day=None):
     """排成早報文字：標題行加每則的 類別、發生什麼事、為什麼重要、可以怎麼用、來源與原文；day 是早報日期。"""
     day = day or datetime.date.today()
-    lines = [f"生成式 AI 早報｜{day.strftime('%Y/%m/%d')}"]
+    lines = [f"科技早報｜{day.strftime('%Y/%m/%d')}"]
     for c in cards:
         lines += ["", f"[{c['category']}] {c['title']}", f"發生什麼事：{c['what']}", f"為什麼重要：{c['why']}",
                   f"可以怎麼用：{c['how']}", f"來源與原文：{c['link'] or '（沒有可用的原文連結）'}"]

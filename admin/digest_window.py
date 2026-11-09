@@ -37,9 +37,10 @@ class DigestRunner:
     """排程與背景產生；同一個 runner 同一時間只會有一份在產生。"""
 
     def __init__(self, root, pending, generate, on_new=None, clock=datetime.datetime.now,
-                 make_ai=daily_digest.build_ai, name="日報"):
+                 make_ai=daily_digest.build_ai, name="日報", retry_wait=None):
         self.root, self.on_new, self._clock, self.name = root, on_new, clock, name
         self._pending, self._generate, self._make_ai = pending, generate, make_ai
+        self._retry_wait = retry_wait      # 報告做完但內容不完整時，回傳下次重做前要等多久（None＝不用重做）
         self.busy = False
         self._retry_at = None
         self._alive = True
@@ -96,10 +97,11 @@ class DigestRunner:
         self.busy = False
         if not self._alive:
             return
-        self._retry_at = self._clock() + RETRY_AFTER if error else None
+        wait = RETRY_AFTER if error else (self._retry_wait(report) if report and self._retry_wait else None)
+        self._retry_at = self._clock() + wait if wait else None
         for callback in list(self.listeners):
             callback(self, report, error)
-        if report and announce and self.on_new:
+        if report and announce and self.on_new and not (wait and not error):   # 還要重做的先不彈窗，做好了再彈
             self.on_new(report)
 
 
@@ -115,10 +117,11 @@ def digest_runner(root, on_new=None, **kw):
 def morning_runner(root, on_new=None, **kw):
     """早上晨報：到設定時間且今天要上班就產生今天的；開機比設定時間晚也會補。"""
     def pending(now):
-        latest = digest_store.load_brief()
-        return morning_brief.pending_morning(now, digest_store.load_morning_time(), latest["date"] if latest else None)
+        return morning_brief.pending_morning(now, digest_store.load_morning_time(), digest_store.load_brief())
 
-    return DigestRunner(root, pending, morning_brief.generate, on_new, name="晨報", **kw)
+    kw.setdefault("make_ai", lambda: None)           # 晨報只有新聞，不用語言模型
+    return DigestRunner(root, pending, lambda day, _llm: morning_brief.generate(day), on_new, name="晨報",
+                        retry_wait=morning_brief.retry_wait, **kw)
 
 
 def digest_text(digest) -> str:

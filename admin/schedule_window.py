@@ -47,7 +47,7 @@ class ScheduleWindow(ctk.CTkToplevel):
         form = ctk.CTkFrame(self, fg_color="transparent")
         form.pack(fill="x", padx=pad)
         self.entries = {}
-        for row, (key, label, load) in enumerate((("morning", "🌅 晨報（昨日出勤＋今天提醒＋生成式 AI 早報）",
+        for row, (key, label, load) in enumerate((("morning", "🌅 晨報（科技新聞）",
                                                    digest_store.load_morning_time),
                                                   ("digest", "📋 日報（當天出勤明細）", digest_store.load_time))):
             ui_theme.muted_label(form, label).grid(row=row * 2, column=0, columnspan=2, sticky="w", pady=(6, 2))
