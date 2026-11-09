@@ -7,6 +7,8 @@ schedule_window.py：主選單「日報與晨報」模組的視窗（CustomTkint
   - 「立即產生晨報」（今天）、「立即產生日報」（可指定日期，預設今天），產生中按鈕停用，完成後顯示結果；
     日期格式不對不會產生
   - 「查看報告」開啟日報／晨報查看視窗
+  - 「全本地模式」開關：開啟後語言模型只用本機、晨報不連網抓新聞（shared.network_policy）；
+    已開啟的語言模型要重新開啟助理視窗才會換成本機
   - 說明排程怎麼跑：後台開著才會產生、到時間且當天要上班才產生、開機比設定時間晚會補產、假日與休息日不產生；
     設定存在 runtime/digest_settings.json，後台每分鐘讀一次，改完下一分鐘就生效，不用重開
 
@@ -20,6 +22,7 @@ import customtkinter as ctk
 
 from admin import attendance_report
 from shared import digest_store
+from shared import network_policy
 from shared import ui_theme
 
 EXPLAIN = ("後台開著的時候，每分鐘檢查一次。到了設定的時間、而且當天要上班（不是假日或每週休息日），"
@@ -36,12 +39,18 @@ class ScheduleWindow(ctk.CTkToplevel):
         self.runners = {"digest": digest, "morning": morning}
         self._on_view = on_view
         self.title("日報與晨報")
-        self.geometry("580x600")
+        self.geometry("580x680")
         self.resizable(False, False)
         ui_theme.style_window(self)
         pad = ui_theme.PAD_LG
         ui_theme.section_title(self, "📰 日報與晨報").pack(anchor="w", padx=pad, pady=(pad, 8))
         ui_theme.muted_label(self, EXPLAIN, wraplength=520, justify="left").pack(fill="x", padx=pad, pady=(0, 10))
+
+        self.local_switch = ctk.CTkSwitch(self, text="全本地模式（不連外網：語言模型只用本機、晨報不抓新聞）",
+                                          command=self._toggle_local_only)
+        if network_policy.local_only():
+            self.local_switch.select()
+        self.local_switch.pack(anchor="w", padx=pad, pady=(0, 10))
 
         ui_theme.body_label(self, "排程時間（每天）").pack(anchor="w", padx=pad, pady=(6, 2))
         form = ctk.CTkFrame(self, fg_color="transparent")
@@ -120,6 +129,21 @@ class ScheduleWindow(ctk.CTkToplevel):
             ui_theme.show_message(self, "日報與晨報", "儲存失敗，請確認 runtime 資料夾可以寫入。", "error")
             return
         self.status.configure(text=f"已儲存：晨報 {values['morning']}、日報 {values['digest']}。")
+
+    def _toggle_local_only(self):
+        """存下全本地模式的開關；環境變數有設定時以環境變數為準，要提示。"""
+        want = bool(self.local_switch.get())
+        try:
+            network_policy.set_local_only(want)
+        except OSError:
+            self.local_switch.toggle()
+            ui_theme.show_message(self, "全本地模式", "儲存失敗，請確認 runtime 資料夾可以寫入。", "error")
+            return
+        if network_policy.local_only() != want:
+            self.status.configure(text=f"環境變數 {network_policy.ENV_NAME} 已強制設定，畫面上的開關不會改變實際結果。")
+            return
+        self.status.configure(text="全本地模式已開啟：語言模型只用本機、晨報不連網。已開著的助理視窗請重新開啟。"
+                              if want else "全本地模式已關閉：可以使用雲端語言模型與晨報新聞。")
 
     def _run_morning(self):
         if self.runners["morning"].start(datetime.date.today().isoformat()):

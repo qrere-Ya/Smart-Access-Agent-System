@@ -19,6 +19,7 @@ import datetime
 
 from admin import news_feed
 from shared import database_mgr
+from shared import network_policy
 from shared import digest_store
 
 MAX_NEWS_TRIES = 30                                       # 約 5 小時內持續重抓
@@ -55,9 +56,9 @@ def generate(day, now=None, save=digest_store.save_brief, load=digest_store.load
 
 
 def wants_news_retry(brief) -> bool:
-    """這份晨報是不是因為連不上而沒有新聞、而且還該再試。"""
-    return bool(brief) and not brief.get("news") and bool(brief.get("news_problem")) \
-        and brief.get("news_tries", 1) < MAX_NEWS_TRIES
+    """這份晨報是不是因為連不上而沒有新聞、而且還該再試（全本地模式是刻意不連網，不重試）。"""
+    return bool(brief) and not network_policy.local_only() and not brief.get("news") \
+        and bool(brief.get("news_problem")) and brief.get("news_tries", 1) < MAX_NEWS_TRIES
 
 
 def retry_wait(brief):
@@ -93,7 +94,10 @@ def brief_text(brief) -> str:
         parts.append("\n（類別與說明句由固定規則產生，內容是來源原文，未經 AI 改寫）")
         return "\n".join(parts)
     problem = brief.get("news_problem")
-    if problem and wants_news_retry(brief):
+    if network_policy.local_only():
+        parts.append("全本地模式已開啟，晨報不連網抓新聞。要看新聞，先在「日報與晨報」視窗關閉全本地模式，"
+                     "再按「立即產生晨報」。")
+    elif problem and wants_news_retry(brief):
         wait = retry_wait(brief)
         parts.append(f"目前沒有取得新聞（可能沒有網路或來源暫時連不上），已試 {brief.get('news_tries', 1)} 次，"
                      f"約 {int(wait.total_seconds() // 60)} 分鐘後會自動重試。")

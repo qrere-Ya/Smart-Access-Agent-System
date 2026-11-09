@@ -29,6 +29,10 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from shared import network_policy
+
+OFFLINE_NOTE = "全本地模式已開啟，沒有連網抓新聞"
+
 # (顯示名稱, 網址, 種類)；種類：news 科技媒體、blog 官方部落格
 RSS_SOURCES = (
     ("iThome", "https://www.ithome.com.tw/rss", "news"),
@@ -264,7 +268,9 @@ def pick(loaded, now, limit=DEFAULT_LIMIT):
 
 
 def fetch_ai_news(now=None, get=requests.get, limit=DEFAULT_LIMIT, sleep=time.sleep):
-    """回傳 (卡片清單, 原因)；原因是各來源失敗的說明（全部成功是空字串）。"""
+    """回傳 (卡片清單, 原因)；原因是各來源失敗的說明（全部成功是空字串）；全本地模式不連網，直接回傳空清單。"""
+    if network_policy.local_only():
+        return [], OFFLINE_NOTE
     now = now or datetime.datetime.now(datetime.timezone.utc)
     sources = list(RSS_SOURCES) + [hn_source(now)]
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:

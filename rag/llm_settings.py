@@ -5,6 +5,7 @@ llm_settings.py：語言模型（雲端 API 與本機 Ollama）的設定與呼�
   - 設定讀寫：存在 runtime/llm_settings.json（含金鑰，已被 .gitignore 排除，不可上傳）
   - 兩種 LLM 用戶端：OpenAI 相容的雲端 API、本機 Ollama
   - FailoverLLM：雲端 API 失效時自動改用本機模型
+  - 全本地模式（shared.network_policy）：設定一律讀成本機模式，直接呼叫雲端 API 也會被拒絕
   - 連線檢查與測試、錯誤分類並轉成白話說明（金鑰不會印出）
   只用標準函式庫（urllib）直接呼叫雲端 API 與 Ollama，不需要額外的轉接服務。
 
@@ -20,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 
-from shared import paths
+from shared import network_policy, paths
 
 SETTINGS_PATH = paths.LLM_SETTINGS_PATH
 
@@ -55,13 +56,15 @@ def load_settings():
             _log(f"讀取 llm_settings.json 失敗（檔案可能損壞），改用預設值：{e}")
     elif os.environ.get("NVIDIA_API_KEY"):
         s["mode"] = "api"
+    if network_policy.local_only():
+        s["mode"] = "local"
     return s
 
 
 def settings_for(mode=None):
-    """目前的設定；指定 api 或 local 時，只在這個行程內改用該模式，不寫回設定檔（給遠端伺服器與評估用）。"""
+    """目前的設定（全本地模式下一律是本機）；指定 api 或 local 時，只在這個行程內改用該模式，不寫回設定檔（給遠端伺服器與評估用）。"""
     s = load_settings()
-    if mode in ("api", "local"):
+    if mode in ("api", "local") and not network_policy.local_only():
         s["mode"] = mode
     return s
 
@@ -169,6 +172,8 @@ def explain(err, s=None):
     s = s or load_settings()
     k = err.kind
     model = s.get("local_model", "")
+    if k == "local_only":
+        return "全本地模式已開啟，不連雲端。", ["到「日報與晨報」視窗關閉「全本地模式」，才能使用雲端 API。"]
     if k == "empty_key":
         return "還沒有填 API 金鑰。", ["在「⚙️ 設定」貼上你的 API 金鑰再測試；沒有金鑰的話，選「只用本機模型」即可。"]
     if k == "auth":
@@ -249,6 +254,8 @@ class OpenAICompatLLM:
 
     def stream_complete(self, prompt):
         """串流呼叫，逐段產生 Delta；錯誤轉成 LLMCallError"""
+        if network_policy.local_only():
+            raise LLMCallError("local_only", "api", "全本地模式")
         body = {"model": self.model, "stream": True, "temperature": self.temperature,
                 "messages": [{"role": "user", "content": prompt}]}
         if self.max_tokens:
