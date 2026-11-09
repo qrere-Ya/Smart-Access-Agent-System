@@ -16,6 +16,7 @@ front_store.py：前台電腦的本機儲存——人臉快取與持久的離線
 串接模組：
   - front_agent：同步與補送；terminal_app（之後 L4）：辨識改用 FaceIndex、打卡改進佇列
 """
+import datetime
 import json
 import os
 import sqlite3
@@ -24,6 +25,8 @@ import time
 from contextlib import closing
 
 import numpy as np
+
+from shared import link_protocol as lp
 
 MAX_QUEUE_EVENTS = 2000
 MAX_REJECTED_KEPT = 200
@@ -147,6 +150,39 @@ class FrontStore:
 
     def dropped_count(self):
         return int(self.get_meta("dropped", 0))
+
+    # --- 後台連線狀態（代理寫、辨識程式讀；兩個行程共用這個檔）---
+    def set_link_state(self, online, now=time.time):
+        self.set_meta("link_state", {"online": bool(online), "ts": now()})
+
+    def link_online(self, max_age=30.0, now=time.time):
+        """代理最近有回報後台在線才算在線；代理沒在跑（狀態太舊）一律當作離線。"""
+        state = self.get_meta("link_state")
+        try:
+            return bool(state["online"]) and now() - float(state["ts"]) <= max_age
+        except (TypeError, KeyError, ValueError):
+            return False
+
+
+class Outbox:
+    """事件送出口：用校正後的時鐘組事件並寫進佇列（代理與辨識程式共用，辨識程式不必知道後台在不在線）。"""
+
+    def __init__(self, store, now=datetime.datetime.now):
+        self.store, self._now = store, now
+
+    def clock_offset(self):
+        return float(self.store.get_meta("clock_offset", 0.0))
+
+    def now(self):
+        return self._now() + datetime.timedelta(seconds=self.clock_offset())
+
+    def submit_event(self, kind, user_id=None, detail="", evidence=None):
+        event = lp.build_event(kind, self.now(), user_id=user_id, detail=detail, evidence=evidence)
+        self.store.enqueue(event)
+        return event["event_id"]
+
+    def submit_punch(self, user_id):
+        return self.submit_event("punch", user_id=user_id)
 
 
 class FaceIndex:

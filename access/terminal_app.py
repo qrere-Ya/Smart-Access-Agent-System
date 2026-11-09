@@ -2,15 +2,17 @@
 terminal_app.py：門禁現場即時人臉辨識主程式。
 
 主要功能：
-  - 讀取攝影機畫面，由背景執行緒做人臉偵測、活體偵測、ArcFace 身分比對
-  - 辨識成功後寫入打卡紀錄，語音問候並播報當日行事曆
+  - 讀取攝影機畫面，由背景執行緒做人臉偵測、活體偵測、ArcFace 身分比對（身分比對、打卡與異常事件經 terminal_backend：
+    單機讀寫本機資料庫，前台角色用本機快取與離線佇列）
+  - 辨識成功後打卡，鏡頭畫面下方顯示半透明黑框「打卡成功　姓名　早安／午安／晚安」，語音念同一句
+  - 單機版上班打卡後播報當日行事曆
   - 偵測放行瞬間是否有多人（尾隨），畫面顯示橫幅警示並拍照存證
   - 偵測有人停留在鏡頭前卻未打卡（pass_through），記為 no_scan_walkby 異常事件
   - 以 OpenCV 視窗顯示辨識結果，按 q 離開
 
 串接模組：
   - vision_core：人臉偵測、對齊、特徵萃取、活體偵測
-  - database_mgr：特徵比對、打卡紀錄、行事曆查詢、異常事件記錄
+  - terminal_backend：特徵比對、打卡紀錄、行事曆、異常事件（單機包住 database_mgr；前台用 front_store 的快取與佇列）
   - security：YOLO 人數統計與尾隨證據圖
   - audio_player：TTS 語音播報
   - utils：畫面中文字繪製
@@ -20,7 +22,6 @@ import sys
 import cv2
 import numpy as np
 from access import vision_core as vc
-from shared import database_mgr as db
 import time
 import threading
 import queue
@@ -29,6 +30,7 @@ from access import security as sec
 from access import pass_through
 from access import pose
 from access import punch_state
+from access import terminal_backend
 from access.audio_player import SmartAudioPlayer
 import traceback
 
@@ -66,6 +68,9 @@ real_counter = 0    # 連續真臉幀數
 
 audio_player = SmartAudioPlayer(speed=1.0)
 
+# 資料後端：單機讀寫本機資料庫，前台用本機快取與佇列（main 依角色建立）
+backend = terminal_backend.LocalBackend()
+
 # 主迴圈把影格丟進佇列，由常駐的分析執行緒取出處理
 _frame_queue = queue.Queue(maxsize=1)
 
@@ -83,16 +88,6 @@ def _publish_tailgate_alert(ts):
     global shared_tailgate_ts
     with _shared_data_lock:
         shared_tailgate_ts = ts
-
-def _get_greeting_by_time():
-    """依目前時段回傳問候語：12 點前早安、18 點前午安、其餘晚安。"""
-    hour = time.localtime().tm_hour
-    if hour < 12:
-        return "早安"
-    elif hour < 18:
-        return "午安"
-    else:
-        return "晚安"
 
 def _analysis_worker(detector):
     """常駐背景執行緒：從 _frame_queue 取影格交給 analyze_in_background 分析。"""
@@ -119,39 +114,26 @@ def _check_pass_through(frame, person_boxes, tailgate_logged):
     try:
         if pass_monitor.update(time.time(), person_boxes, frame.shape[1], tailgate_logged):
             big = max(person_boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
-            db.record_anomaly_event(
-                pass_through.EVENT_TYPE, pass_through.EVENT_DETAIL,
-                make_evidence=lambda: sec.generate_evidence(frame, big, prefix=pass_through.EVENT_TYPE))
+            backend.anomaly(pass_through.EVENT_TYPE, pass_through.EVENT_DETAIL, frame, big)
     except Exception as e:
         print(f"[terminal_app][WARN] 經過未打卡判斷或寫入失敗: {e}")
 
 
-def _log_punch(db_name, current_time):
-    """寫入打卡並依結果播報問候與行事曆，回傳 (畫面文字, 顏色)；同時記下時間讓冷卻與結果停留生效。"""
-    db_status_text = db.log_attendance(db_name)
-    audio_msg = None  # 只有上班、下班打卡成功才會播報問候語
-    if "In:" in db_status_text:
-        display_text, color_bgr = "上班報到成功", (0, 255, 0)
-        audio_msg = f"{db_name}，{_get_greeting_by_time()}"
-        # 上班打卡後播報今日行事曆
-        event = db.get_today_event(db.get_employee_id(db_name))
-        if event:
-            event_time, event_title = event
-            audio_player.speak(f"{db_name}，{event_time}，{event_title}", "calendar")
-    elif "Out:" in db_status_text:
-        display_text, color_bgr = "下班打卡成功", (0, 255, 255)
-        audio_msg = f"{db_name}，{_get_greeting_by_time()}"
-    else:
-        display_text, color_bgr = db_status_text, (255, 255, 255)
-
-    v_key = f"{db_name}_{display_text}"
-    if audio_msg and (current_time - voice_history.get(v_key, 0)) > VOICE_RESET_TIME:
-        audio_player.speak(audio_msg, f"user_{db_name}")
+def _log_punch(recognition, current_time):
+    """打卡（單機寫資料庫、前台進佇列）並播報語音，回傳 PunchOutcome；同時記下時間讓冷卻與結果停留生效。"""
+    outcome = backend.punch(recognition)
+    name = recognition.name
+    if outcome.calendar:
+        audio_player.speak(outcome.calendar, "calendar")
+    v_key = f"{name}_{outcome.voice_key or outcome.text}"
+    if outcome.audio and (current_time - voice_history.get(v_key, 0)) > VOICE_RESET_TIME:
+        audio_player.speak(outcome.audio, f"user_{name}")
         voice_history[v_key] = current_time
 
-    last_seen_dict[db_name] = current_time
-    cooldown_dict[db_name] = {'msg': display_text, 'color': color_bgr}
-    return display_text, color_bgr
+    last_seen_dict[name] = current_time
+    cooldown_dict[name] = {'msg': outcome.text, 'color': outcome.color, 'success': outcome.success,
+                           'greeting': outcome.greeting}
+    return outcome
 
 
 def analyze_in_background(frame_copy, detector):
@@ -234,14 +216,15 @@ def analyze_in_background(frame_copy, detector):
                 aligned_face = vc.face_align(rgb_img, landmarks)
                 face_DNA = vc.feature_extract(aligned_face)
 
-                db_name, _ = db.recognize_face(face_DNA)
-                emp_id = db.get_employee_id(db_name) if db_name not in ["Unknown", "Empty DB"] else "N/A"
-                if db_name not in ["Unknown", "Empty DB"]:
+                recognition = backend.recognize(face_DNA)
+                db_name, emp_id = recognition.name, recognition.employee_id
+                if recognition.known:
                     pass_monitor.note_scan(time.time())
 
                 display_text = "掃描中..."
                 color_bgr = (0, 255, 255)
                 hold_seconds = 0.5
+                success, greeting = False, ""
 
                 if db_name in ["Unknown", "Empty DB"]:
                     display_text = "未登記臉孔，請聯繫管理員"
@@ -251,14 +234,17 @@ def analyze_in_background(frame_copy, detector):
                     phase = punch_state.punch_phase(current_time, last_seen_dict.get(db_name), RESULT_HOLD,
                                                     ATTENDANCE_COOLDOWN)
                     if phase == punch_state.SHOW_RESULT:
-                        display_text = cooldown_dict[db_name]['msg']
-                        color_bgr = cooldown_dict[db_name]['color']
+                        shown = cooldown_dict[db_name]
+                        display_text, color_bgr = shown['msg'], shown['color']
+                        success, greeting = shown.get('success', False), shown.get('greeting', '')
                         hold_seconds = RESULT_HOLD
                     elif phase == punch_state.COOLDOWN:
                         display_text = "打卡冷卻中..."
                         color_bgr = (200, 200, 200)
                     else:
-                        display_text, color_bgr = _log_punch(db_name, current_time)
+                        outcome = _log_punch(recognition, current_time)
+                        display_text, color_bgr = outcome.text, outcome.color
+                        success, greeting = outcome.success, outcome.greeting
                         hold_seconds = RESULT_HOLD
 
                 result_packet = {
@@ -268,7 +254,9 @@ def analyze_in_background(frame_copy, detector):
                     'status': 'single',
                     'name': db_name,
                     'emp_id': emp_id,
-                    'hold': hold_seconds
+                    'hold': hold_seconds,
+                    'success': success,
+                    'greeting': greeting
                 }
 
             # 6. 尾隨偵測（YOLO）：只拍照存證並記錄時間，不覆蓋當事人的打卡結果
@@ -277,9 +265,8 @@ def analyze_in_background(frame_copy, detector):
                 tailgate_logged = True
                 try:
                     # 連續尾隨合併成一筆；只有新增事件時才產生證據照片
-                    db.record_anomaly_event(
-                        "tailgate", f"畫面有 {person_count} 人，只辨識到 {len(detections)} 張臉",
-                        make_evidence=lambda: sec.generate_evidence(frame_copy, person_boxes[-1]))
+                    backend.anomaly("tailgate", f"畫面有 {person_count} 人，只辨識到 {len(detections)} 張臉",
+                                    frame_copy, person_boxes[-1])
                 except Exception as e:
                     print(f"[terminal_app][WARN] 異常事件寫入失敗（不影響警示與證據照片）: {e}")
                 _publish_tailgate_alert(current_time)
@@ -304,8 +291,9 @@ def analyze_in_background(frame_copy, detector):
 
 def main():
     """開啟攝影機與視窗，主迴圈負責取畫面、送分析、繪製介面，按 q 結束並釋放資源。"""
-    global is_analyzing, shared_face_data
-    db.init_db()
+    global is_analyzing, shared_face_data, backend
+    backend = terminal_backend.create_backend()
+    backend.start()
     vc.open_vision()  # 迴圈期間持有視覺模型
     detector = vc.detector
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -319,9 +307,14 @@ def main():
     # 辨識結果快取，避免畫面閃爍
     ui_cache = None
     ui_cache_expire = 0
+    note_text, note_at = "", 0.0
 
     while True:
         ret, raw_frame = cap.read()
+        if time.time() - note_at >= 2.0:     # 每 2 秒：寫心跳給前台代理、更新後台連線提示（不要每幀都查）
+            note_at = time.time()
+            backend.heartbeat(bool(ret))
+            note_text = backend.note()
         if not ret:
             break
 
@@ -381,6 +374,17 @@ def main():
         else:
             canvas = utils.put_chinese_text(canvas, "等待臉孔進入...", (100, 350), (150, 150, 150), 30)
 
+        # 打卡成功：鏡頭畫面下方置中的半透明黑框（姓名與問候，語音念的也是同一句）
+        if ui_cache and ui_cache.get('status') == 'single' and ui_cache.get('success'):
+            who = str(ui_cache.get('name', ''))
+            view = utils.draw_message_box(
+                canvas[0:720, 740:1280],
+                [("打卡成功", (0, 255, 0), 36), (f"姓名 {who}　{ui_cache.get('greeting', '')}", (255, 255, 255), 30)],
+                center=(270, 605), padding=20, gap=10)
+            canvas[0:720, 740:1280] = view
+        if note_text:
+            canvas = utils.put_chinese_text(canvas, note_text, (100, 640), (0, 165, 255), 24)
+
         # 頂部橫幅：尾隨警示優先，其次是活體或安全性警告
         if latest_tailgate_ts is not None and (current_time - latest_tailgate_ts) < TAILGATE_BANNER_HOLD:
             cv2.rectangle(canvas, (0, 0), (1280, 60), (0, 140, 255), -1)
@@ -401,6 +405,7 @@ def main():
             break
 
     # 結束：釋放攝影機、視窗、執行緒與模型
+    backend.close()
     cap.release()
     cv2.destroyAllWindows()
     _frame_queue.put(None)

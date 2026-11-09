@@ -218,6 +218,12 @@ def is_user_registered(dna_or_name):
     name, _ = recognize_face(dna_or_name)
     return name not in ["Unknown", "Empty DB"]
 
+def punch_window_open(current_time):
+    """這個時間（HH:MM:SS）有沒有可能寫入打卡：準時窗開始到中午前，或午休結束之後。
+    只看時間；今天已經打過幾次要查資料庫，前台不知道，所以前台只用它擋掉一定不會記的時段。"""
+    return SHIFT_ON_TIME_START <= current_time < MORNING_CUTOFF or current_time >= AFTERNOON_RESUME
+
+
 def log_attendance(name, user_id=None, now=None):
     """考勤核心邏輯：依今天已有的紀錄與目前時間，判斷上班、遲到、早退、下班，
     並寫入或更新紀錄；未給 user_id 時由姓名查（姓名唯一才採用）；now 是事件發生時間（前台離線補送時用），預設現在"""

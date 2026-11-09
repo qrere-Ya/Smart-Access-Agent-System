@@ -27,7 +27,7 @@ import time
 import requests
 from flask import Flask, jsonify, request
 
-from access.front_store import FaceIndex, FrontStore
+from access.front_store import FaceIndex, FrontStore, Outbox
 from shared import link_protocol as lp, paths, role_config
 
 SYNC_SECONDS = 10
@@ -35,6 +35,7 @@ MAX_BACKOFF_SECONDS = 60
 MAX_CLOCK_SKEW_SECONDS = 30
 HEARTBEAT_STALE_SECONDS = 15
 FLUSH_BATCH = 50
+EARLY_FLUSH_SECONDS = 2          # 在線時，佇列裡有新事件最慢這麼久就會送出（不用等完整同步週期）
 HEARTBEAT_PATH = os.path.join(paths.RUNTIME_DIR, "front_heartbeat.json")
 
 
@@ -100,6 +101,7 @@ class BackClient:
 class FrontAgent:
     def __init__(self, store, client, now=datetime.datetime.now, clock=time.time, heartbeat_path=None):
         self.store, self.client, self._now, self._clock = store, client, now, clock
+        self.outbox = Outbox(store, now)
         self.heartbeat_path = heartbeat_path or HEARTBEAT_PATH
         self.back_online = False
         self.auth_error = False
@@ -110,11 +112,11 @@ class FrontAgent:
 
     # --- 時鐘與辨識用的快取 ---
     def clock_offset(self):
-        return float(self.store.get_meta("clock_offset", 0.0))
+        return self.outbox.clock_offset()
 
     def now(self):
         """校正後的現在時間（事件時間用這個）。"""
-        return self._now() + datetime.timedelta(seconds=self.clock_offset())
+        return self.outbox.now()
 
     @property
     def index(self):
@@ -123,17 +125,22 @@ class FrontAgent:
     # --- 送事件 ---
     def submit_event(self, kind, user_id=None, detail="", evidence=None):
         """組出事件並寫進佇列；回傳事件編號。事件時間是校正後的現在。"""
-        event = lp.build_event(kind, self.now(), user_id=user_id, detail=detail, evidence=evidence)
-        self.store.enqueue(event)
+        event_id = self.outbox.submit_event(kind, user_id=user_id, detail=detail, evidence=evidence)
         self._wake.set()
-        return event["event_id"]
+        return event_id
 
     def submit_punch(self, user_id):
         return self.submit_event("punch", user_id=user_id)
 
     # --- 同步 ---
     def sync_once(self):
-        """做一輪同步；回傳 True 表示後台在線。任何暫時失敗都不丟例外。"""
+        """做一輪同步並把在線狀態寫進本機檔（辨識程式據此提示）；回傳 True 表示後台在線。"""
+        online = self._sync_once()
+        self.store.set_link_state(online, now=self._clock)
+        return online
+
+    def _sync_once(self):
+        """做一輪同步；任何暫時失敗都不丟例外。"""
         try:
             self._sync_clock()
             self._sync_faces()
@@ -195,11 +202,23 @@ class FrontAgent:
 
     def run(self, stop, interval=SYNC_SECONDS):
         """同步迴圈：在線每 interval 秒一輪，離線逐步拉長（最多 MAX_BACKOFF_SECONDS）；有新事件時提早醒來。"""
-        delay = interval
+        delay, next_sync = interval, 0.0
         while not stop.is_set():
-            delay = interval if self.sync_once() else min(max(delay * 2, interval), MAX_BACKOFF_SECONDS)
-            self._wake.wait(delay)
+            if self._clock() >= next_sync:
+                delay = interval if self.sync_once() else min(max(delay * 2, interval), MAX_BACKOFF_SECONDS)
+                next_sync = self._clock() + delay
+            elif self.back_online and self.store.pending_count():
+                self._flush_early()
+            self._wake.wait(EARLY_FLUSH_SECONDS)
             self._wake.clear()
+
+    def _flush_early(self):
+        try:
+            self.flush_queue()
+        except (BackOffline, BackAuthError) as e:
+            self.back_online, self.last_error = False, str(e)
+            self.store.set_link_state(False, now=self._clock)
+            return
 
     # --- 狀態 ---
     def heartbeat(self):
