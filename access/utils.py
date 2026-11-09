@@ -4,6 +4,7 @@ utils.py：畫面繪製小工具。
 主要功能：
   - put_chinese_text：在 OpenCV 影像上繪製中文字（OpenCV 本身不支援中文，改用 PIL 繪製）
   - 字型載入後快取，避免每幀重複讀取字型檔
+  - printable：先拿掉字型沒有的符號（如 ⚠ 表情符號），否則會畫成方框
 
 串接模組：
   - terminal_app：繪製辨識介面文字
@@ -31,6 +32,16 @@ def _get_font(font_size):
     _FONT_CACHE[font_size] = font
     return font
 
+def printable(text):
+    """拿掉字型畫不出來的符號（表情符號、變體選擇符、零寬連接符），避免畫面出現方框（□）。"""
+    return "".join(c for c in str(text) if not _is_pictograph(ord(c)))
+
+
+def _is_pictograph(code):
+    return (0x2600 <= code <= 0x27BF or 0x2B00 <= code <= 0x2BFF or 0x1F000 <= code <= 0x1FAFF
+            or 0xFE00 <= code <= 0xFE0F or code == 0x200D)
+
+
 def put_chinese_text(img, text, position, text_color=(0, 255, 0), font_size=30):
     """在 BGR 影像上繪製中文字，回傳繪製後的新影像。"""
     # OpenCV 是 BGR、PIL 是 RGB，先轉換
@@ -45,7 +56,7 @@ def put_chinese_text(img, text, position, text_color=(0, 255, 0), font_size=30):
     b, g, r = text_color
     pil_color = (r, g, b)
 
-    draw.text(position, text, font=font, fill=pil_color)
+    draw.text(position, printable(text), font=font, fill=pil_color)
 
     cv2_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 

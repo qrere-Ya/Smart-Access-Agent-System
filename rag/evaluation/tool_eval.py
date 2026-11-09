@@ -112,7 +112,10 @@ def evaluate(complete: Callable[[str], str], questions: List[dict], multi: bool 
             prompt = router.build_prompt(item["q"], item.get("history", ""), EVAL_DAY, multi=multi)
             error = False
             try:
-                plan = router.parse_plan(_complete_with_retry(complete, prompt, pause))
+                if router.guard.screen(item["q"]):   # 和正式流程相同：先過 guard，被擋下就不問語言模型
+                    plan = router.Plan(docs=False, source="guard", refused="blocked")
+                else:
+                    plan = router.parse_plan(_complete_with_retry(complete, prompt, pause))
             except Exception as e:
                 print(f"[tool_eval] {item['id']} 呼叫失敗：{type(e).__name__}")
                 plan, error = None, True

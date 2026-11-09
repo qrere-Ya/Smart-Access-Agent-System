@@ -27,6 +27,8 @@ import queue
 from access import utils
 from access import security as sec
 from access import pass_through
+from access import pose
+from access import punch_state
 from access.audio_player import SmartAudioPlayer
 import traceback
 
@@ -42,10 +44,13 @@ shared_face_data = None    # 最新辨識結果，背景執行緒寫、主執行
 
 # 打卡與語音冷卻
 cooldown_dict = {}
-DB_QUERY_COOLDOWN = 3.0    # 同一人重複寫入資料庫的最短間隔（秒）
+RESULT_HOLD = 4.0          # 打卡成功後，結果畫面至少停留的秒數（人離開鏡頭也繼續顯示）
 voice_history = {}
 VOICE_RESET_TIME = 43200   # 同一句問候語再次播報的間隔（秒，12 小時）
 last_seen_dict = {}        # 每位員工最後一次成功打卡的時間
+TERMINAL_MAX_YAW = 0.35    # 轉頭上限（鼻子偏離雙眼中點占雙眼距離的比例），比後台登入寬鬆，只擋明顯側臉
+TERMINAL_MAX_ROLL = 25.0   # 歪頭上限（度）
+TERMINAL_PITCH = (0.20, 0.80)  # 仰頭低頭的容許範圍，比後台登入寬（鏡頭常裝得比臉高或低）
 ATTENDANCE_COOLDOWN = 60   # 打卡冷卻時間（秒）
 
 # 尾隨警示狀態，與個人打卡結果分開存放
@@ -121,6 +126,34 @@ def _check_pass_through(frame, person_boxes, tailgate_logged):
         print(f"[terminal_app][WARN] 經過未打卡判斷或寫入失敗: {e}")
 
 
+def _log_punch(db_name, current_time):
+    """寫入打卡並依結果播報問候與行事曆，回傳 (畫面文字, 顏色)；同時記下時間讓冷卻與結果停留生效。"""
+    db_status_text = db.log_attendance(db_name)
+    audio_msg = None  # 只有上班、下班打卡成功才會播報問候語
+    if "In:" in db_status_text:
+        display_text, color_bgr = "上班報到成功", (0, 255, 0)
+        audio_msg = f"{db_name}，{_get_greeting_by_time()}"
+        # 上班打卡後播報今日行事曆
+        event = db.get_today_event(db.get_employee_id(db_name))
+        if event:
+            event_time, event_title = event
+            audio_player.speak(f"{db_name}，{event_time}，{event_title}", "calendar")
+    elif "Out:" in db_status_text:
+        display_text, color_bgr = "下班打卡成功", (0, 255, 255)
+        audio_msg = f"{db_name}，{_get_greeting_by_time()}"
+    else:
+        display_text, color_bgr = db_status_text, (255, 255, 255)
+
+    v_key = f"{db_name}_{display_text}"
+    if audio_msg and (current_time - voice_history.get(v_key, 0)) > VOICE_RESET_TIME:
+        audio_player.speak(audio_msg, f"user_{db_name}")
+        voice_history[v_key] = current_time
+
+    last_seen_dict[db_name] = current_time
+    cooldown_dict[db_name] = {'msg': display_text, 'color': color_bgr}
+    return display_text, color_bgr
+
+
 def analyze_in_background(frame_copy, detector):
     """單幀完整分析：人臉偵測 → 活體 → 身分比對與打卡 → 尾隨偵測，結果寫入共用狀態。"""
     global is_analyzing, shared_face_data, cooldown_dict, voice_history, last_seen_dict
@@ -157,7 +190,7 @@ def analyze_in_background(frame_copy, detector):
 
                     _publish_face_data({
                         'coords': (x1, y1, x2, y2),
-                        'text': f"⚠️ 拒絕：非活體攻擊 (score={liveness_score:.3f})",
+                        'text': f"拒絕：非活體攻擊 (score={liveness_score:.3f})",
                         'color': (0, 0, 255),
                         'status': 'single',
                         'name': 'FAKE',
@@ -181,7 +214,21 @@ def analyze_in_background(frame_copy, detector):
                     })
                     return
 
-                # 3. 身分比對
+                # 3. 姿勢：明顯轉頭、低頭時不比對身分，只提示（側臉比對不準，會被誤報成「未登記臉孔」）
+                frontal, hint, _pose = pose.frontal_check(face_info, max_yaw=TERMINAL_MAX_YAW,
+                                                          max_roll=TERMINAL_MAX_ROLL, pitch_range=TERMINAL_PITCH)
+                if not frontal:
+                    _publish_face_data({
+                        'coords': (x1, y1, x2, y2),
+                        'text': hint,
+                        'color': (0, 255, 255),
+                        'status': 'single',
+                        'name': 'SCANNING',
+                        'emp_id': '---'
+                    })
+                    return
+
+                # 4. 身分比對
                 landmarks = [face_info['left_eye'], face_info['right_eye'], face_info['nose'],
                              face_info['left_lip'], face_info['right_lip']]
                 aligned_face = vc.face_align(rgb_img, landmarks)
@@ -194,53 +241,25 @@ def analyze_in_background(frame_copy, detector):
 
                 display_text = "掃描中..."
                 color_bgr = (0, 255, 255)
+                hold_seconds = 0.5
 
                 if db_name in ["Unknown", "Empty DB"]:
                     display_text = "未登記臉孔，請聯繫管理員"
                     color_bgr = (0, 0, 255)
                 else:
-                    # 4. 打卡：冷卻期內只更新畫面，不寫資料庫、不播語音
-                    if (current_time - last_seen_dict.get(db_name, 0)) < ATTENDANCE_COOLDOWN:
+                    # 5. 打卡：剛成功的幾秒繼續顯示結果，之後冷卻期內只更新畫面，不寫資料庫、不播語音
+                    phase = punch_state.punch_phase(current_time, last_seen_dict.get(db_name), RESULT_HOLD,
+                                                    ATTENDANCE_COOLDOWN)
+                    if phase == punch_state.SHOW_RESULT:
+                        display_text = cooldown_dict[db_name]['msg']
+                        color_bgr = cooldown_dict[db_name]['color']
+                        hold_seconds = RESULT_HOLD
+                    elif phase == punch_state.COOLDOWN:
                         display_text = "打卡冷卻中..."
                         color_bgr = (200, 200, 200)
                     else:
-                        if (db_name not in cooldown_dict
-                                or (current_time - cooldown_dict[db_name]['time']) > DB_QUERY_COOLDOWN):
-                            db_status_text = db.log_attendance(db_name)
-                            # 只有上班、下班打卡成功才會播報問候語
-                            audio_msg = None
-
-                            if "In:" in db_status_text:
-                                display_text = "上班報到成功"
-                                audio_msg = f"{db_name}，{_get_greeting_by_time()}"
-                                color_bgr = (0, 255, 0)
-
-                                # 上班打卡後播報今日行事曆
-                                emp_id_val = db.get_employee_id(db_name)
-                                event = db.get_today_event(emp_id_val)
-                                if event:
-                                    event_time, event_title = event
-                                    calendar_text = f"{db_name}，{event_time}，{event_title}"
-                                    audio_player.speak(calendar_text, "calendar")
-                            elif "Out:" in db_status_text:
-                                display_text = "下班打卡成功"
-                                audio_msg = f"{db_name}，{_get_greeting_by_time()}"
-                                color_bgr = (0, 255, 255)
-                            else:
-                                display_text = db_status_text
-                                color_bgr = (255, 255, 255)
-
-                            v_key = f"{db_name}_{display_text}"
-                            if audio_msg and (current_time - voice_history.get(v_key, 0)) > VOICE_RESET_TIME:
-                                audio_player.speak(audio_msg, f"user_{db_name}")
-                                voice_history[v_key] = current_time
-
-                            # 記錄打卡時間以啟動冷卻
-                            last_seen_dict[db_name] = current_time
-                            cooldown_dict[db_name] = {'time': current_time, 'msg': display_text, 'color': color_bgr}
-                        else:
-                            display_text = cooldown_dict[db_name]['msg']
-                            color_bgr = cooldown_dict[db_name]['color']
+                        display_text, color_bgr = _log_punch(db_name, current_time)
+                        hold_seconds = RESULT_HOLD
 
                 result_packet = {
                     'coords': (x1, y1, x2, y2),
@@ -248,10 +267,11 @@ def analyze_in_background(frame_copy, detector):
                     'color': color_bgr,
                     'status': 'single',
                     'name': db_name,
-                    'emp_id': emp_id
+                    'emp_id': emp_id,
+                    'hold': hold_seconds
                 }
 
-            # 5. 尾隨偵測（YOLO）：只拍照存證並記錄時間，不覆蓋當事人的打卡結果
+            # 6. 尾隨偵測（YOLO）：只拍照存證並記錄時間，不覆蓋當事人的打卡結果
             person_count = len(person_boxes)
             if person_count >= 2:
                 tailgate_logged = True
@@ -328,10 +348,10 @@ def main():
             latest_face_data = shared_face_data
             latest_tailgate_ts = shared_tailgate_ts
 
-        # 有新結果就更新快取；超過 0.5 秒沒更新才清空
+        # 有新結果就更新快取；超過保留秒數（預設 0.5，打卡結果較久）沒更新才清空
         if latest_face_data is not None:
             ui_cache = latest_face_data
-            ui_cache_expire = current_time + 0.5
+            ui_cache_expire = current_time + latest_face_data.get('hold', 0.5)
         elif current_time > ui_cache_expire:
             ui_cache = None
 

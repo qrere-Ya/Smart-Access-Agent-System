@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 
-from rag import dates, queries, router, tools
+from rag import dates, guard, queries, router, tools
 
 TOP_K = 5
 CANDIDATES = 20
@@ -70,7 +70,7 @@ class Trace:
     hits: list = field(default_factory=list)
     data_text: str = ""
     tools: list = field(default_factory=list)   # 本題實際執行的工具名稱（依序）
-    outcome: str = ""   # answered、clarify、no_basis、help、error
+    outcome: str = ""   # answered、clarify、no_basis、help、refused、error
     note: str = ""      # 內部提示，例如 LLM 的說明因為數字對不上而沒有採用
 
 
@@ -110,8 +110,9 @@ class Assistant:
         for piece in self._answer(question):
             collected.append(piece)
             yield piece
-        self._last_range = self.last.date_range if self.last.tools else None   # 只有上一題才算，文件題之後就不沿用
-        self._remember(question, "".join(collected))
+        if self.last.outcome != "refused":   # 被擋下的要求不改變對話狀態
+            self._last_range = self.last.date_range if self.last.tools else None   # 只有上一題才算，文件題之後就不沿用
+            self._remember(question, "".join(collected))
 
     # --- 內部 ---
 
@@ -135,6 +136,11 @@ class Assistant:
         self._refresh_roster()
         today = self._today()
         plan = router.make_plan(self.router_llm, question, self._history_text(), today)
+        if plan.refused:   # 惡意或越權的要求：不查、不問語言模型，也不記進對話（否則會被帶進之後的提示詞）
+            self.last.plan, self.last.outcome, self.last.note = plan, "refused", plan.refused
+            self._pending = None
+            yield guard.REFUSAL + HELP_TEXT
+            return
         pending, self._pending, self._confirmed_person = self._pending, None, ""
         if pending is not None and self._is_reply_to(pending, question, plan, today):
             # 上一題因人名不明而反問，這一題只是回人名或確認（沒有自己的時間、也沒有另一件要查的事）：

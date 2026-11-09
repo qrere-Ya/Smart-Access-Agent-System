@@ -7,6 +7,7 @@ router.py：判斷一個問題要「查文件」、「查資料庫」，還是�
     退回只做主查詢，所以多步規劃壞掉也不會讓原本能回答的題目失敗
   - LLM 的輸出一律先驗證：查詢種類、狀態只接受白名單內的值，人名長度有限制，格式不對就當作失敗
   - LLM 失敗或輸出不合格時，退回用關鍵字判斷，所以意圖判斷不會讓整個流程中斷
+  - 問題先經 guard 把關：夾帶 SQL、JSON 指令、要求改規則、寫入資料或洩漏金鑰的，不問 LLM，直接回傳拒絕的計畫（refused）
   - 日期和人名不在這裡決定：日期由 dates 解析、人名由 entity_resolver 對照名單
 
 串接模組：
@@ -18,7 +19,7 @@ import json
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from rag import tools
+from rag import guard, tools
 
 DATA_TOOLS = tuple(tools.TOOLS)
 MAX_STEPS = 3
@@ -55,6 +56,7 @@ class Plan:
     source: str = "llm"  # llm 或 heuristic
     steps: List[Step] = field(default_factory=list)  # 追加的查詢，順序即執行順序
     same_period: bool = False  # 追問且沒有自己的時間說法：沿用上一題的日期區間（由 LLM 依對話判斷）
+    refused: str = ""  # 被 guard 擋下時的類型（sql、payload、override、write、exfiltrate），空字串表示沒被擋
 
 
 _MULTI_RULE = (
@@ -215,7 +217,10 @@ def heuristic_plan(question: str) -> Plan:
 
 
 def make_plan(llm, question: str, history: str, today: datetime.date) -> Plan:
-    """先問 LLM；失敗或輸出不合格就用關鍵字備案。"""
+    """先過 guard；通過才問 LLM，失敗或輸出不合格就用關鍵字備案。"""
+    reason = guard.screen(question)
+    if reason:
+        return Plan(docs=False, source="guard", refused=reason)
     if llm is not None:
         try:
             plan = parse_plan(llm.complete(build_prompt(question, history, today)))
