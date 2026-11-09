@@ -28,14 +28,15 @@ def test_default_is_standalone_and_changes_nothing(conf):
 def test_back_and_front_settings_round_trip(conf):
     rc.save(rc.LinkSettings(rc.BACK, bind_host="192.168.50.1"))
     assert (rc.load().role, rc.load().bind_host) == (rc.BACK, "192.168.50.1")
-    rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", back_port=9000))
+    rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2", back_port=9000))
     loaded = rc.load()
     assert (loaded.role, loaded.back_host, loaded.back_port) == (rc.FRONT, "192.168.50.1", 9000)
 
 
 @pytest.mark.parametrize("content", ["", "nope", "[]", '{"role": "boss"}', '{"role": "front"}',
                                      '{"role": "back", "bind_host": "0.0.0.0"}',
-                                     '{"role": "front", "back_host": "8.8.8.8"}',
+                                     '{"role": "front", "back_host": "8.8.8.8", "bind_host": "192.168.50.2"}',
+                                     '{"role": "front", "back_host": "192.168.50.1"}',       # 前台也要有自己的綁定位址
                                      '{"role": "back", "bind_host": "192.168.50.1", "back_port": 80}',
                                      '{"role": "back", "bind_host": "192.168.50.1", "back_port": "abc"}'])
 def test_a_broken_or_unsafe_file_falls_back_to_standalone(conf, content):

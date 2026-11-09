@@ -41,7 +41,7 @@ class LinkSettings:
     role: str = STANDALONE
     back_host: str = ""                       # 前台連去的後台位址（內網 IPv4）
     back_port: int = DEFAULT_BACK_PORT
-    bind_host: str = ""                       # 後台綁定的位址（網路線那張網卡的 IPv4）
+    bind_host: str = ""                       # 本機綁定的位址（網路線那張網卡的 IPv4；後台服務與前台狀態服務都用）
     front_status_port: int = DEFAULT_FRONT_STATUS_PORT
 
 
@@ -80,6 +80,7 @@ def validate(settings):
         private_ipv4(settings.bind_host, "後台綁定位址")
     if settings.role == FRONT:
         private_ipv4(settings.back_host, "後台位址")
+        private_ipv4(settings.bind_host, "前台綁定位址（前台狀態服務用）")
     return settings
 
 
@@ -164,7 +165,7 @@ def _describe(settings):
         lines.append(f"前台狀態埠（後台去查）：{settings.front_status_port}")
     elif settings.role == FRONT:
         lines.append(f"後台位址：{settings.back_host}:{settings.back_port}")
-        lines.append(f"前台狀態埠：{settings.front_status_port}")
+        lines.append(f"前台綁定位址（狀態服務）：{settings.bind_host}:{settings.front_status_port}")
     lines.append(f"通行碼：{token}")
     return "\n".join(lines)
 
@@ -177,7 +178,7 @@ def main(argv=None):
     put = sub.add_parser("set", help="設定角色與位址")
     put.add_argument("--role", choices=ROLES, required=True)
     put.add_argument("--back-host", default="", help="前台用：後台的內網 IPv4")
-    put.add_argument("--bind-host", default="", help="後台用：網路線那張網卡的 IPv4")
+    put.add_argument("--bind-host", default="", help="後台與前台都要填：本機網路線那張網卡的 IPv4")
     put.add_argument("--back-port", type=int, default=DEFAULT_BACK_PORT)
     put.add_argument("--front-status-port", type=int, default=DEFAULT_FRONT_STATUS_PORT)
     args = parser.parse_args(argv)

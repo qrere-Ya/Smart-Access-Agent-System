@@ -142,6 +142,11 @@ def init_db():
         conn_db.execute("ALTER TABLE AnomalyEvents ADD COLUMN event_count INTEGER DEFAULT 1")
     conn_db.execute("CREATE INDEX IF NOT EXISTS idx_anomaly_timestamp ON AnomalyEvents(timestamp)")
 
+    # 前台送來的事件編號（補送時不會重複寫入）
+    conn_db.execute("""CREATE TABLE IF NOT EXISTS LinkEvents
+                    (event_id TEXT PRIMARY KEY,
+                    received_at TEXT NOT NULL)""")
+
     conn_db.commit()
     conn_db.close()
     # 第一次建立事件表時，把資料夾裡已有的舊證據照片匯入
@@ -213,16 +218,16 @@ def is_user_registered(dna_or_name):
     name, _ = recognize_face(dna_or_name)
     return name not in ["Unknown", "Empty DB"]
 
-def log_attendance(name, user_id=None):
+def log_attendance(name, user_id=None, now=None):
     """考勤核心邏輯：依今天已有的紀錄與目前時間，判斷上班、遲到、早退、下班，
-    並寫入或更新紀錄；未給 user_id 時由姓名查（姓名唯一才採用）"""
+    並寫入或更新紀錄；未給 user_id 時由姓名查（姓名唯一才採用）；now 是事件發生時間（前台離線補送時用），預設現在"""
     conn_db = sqlite3.connect(DB_PATH)
     cursor = conn_db.cursor()
     if user_id is None:
         matches = cursor.execute("SELECT id FROM Users WHERE name=?", (name,)).fetchall()
         user_id = matches[0][0] if len(matches) == 1 else None
 
-    now = datetime.datetime.now()
+    now = now or datetime.datetime.now()
     today_date = now.strftime("%Y-%m-%d")
     current_time = now.strftime("%H:%M:%S")
     full_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -477,6 +482,41 @@ def recognize_admin(target_embedding, threshold=1.0):
     return (best_name, best_dist) if best_dist < threshold else ("Unknown", best_dist)
 
 
+# --- 前台連線（L2）：給前台的人臉快照、收件去重 ---
+
+def list_link_faces():
+    """給前台的人臉資料：啟用中員工的編號、姓名、員工編號、角色、特徵（numpy）；依編號排序，順序固定。"""
+    with closing(sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES, timeout=5)) as conn_db:
+        rows = conn_db.execute(
+            "SELECT id, name, employee_id, COALESCE(role, 'employee'), embedding FROM Users "
+            "WHERE is_active = 1 OR is_active IS NULL ORDER BY id").fetchall()
+    return [{"id": r[0], "name": r[1], "employee_id": r[2], "role": r[3], "embedding": r[4]} for r in rows]
+
+
+def get_active_user(user_id):
+    """依編號取啟用中的員工 (姓名, 員工編號)；找不到或已停用回傳 None。"""
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        row = conn_db.execute("SELECT name, employee_id FROM Users "
+                              "WHERE id = ? AND (is_active = 1 OR is_active IS NULL)", (user_id,)).fetchone()
+    return (row[0], row[1]) if row else None
+
+
+def claim_link_event(event_id):
+    """登記前台事件編號；第一次登記回傳 True，已經收過回傳 False（補送重複的事件不再處理）。"""
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        cur = conn_db.execute("INSERT OR IGNORE INTO LinkEvents (event_id, received_at) VALUES (?, ?)",
+                              (event_id, datetime.datetime.now().strftime(_TS_FORMAT)))
+        conn_db.commit()
+        return cur.rowcount == 1
+
+
+def release_link_event(event_id):
+    """處理失敗時取消登記，讓前台之後可以重送。"""
+    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+        conn_db.execute("DELETE FROM LinkEvents WHERE event_id = ?", (event_id,))
+        conn_db.commit()
+
+
 # --- 異常事件 ---
 
 _EVIDENCE_NAME = re.compile(r"^(?P<type>[a-z]+)_(?P<d>\d{8})_(?P<t>\d{6})\.jpg$")
@@ -503,13 +543,14 @@ def _merged_detail(detail, count, first_ts, last_ts):
     return f"{base}{_MERGE_MARK}{count} 次，{first_ts[11:]} ~ {last_ts[11:]}）"
 
 
-def record_anomaly_event(event_type, detail="", make_evidence=None, merge_window=ANOMALY_MERGE_SECONDS):
+def record_anomaly_event(event_type, detail="", make_evidence=None, merge_window=ANOMALY_MERGE_SECONDS, now=None):
     """
     記錄異常事件；同類型事件與前一筆的最後發生時間相隔不超過 merge_window 秒時，合併進前一筆
     （次數加一、更新結束時間與說明），不再新增、也不再呼叫 make_evidence 產生新證據照片。
     make_evidence 為無參數函式，只在需要新增一筆時才呼叫，回傳證據路徑。回傳 (事件編號, 是否為合併)。
+    now 是事件發生時間（前台離線補送時用），預設現在。
     """
-    now = datetime.datetime.now()
+    now = now or datetime.datetime.now()
     now_str = now.strftime(_TS_FORMAT)
     with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
         last = conn_db.execute(
@@ -529,7 +570,7 @@ def record_anomaly_event(event_type, detail="", make_evidence=None, merge_window
                 conn_db.commit()
                 return last[0], True
     evidence_path = make_evidence() if make_evidence else None
-    return add_anomaly_event(event_type, evidence_path, detail), False
+    return add_anomaly_event(event_type, evidence_path, detail, timestamp=now_str), False
 
 
 def list_anomaly_events(start=None, end=None, event_type=None, limit=200):
