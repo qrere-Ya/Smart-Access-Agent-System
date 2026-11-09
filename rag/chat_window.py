@@ -315,13 +315,10 @@ def main():
     """只接受從後台開啟（帶著有效的登入代碼）；直接執行沒有代碼就拒絕。"""
     token = os.environ.pop(auth.TOKEN_ENV, None)
     if auth.verify_token(token) is None:
-        import tkinter
-        from tkinter import messagebox
-
-        root = tkinter.Tk()
-        root.withdraw()
-        messagebox.showerror("需要登入", "企業知識庫只能從管理後台開啟。"
-                             + chr(10) + "請先執行 python -m admin.backend_main 登入，再按「企業知識庫與出勤查詢」。")
+        root = ctk.CTk()
+        root.attributes("-alpha", 0)       # 不用 withdraw：被隱藏的主視窗會連帶藏起它的對話框
+        ui_theme.show_message(root, "需要登入", "企業知識庫只能從管理後台開啟。" + chr(10)
+                              + "請先執行 python -m admin.backend_main 登入，再按「企業知識庫與出勤查詢」。", "error")
         root.destroy()
         sys.exit(2)
     AssistantWindow(session_token=token).mainloop()
