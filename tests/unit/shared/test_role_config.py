@@ -6,7 +6,7 @@ import pytest
 
 from shared import paths, role_config as rc
 
-TOKEN = "x" * 40
+TOKEN = "oGo0iq6_xu9Jp7cwTM0ttP-BTbTQ9Zefin8GaJMQpyc"
 
 
 @pytest.fixture
@@ -28,7 +28,8 @@ def test_default_is_standalone_and_changes_nothing(conf):
 def test_back_and_front_settings_round_trip(conf):
     rc.save(rc.LinkSettings(rc.BACK, bind_host="192.168.50.1"))
     assert (rc.load().role, rc.load().bind_host) == (rc.BACK, "192.168.50.1")
-    rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2", back_port=9000))
+    rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2", back_port=9000,
+                             back_fingerprint=":".join(["AB"] * 32)))
     loaded = rc.load()
     assert (loaded.role, loaded.back_host, loaded.back_port) == (rc.FRONT, "192.168.50.1", 9000)
 
@@ -126,3 +127,31 @@ def test_cli_set_show_and_bad_input(conf, monkeypatch, capsys):
     assert "不是內網位址" in capsys.readouterr().out
     assert rc.load().role == rc.BACK                                                 # 壞輸入沒有蓋掉舊設定
     assert rc.main(["token"]) == 0 and len(capsys.readouterr().out.strip()) >= rc.MIN_TOKEN_CHARS
+
+
+def test_a_front_with_a_typed_address_needs_a_fingerprint_and_the_fingerprint_is_normalized(conf):
+    with pytest.raises(rc.ConfigError, match="指紋"):
+        rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2"))
+    with pytest.raises(rc.ConfigError, match="指紋"):
+        rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2", back_fingerprint="12"))
+    rc.save(rc.LinkSettings(rc.FRONT, back_host="auto", bind_host="auto"))            # auto 不需要手動指紋
+    assert rc.load().role == rc.FRONT
+
+
+@pytest.mark.parametrize("weak", ["", "short", "a" * 60, "abababababababababababababababababababababab",
+                                  "correct horse battery staple correct horse battery", "密" * 50,
+                                  "AbCdEfGhIjKlMnOpQrStUvWxYz012345!@#$%^&*()"])
+def test_weak_or_hand_made_tokens_are_refused(monkeypatch, weak):
+    """好記的字串可以被拿去離線猜（探測回覆的簽章就是驗證器），所以只接受像 new_token() 的輸出。"""
+    monkeypatch.setenv(rc.TOKEN_ENV, weak)
+    assert rc.link_token() == "" and rc.token_matches(weak) is False
+    with pytest.raises(rc.ConfigError, match="不夠強"):
+        rc.require_token()
+
+
+def test_generated_tokens_are_always_accepted(monkeypatch):
+    for _ in range(50):
+        token = rc.new_token()
+        assert rc.token_is_strong(token)
+    monkeypatch.setenv(rc.TOKEN_ENV, token)
+    assert rc.link_token() == token and rc.token_matches(token)

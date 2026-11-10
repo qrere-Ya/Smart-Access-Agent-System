@@ -19,17 +19,20 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 from dataclasses import asdict, dataclass
 
-from shared import paths
+from shared import link_tls, paths
 
 ROLE_ENV = "SMART_ACCESS_ROLE"
 TOKEN_ENV = "SMART_ACCESS_LINK_TOKEN"  # noqa: S105  # nosec B105  環境變數名稱，不是密碼
 STANDALONE, BACK, FRONT = "standalone", "back", "front"
 ROLES = (STANDALONE, BACK, FRONT)
 AUTO = "auto"                 # bind_host／back_host 填 auto：直連網路線時自動找位址（shared.lan_discovery）
-MIN_TOKEN_CHARS = 32
+MIN_TOKEN_CHARS = 43             # new_token() 產生的長度（256 位元）；自己編的好記字串會被擋下
+MIN_DISTINCT_CHARS = 16
+_TOKEN_SHAPE = re.compile(r"[A-Za-z0-9_-]+")
 DEFAULT_BACK_PORT = 8770
 DEFAULT_FRONT_STATUS_PORT = 8771
 
@@ -45,6 +48,7 @@ class LinkSettings:
     back_port: int = DEFAULT_BACK_PORT
     bind_host: str = ""                       # 本機綁定的位址（網路線那張網卡的 IPv4；後台服務與前台狀態服務都用）
     front_status_port: int = DEFAULT_FRONT_STATUS_PORT
+    back_fingerprint: str = ""                # 前台手動填後台位址時要信任的憑證指紋（SHA-256）；auto 模式從探測回覆取得
 
 
 def private_ipv4(value, what="位址"):
@@ -88,6 +92,9 @@ def validate(settings):
         _address_or_auto(settings.bind_host, "後台綁定位址")
     if settings.role == FRONT:
         _address_or_auto(settings.back_host, "後台位址")
+        if settings.back_host.strip().lower() != AUTO and not link_tls.normalize(settings.back_fingerprint):
+            raise ConfigError("手動填後台位址時，還要填後台憑證指紋（--back-fingerprint，64 字元十六進位）；"
+                              "連線一律加密，不會退回明文。位址填 auto 就會自動取得")
         _address_or_auto(settings.bind_host, "前台綁定位址（前台狀態服務用）")
     return settings
 
@@ -111,7 +118,8 @@ def load(path=None):
             back_host=str(data.get("back_host") or ""),
             back_port=data.get("back_port", DEFAULT_BACK_PORT),
             bind_host=str(data.get("bind_host") or ""),
-            front_status_port=data.get("front_status_port", DEFAULT_FRONT_STATUS_PORT))
+            front_status_port=data.get("front_status_port", DEFAULT_FRONT_STATUS_PORT),
+            back_fingerprint=str(data.get("back_fingerprint") or ""))
         settings.back_port = valid_port(settings.back_port, "後台埠")
         settings.front_status_port = valid_port(settings.front_status_port, "前台狀態埠")
         return validate(settings)
@@ -140,18 +148,25 @@ def new_token():
     return secrets.token_urlsafe(32)
 
 
+def token_is_strong(token):
+    """通行碼要像 new_token() 的輸出：至少 43 個 URL 安全字元、不能重複字元太多。
+    探測回覆的簽章可以被拿去離線猜通行碼，所以不接受好記的弱字串。"""
+    return (len(token) >= MIN_TOKEN_CHARS and _TOKEN_SHAPE.fullmatch(token) is not None
+            and len(set(token)) >= MIN_DISTINCT_CHARS)
+
+
 def link_token():
-    """環境變數裡的通行碼；沒設或太短回傳空字串。"""
+    """環境變數裡的通行碼；沒設或不夠強回傳空字串。"""
     token = (os.environ.get(TOKEN_ENV) or "").strip()
-    return token if len(token) >= MIN_TOKEN_CHARS else ""
+    return token if token_is_strong(token) else ""
 
 
 def require_token():
-    """取得通行碼；沒設或太短就丟 ConfigError（雙機模式沒有通行碼不能啟動）。"""
+    """取得通行碼；沒設或不夠強就丟 ConfigError（雙機模式沒有通行碼不能啟動）。"""
     token = link_token()
     if not token:
-        raise ConfigError(f"還沒設定通行碼：請設定環境變數 {TOKEN_ENV}（至少 {MIN_TOKEN_CHARS} 字元，"
-                          "兩台電腦要一樣；可用 python -m shared.role_config token 產生）")
+        raise ConfigError(f"通行碼沒設定或不夠強：請設定環境變數 {TOKEN_ENV}（至少 {MIN_TOKEN_CHARS} 個英數字元、"
+                          "底線或連字號，兩台電腦要一樣；請用 python -m shared.role_config token 產生，不要自己編）")
     return token
 
 
@@ -189,6 +204,7 @@ def main(argv=None):
     put.add_argument("--bind-host", default="", help="後台與前台都要填：本機網路線那張網卡的 IPv4")
     put.add_argument("--back-port", type=int, default=DEFAULT_BACK_PORT)
     put.add_argument("--front-status-port", type=int, default=DEFAULT_FRONT_STATUS_PORT)
+    put.add_argument("--back-fingerprint", default="", help="前台手動填後台位址時：後台憑證的 SHA-256 指紋")
     args = parser.parse_args(argv)
     if args.cmd == "token":
         print(new_token())
@@ -197,7 +213,8 @@ def main(argv=None):
         print(_describe(load()))
         return 0
     try:
-        save(LinkSettings(args.role, args.back_host, args.back_port, args.bind_host, args.front_status_port))
+        save(LinkSettings(args.role, args.back_host, args.back_port, args.bind_host, args.front_status_port,
+                          link_tls.normalize(args.back_fingerprint)))
     except ConfigError as e:
         print(f"沒有儲存：{e}")
         return 2

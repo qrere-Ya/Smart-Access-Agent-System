@@ -11,10 +11,10 @@ from werkzeug.serving import make_server
 
 from access import front_agent as fa
 from access.front_store import FrontStore
-from admin import link_server
-from shared import digest_store, link_protocol as lp, paths, role_config as rc
+from admin import link_cert, link_server
+from shared import digest_store, link_protocol as lp, link_tls, paths, role_config as rc
 
-TOKEN = "k" * 40
+TOKEN = "oGo0iq6_xu9Jp7cwTM0ttP-BTbTQ9Zefin8GaJMQpyc"
 EMB = np.arange(512, dtype=np.float32) / 512
 NOW = dt.datetime(2026, 11, 10, 7, 50, 0)
 
@@ -131,7 +131,7 @@ def test_the_client_only_accepts_private_addresses_and_never_follows_redirects()
 
     class Session:
         def request(self, *a, **k):
-            assert k["allow_redirects"] is False and a[1].startswith("http://192.168.50.1:8770/")
+            assert k["allow_redirects"] is False and a[1].startswith("https://192.168.50.1:8770/")
             raise requests.ConnectionError("down")
 
     with pytest.raises(fa.BackOffline):
@@ -145,6 +145,7 @@ def backend(db, add_user, monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "ANOMALY_DIR", str(tmp_path / "evidence"))
     monkeypatch.setattr(paths, "BRIEF_PATH", str(tmp_path / "brief.json"))
     monkeypatch.setenv(rc.TOKEN_ENV, TOKEN)
+    cert_path, key_path = link_cert.ensure_certificate(str(tmp_path / "tls"))
     add_user("甲", "E1", embedding=EMB)
     add_user("乙", "E2", embedding=EMB + 5)
     digest_store.save_brief({"date": "2026-11-10", "generated_at": "2026-11-10 07:00", "news": [{"title": "新聞一"}],
@@ -154,7 +155,8 @@ def backend(db, add_user, monkeypatch, tmp_path):
         server = None
 
         def start(self, port=0):
-            self.server = make_server("127.0.0.1", port, link_server.create_app(now=lambda: NOW), threaded=True)
+            self.server = make_server("127.0.0.1", port, link_server.create_app(now=lambda: NOW), threaded=True,
+                                      ssl_context=link_tls.server_context(cert_path, key_path))
             self.port = self.server.port
             threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -163,13 +165,14 @@ def backend(db, add_user, monkeypatch, tmp_path):
             self.server.server_close()
 
     back = Back()
+    back.fingerprint = link_tls.fingerprint_of_pem(cert_path)
     back.start()
     yield back
     back.stop()
 
 
 def real_agent(backend, tmp_path, token=TOKEN):
-    client = fa.BackClient("127.0.0.1", backend.port, token, timeout=(1.0, 3.0))
+    client = fa.BackClient("127.0.0.1", backend.port, token, backend.fingerprint, timeout=(1.0, 3.0))
     return make_agent(FrontStore(str(tmp_path / "front.db")), client, tmp_path)
 
 

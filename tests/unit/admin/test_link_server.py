@@ -9,7 +9,7 @@ import pytest
 from admin import link_server
 from shared import digest_store, link_protocol as lp, paths
 
-TOKEN = "t" * 40
+TOKEN = "oGo0iq6_xu9Jp7cwTM0ttP-BTbTQ9Zefin8GaJMQpyc"
 NOW = dt.datetime(2026, 11, 10, 8, 0, 0)
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64

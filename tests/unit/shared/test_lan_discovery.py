@@ -7,8 +7,9 @@ import pytest
 from access import front_agent as fa
 from shared import lan_discovery as ld, role_config as rc
 
-TOKEN = "t" * 40
+TOKEN = "oGo0iq6_xu9Jp7cwTM0ttP-BTbTQ9Zefin8GaJMQpyc"
 NONCE = "a1" * 16
+FP = "ab" * 32
 AF = socket.AF_INET
 
 
@@ -59,8 +60,8 @@ def test_probe_roundtrip_and_garbage_is_ignored():
 
 
 def test_a_reply_is_accepted_only_with_the_right_token_nonce_and_source():
-    reply = ld.build_reply(TOKEN, NONCE, "169.254.1.2", 8770)
-    assert ld.verify_reply(TOKEN, NONCE, reply, "169.254.1.2") == ("169.254.1.2", 8770)
+    reply = ld.build_reply(TOKEN, NONCE, "169.254.1.2", 8770, FP)
+    assert ld.verify_reply(TOKEN, NONCE, reply, "169.254.1.2") == ("169.254.1.2", 8770, FP)
     assert ld.verify_reply("x" * 40, NONCE, reply, "169.254.1.2") is None          # 通行碼不同
     assert ld.verify_reply(TOKEN, "b2" * 16, reply, "169.254.1.2") is None         # 不是這次探測的回覆（重放）
     assert ld.verify_reply(TOKEN, NONCE, reply, "169.254.9.9") is None             # 來源與回報位址不一致
@@ -69,25 +70,25 @@ def test_a_reply_is_accepted_only_with_the_right_token_nonce_and_source():
 
 
 def test_a_reply_pointing_outside_the_lan_or_to_a_bad_port_is_rejected():
-    public = ld.build_reply(TOKEN, NONCE, "8.8.8.8", 8770)
+    public = ld.build_reply(TOKEN, NONCE, "8.8.8.8", 8770, FP)
     assert ld.verify_reply(TOKEN, NONCE, public, "8.8.8.8") is None
-    low_port = ld.build_reply(TOKEN, NONCE, "169.254.1.2", 80)
+    low_port = ld.build_reply(TOKEN, NONCE, "169.254.1.2", 80, FP)
     assert ld.verify_reply(TOKEN, NONCE, low_port, "169.254.1.2") is None
 
 
 # --- 後台回覆、前台尋找（本機迴路）---
 
 def test_front_finds_the_back_through_the_responder():
-    responder = ld.DiscoveryResponder("127.0.0.1", 8770, discovery_port=0).start()
+    responder = ld.DiscoveryResponder("127.0.0.1", 8770, FP, discovery_port=0).start()
     try:
         found = ld.discover_back(TOKEN, ["127.0.0.1"], target="127.0.0.1", discovery_port=responder.port, timeout=2.0)
     finally:
         responder.stop()
-    assert found == ("127.0.0.1", 8770)
+    assert found == ("127.0.0.1", 8770, FP)
 
 
 def test_a_front_with_another_token_finds_nothing():
-    responder = ld.DiscoveryResponder("127.0.0.1", 8770, discovery_port=0).start()
+    responder = ld.DiscoveryResponder("127.0.0.1", 8770, FP, discovery_port=0).start()
     try:
         found = ld.discover_back("z" * 40, ["127.0.0.1"], target="127.0.0.1", discovery_port=responder.port,
                                  timeout=0.8)
@@ -97,7 +98,7 @@ def test_a_front_with_another_token_finds_nothing():
 
 
 def test_the_responder_stays_silent_for_garbage_and_when_it_has_no_token(monkeypatch):
-    responder = ld.DiscoveryResponder("127.0.0.1", 8770, discovery_port=0).start()
+    responder = ld.DiscoveryResponder("127.0.0.1", 8770, FP, discovery_port=0).start()
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         client.settimeout(0.6)
@@ -141,7 +142,7 @@ def test_wait_for_keeps_trying_and_reports_the_reason_once(capsys):
 
 
 def test_the_agent_switches_to_a_new_back_address_when_offline():
-    client = fa.BackClient("169.254.1.2", 8770, TOKEN)
+    client = fa.BackClient("169.254.1.2", 8770, TOKEN, FP)
     agent = type("A", (), {"back_online": False, "client": client})()
     stop = threading.Event()
     seen = []
@@ -149,18 +150,18 @@ def test_the_agent_switches_to_a_new_back_address_when_offline():
     def discover(token):
         seen.append(token)
         stop.set()                                           # 只跑一輪
-        return ("169.254.7.7", 8770)
+        return ("169.254.7.7", 8770, "cd" * 32)
     fa._rediscover_loop(agent, TOKEN, stop, interval=0.01, discover=discover)
-    assert client.host_port() == ("169.254.7.7", 8770) and seen == [TOKEN]
+    assert client.target() == ("169.254.7.7", 8770, "cd" * 32) and seen == [TOKEN]
 
 
 def test_the_agent_does_not_rediscover_while_the_back_is_online():
-    client = fa.BackClient("169.254.1.2", 8770, TOKEN)
+    client = fa.BackClient("169.254.1.2", 8770, TOKEN, FP)
     agent = type("A", (), {"back_online": True, "client": client})()
     stop = threading.Event()
     threading.Timer(0.1, stop.set).start()
     fa._rediscover_loop(agent, TOKEN, stop, interval=0.01, discover=lambda t: pytest.fail("不該探測"))
-    assert client.host_port() == ("169.254.1.2", 8770)
+    assert client.target() == ("169.254.1.2", 8770, FP)
 
 
 def test_adapters_that_are_down_are_not_used(monkeypatch):

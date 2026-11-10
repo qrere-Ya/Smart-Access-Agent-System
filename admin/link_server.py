@@ -17,11 +17,12 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
 串接模組：
   - shared.link_protocol：驗證與編碼；shared.role_config：角色、位址、通行碼
   - shared.database_mgr：人臉快照、打卡、異常事件、收件去重；shared.digest_store：晨報
-  - shared.lan_discovery：bind_host 填 auto 時找位址，並回覆前台的自動尋找
+  - shared.lan_discovery：bind_host 填 auto 時找位址，並回覆前台的自動尋找（附憑證指紋）
+  - admin.link_cert、shared.link_tls：憑證與 TLS
   - 之後由 service_manager 與 backend_main 啟動（雙機模式）；單機模式不會啟動這個服務
 
-不做的事：沒有 HTTPS（網路線直連、只放行前台 IP 的防火牆規則由 N2c 處理）、沒有登入失敗鎖定
-（通行碼 32 字元以上，直連網路不是暴力破解的目標）；這兩點是已知限制。
+加密：只提供 HTTPS（TLS 1.2 以上，自簽憑證由 admin.link_cert 產生，前台釘住指紋）；沒有明文後備。
+不做的事：沒有登入失敗鎖定（通行碼 32 字元以上，直連網路不是暴力破解的目標；怕測試把自己鎖死，所以不做），這是已知限制。
 """
 import datetime
 import os
@@ -31,7 +32,8 @@ from flask import Flask, jsonify, request
 
 from access import pass_through
 from shared import database_mgr as db
-from shared import digest_store, lan_discovery, link_protocol as lp, paths, role_config
+from admin import link_cert
+from shared import digest_store, lan_discovery, link_protocol as lp, link_tls, paths, role_config
 
 _EVIDENCE_PREFIX = {"tailgate": "tailgate", pass_through.EVENT_TYPE: pass_through.EVENT_TYPE}
 
@@ -145,7 +147,11 @@ def make_server(settings=None):
                                       "（python -m shared.role_config set --role back ...）")
     role_config.require_token()
     host = lan_discovery.resolve(settings.bind_host)     # 填 auto 就用網路線那張網卡的 169.254.x.x
-    return werkzeug_make_server(host, settings.back_port, create_app(), threaded=True)
+    cert_path, key_path = link_cert.ensure_certificate()
+    server = werkzeug_make_server(host, settings.back_port, create_app(), threaded=True,
+                                  ssl_context=link_tls.server_context(cert_path, key_path))
+    server.fingerprint = link_tls.fingerprint_of_pem(cert_path)    # 前台信任的憑證指紋（自動尋找時一併回報）
+    return server
 
 
 def main():
@@ -155,10 +161,11 @@ def main():
     except role_config.ConfigError as e:
         print(f"[link_server] 無法啟動：{e}")
         return 2
-    print(f"[link_server] 後台連線服務啟動：http://{server.host}:{server.port}（只給前台使用）")
+    print(f"[link_server] 後台連線服務啟動：https://{server.host}:{server.port}（只給前台使用，TLS 加密）")
+    print(f"[link_server] 憑證指紋（SHA-256）：{server.fingerprint}")
     responder = None
     try:
-        responder = lan_discovery.DiscoveryResponder(server.host, server.port).start()
+        responder = lan_discovery.DiscoveryResponder(server.host, server.port, server.fingerprint).start()
         print(f"[link_server] 前台自動尋找：UDP {responder.port}")
     except OSError as e:
         print(f"[link_server] 無法開啟自動尋找（{type(e).__name__}）：前台要手動填後台位址")

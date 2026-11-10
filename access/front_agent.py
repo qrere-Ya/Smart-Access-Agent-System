@@ -21,15 +21,17 @@ front_agent.py：前台代理——和後台保持連線，同步人臉與晨報
 import datetime
 import json
 import os
+import ssl
 import sys
 import threading
 import time
 
 import requests
+from requests.adapters import HTTPAdapter
 from flask import Flask, jsonify, request
 
 from access.front_store import FaceIndex, FrontStore, Outbox
-from shared import lan_discovery, link_protocol as lp, paths, role_config
+from shared import lan_discovery, link_protocol as lp, link_tls, paths, role_config
 
 SYNC_SECONDS = 10
 MAX_BACKOFF_SECONDS = 60
@@ -52,24 +54,58 @@ class BackAuthError(Exception):
     """通行碼不對（兩台電腦的 SMART_ACCESS_LINK_TOKEN 要一樣）。"""
 
 
+class BackCertError(BackAuthError):
+    """後台出示的憑證指紋和信任的不一樣（可能是後台重新產生了憑證，也可能有人冒充）；事件留在佇列，不送出任何東西。"""
+
+
+class PinnedAdapter(HTTPAdapter):
+    """只信任指紋相符的那一張憑證（urllib3 的 assert_fingerprint；不看憑證機構與主機名稱），TLS 1.2 以上。"""
+
+    def __init__(self, fingerprint, *args, **kwargs):
+        self._fingerprint = link_tls.normalize(fingerprint)
+        if not self._fingerprint:
+            raise role_config.ConfigError("憑證指紋格式不對（要 64 字元十六進位的 SHA-256）")
+        super().__init__(*args, **kwargs)
+
+    def cert_verify(self, conn, url, verify, cert):
+        """憑證機構的驗證改由指紋取代（自簽憑證沒有機構可驗）；指紋比對由 urllib3 在連線時強制執行，不符就中斷。"""
+        super().cert_verify(conn, url, False, cert)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs["assert_fingerprint"] = self._fingerprint
+        pool_kwargs["ssl_minimum_version"] = ssl.TLSVersion.TLSv1_2
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+
+
 class BackClient:
-    def __init__(self, host, port, token, timeout=(3.0, 10.0), session=None):
-        self.set_address(host, port)
+    def __init__(self, host, port, token, fingerprint=None, timeout=(3.0, 10.0), session=None):
         self.headers = {"Authorization": f"Bearer {token}"}
         self.timeout, self.session = timeout, session or requests.Session()
+        self._injected_session = session is not None
+        self.set_address(host, port, fingerprint)
 
-    def set_address(self, host, port):
-        """設定（或自動尋找到新位址時更換）連線目標。"""
+    def set_address(self, host, port, fingerprint=None):
+        """設定（或自動尋找到新位址時更換）連線目標；連線一律 HTTPS，只信任這個指紋的憑證，沒有明文後備。"""
         self.host, self.port = role_config.private_ipv4(host, "後台位址"), role_config.valid_port(port, "後台埠")
-        self.base = f"http://{self.host}:{self.port}"
+        self.base = f"https://{self.host}:{self.port}"
+        self.fingerprint = link_tls.normalize(fingerprint)
+        if not self._injected_session:                       # 測試會注入假的 session，正式使用一定要有指紋
+            if not self.fingerprint:
+                raise role_config.ConfigError("缺少後台憑證指紋，不會用沒有驗證的連線")
+            self.session.close()
+            self.session = requests.Session()
+            self.session.trust_env = False        # 不吃系統代理設定：經代理時 requests 不會套用指紋比對
+            self.session.mount("https://", PinnedAdapter(self.fingerprint))
 
-    def host_port(self):
-        return (self.host, self.port)
+    def target(self):
+        return (self.host, self.port, self.fingerprint)
 
     def _call(self, method, path, **kwargs):
         try:
             response = self.session.request(method, self.base + path, headers=self.headers, timeout=self.timeout,
                                             allow_redirects=False, **kwargs)
+        except requests.exceptions.SSLError:
+            raise BackCertError("後台憑證指紋不符（後台重新產生了憑證，或有人冒充後台）") from None
         except requests.RequestException as e:
             raise BackOffline(type(e).__name__) from None
         if response.status_code == 401:
@@ -311,9 +347,9 @@ def _rediscover_loop(agent, token, stop, interval=10.0, discover=lan_discovery.d
         if agent.back_online:
             continue
         found = discover(token)
-        if found and found != (agent.client.host_port()):
+        if found and found != agent.client.target():
             agent.client.set_address(*found)
-            print(f"[front_agent] 後台位址更新：{found[0]}:{found[1]}")
+            print(f"[front_agent] 後台位址或憑證更新：{found[0]}:{found[1]}")
 
 
 def main():
@@ -326,12 +362,13 @@ def main():
         token = role_config.require_token()
         auto = settings.back_host.strip().lower() == role_config.AUTO
         if auto:
-            host, port = _wait_for(stop, "自動找到後台", lambda: lan_discovery.discover_back(token)) or (None, None)
+            host, port, fingerprint = (_wait_for(stop, "自動找到後台", lambda: lan_discovery.discover_back(token))
+                                       or (None, None, None))
             if host is None:
                 return 0
         else:
-            host, port = settings.back_host, settings.back_port
-        client = BackClient(host, port, token)
+            host, port, fingerprint = settings.back_host, settings.back_port, settings.back_fingerprint
+        client = BackClient(host, port, token, fingerprint)
         agent = FrontAgent(FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db")), client)
         server = _wait_for(stop, "網路線位址", lambda: make_status_server(agent, settings))
     except role_config.ConfigError as e:

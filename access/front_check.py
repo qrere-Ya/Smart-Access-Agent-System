@@ -115,20 +115,22 @@ def check_camera(index=0):
 
 def check_back():
     """用通行碼 ping 後台；連不上只警告（前台離線時照樣辨識與暫存事件）。"""
-    from access.front_agent import BackClient
+    from access.front_agent import BackCertError, BackClient
     settings = role_config.load()
     if settings.role != role_config.FRONT or not role_config.link_token():
         return [("WARN", "角色或通行碼未就緒，略過後台連線檢查")]
-    host, port = settings.back_host, settings.back_port
+    host, port, fingerprint = settings.back_host, settings.back_port, settings.back_fingerprint
     if host.strip().lower() == role_config.AUTO:
         found = lan_discovery.discover_back(role_config.link_token())
         if not found:
             return [("WARN", "自動尋找沒有找到後台：後台還沒開、網路線沒插好（位址分配要 30 到 60 秒）、"
                              "後台防火牆沒開 UDP 或通行碼不一致")]
-        host, port = found
+        host, port, fingerprint = found
     try:
-        BackClient(host, port, role_config.link_token(), timeout=(3.0, 5.0)).ping()
-        return [("OK", f"後台 {host}:{port} 連線正常、通行碼正確")]
+        BackClient(host, port, role_config.link_token(), fingerprint, timeout=(3.0, 5.0)).ping()
+        return [("OK", f"後台 {host}:{port} 加密連線正常（憑證指紋相符）、通行碼正確")]
+    except BackCertError as e:
+        return [("FAIL", str(e))]
     except Exception as e:  # noqa: BLE001
         return [("WARN", f"連不上後台（{type(e).__name__}）：後台還沒開、網路線、防火牆或通行碼不一致都有可能")]
 

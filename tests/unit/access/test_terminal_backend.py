@@ -197,7 +197,8 @@ def test_the_backend_follows_the_role(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "RUNTIME_DIR", str(tmp_path))
     assert isinstance(tb.create_backend(rc.LinkSettings(rc.STANDALONE)), tb.LocalBackend)
     assert isinstance(tb.create_backend(rc.LinkSettings(rc.BACK, bind_host="192.168.50.1")), tb.LocalBackend)
-    chosen = tb.create_backend(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2"))
+    chosen = tb.create_backend(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2",
+                                                    back_fingerprint="ab" * 32))
     assert isinstance(chosen, tb.FrontBackend)
 
 

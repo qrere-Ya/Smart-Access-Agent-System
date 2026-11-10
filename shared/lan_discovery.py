@@ -4,8 +4,9 @@ lan_discovery.py：兩台電腦用網路線直連時的自動互相找到（不�
 主要功能：
   - 直連網路線、網卡維持「自動取得」時，Windows 會各自分配 169.254.x.x（link-local）位址；
     link_local_addresses 找出本機這類位址（有線網卡優先），auto_address 取第一個
-  - 後台：DiscoveryResponder 在自己的位址上聽 UDP 探測，回報「我的位址與埠」；
-    回覆附上用通行碼算的 HMAC（綁定這次探測的亂數），前台據此確認對方真的知道通行碼，通行碼本身不會在網路上出現
+  - 後台：DiscoveryResponder 在自己的位址上聽 UDP 探測，回報「我的位址、埠與連線憑證的指紋」；
+    回覆附上用通行碼算的 HMAC（綁定這次探測的亂數與指紋），前台據此確認對方真的知道通行碼，通行碼本身不會在網路上出現，
+    前台之後連線時只信任這個指紋的憑證（shared.link_tls），所以不用手動複製指紋
   - 前台：discover_back 從本機每個 link-local 位址廣播探測，驗證回覆（HMAC、來源位址與回報位址一致、來源必須是內網）
     後才採用；之後仍會用通行碼呼叫後台的 API，這裡只負責「找到位址」
   - 只處理 169.254.0.0/16：Wi-Fi 與其他網路不會被動到，也不需要設閘道；回覆只含位址、埠與驗證碼，沒有任何資料
@@ -27,12 +28,13 @@ import socket
 import threading
 import time
 
-from shared import role_config
+from shared import link_tls, role_config
 
 DISCOVERY_PORT = 8772
 LINK_LOCAL_NET = ipaddress.ip_network("169.254.0.0/16")
 LINK_LOCAL_BROADCAST = "169.254.255.255"
 PROBE_PREFIX = b"SAAS1 DISCOVER "
+DISCOVERY_KEY_LABEL = b"smart-access-discovery-v2"
 MAX_DATAGRAM = 512
 # 不是「網路線」的網卡：無線、藍牙、VPN 與虛擬網卡（Wi-Fi Direct 的「區域連線* N」名稱帶星號）
 _UNWANTED_ADAPTERS = ("wi-fi", "wifi", "wireless", "bluetooth", "藍牙", "vethernet", "loopback", "virtual", "vmware",
@@ -107,24 +109,34 @@ def parse_probe(data):
     return nonce if len(nonce) == 32 and all(c in "0123456789abcdef" for c in nonce) else None
 
 
-def _mac(token, nonce, ip, port):
-    return hmac.new(token.encode("utf-8"), f"{nonce}|{ip}|{port}".encode("ascii"), "sha256").hexdigest()
+def _mac(token, nonce, ip, port, fingerprint):
+    """簽章用探測專用的衍生金鑰，不直接拿通行碼當金鑰（探測回覆不是通行碼本身的驗證器；
+    通行碼的強度另由 role_config.token_is_strong 把關）。"""
+    key = hmac.new(token.encode("utf-8"), DISCOVERY_KEY_LABEL, "sha256").digest()
+    message = f"{nonce}|{ip}|{port}|{fingerprint}".encode("ascii")
+    return hmac.new(key, message, "sha256").hexdigest()
 
 
-def build_reply(token, nonce, ip, port):
-    return json.dumps({"v": 1, "ip": ip, "port": int(port), "mac": _mac(token, nonce, ip, int(port))}).encode("ascii")
+def build_reply(token, nonce, ip, port, fingerprint):
+    """後台的回覆：位址、埠與憑證指紋，一起用通行碼簽章（前台據此信任這張憑證）。"""
+    fingerprint = link_tls.normalize(fingerprint)
+    body = {"v": 2, "ip": ip, "port": int(port), "fp": fingerprint,
+            "mac": _mac(token, nonce, ip, int(port), fingerprint)}
+    return json.dumps(body).encode("ascii")
 
 
 def verify_reply(token, nonce, data, sender_ip):
-    """驗證後台的回覆；通過回傳 (ip, port)，否則 None（HMAC 不符、來源與回報位址不一致、不是內網都不收）。"""
+    """驗證後台的回覆；通過回傳 (ip, port, 憑證指紋)，否則 None（HMAC 不符、來源與回報位址不一致、不是內網都不收）。"""
     try:
         body = json.loads(data.decode("ascii"))
         ip, port, mac = str(body["ip"]), int(body["port"]), str(body["mac"])
+        fingerprint = link_tls.normalize(body["fp"])
     except (ValueError, KeyError, TypeError, UnicodeDecodeError):
         return None
-    if ip != sender_ip or not _is_lan_sender(ip) or not 1024 <= port <= 65535:
+    if ip != sender_ip or not _is_lan_sender(ip) or not 1024 <= port <= 65535 or not fingerprint:
         return None
-    return (ip, port) if hmac.compare_digest(_mac(token, nonce, ip, port), mac) else None
+    ok = hmac.compare_digest(_mac(token, nonce, ip, port, fingerprint), mac)
+    return (ip, port, fingerprint) if ok else None
 
 
 # --- 後台：回覆探測 ---
@@ -132,8 +144,11 @@ def verify_reply(token, nonce, data, sender_ip):
 class DiscoveryResponder:
     """在後台位址上聽探測並回覆；背景執行緒，stop() 結束。"""
 
-    def __init__(self, ip, service_port, discovery_port=DISCOVERY_PORT):
+    def __init__(self, ip, service_port, fingerprint, discovery_port=DISCOVERY_PORT):
         self.ip, self.service_port = role_config.private_ipv4(ip, "後台位址"), service_port
+        self.fingerprint = link_tls.normalize(fingerprint)
+        if not self.fingerprint:
+            raise ValueError("憑證指紋格式不對")
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.bind((self.ip, discovery_port))
         self._sock.settimeout(0.5)
@@ -162,7 +177,8 @@ class DiscoveryResponder:
             if not token or nonce is None or not _is_lan_sender(sender):
                 continue
             try:
-                self._sock.sendto(build_reply(token, nonce, self.ip, self.service_port), (sender, port))
+                reply = build_reply(token, nonce, self.ip, self.service_port, self.fingerprint)
+                self._sock.sendto(reply, (sender, port))
             except OSError:
                 continue
 
@@ -171,7 +187,7 @@ class DiscoveryResponder:
 
 def discover_back(token, local_addresses=None, target=LINK_LOCAL_BROADCAST, discovery_port=DISCOVERY_PORT,
                   timeout=3.0):
-    """從本機每個 link-local 位址廣播探測，回傳第一個通過驗證的 (後台位址, 埠)；找不到回傳 None。"""
+    """從本機每個 link-local 位址廣播探測，回傳第一個通過驗證的 (後台位址, 埠, 憑證指紋)；找不到回傳 None。"""
     addresses = link_local_addresses() if local_addresses is None else local_addresses
     nonce, sockets = new_nonce(), []
     try:

@@ -37,10 +37,20 @@ function Set-FirewallRules {
     Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     New-NetFirewallRule -DisplayName $rule -Direction Inbound -Protocol TCP -LocalPort 8771 `
         -RemoteAddress "169.254.0.0/16" -Action Allow | Out-Null
-    $rule2 = "SmartAccess 前台尋找後台回覆（只允許網路線直連）"
-    Get-NetFirewallRule -DisplayName $rule2 -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-    New-NetFirewallRule -DisplayName $rule2 -Direction Inbound -Protocol UDP -RemoteAddress "169.254.0.0/16" `
-        -RemotePort 8772 -Action Allow | Out-Null
+    # 探測回覆只允許給前台的 Python（虛擬環境的啟動器與實際執行的基底直譯器各一條），不開放給其他程式
+    $programs = @($VenvPy)
+    if (Test-Path $VenvPy) {
+        $base = (& $VenvPy -c "import sys; print(sys._base_executable)" 2>$null)
+        if ($base -and (Test-Path $base) -and ($programs -notcontains $base)) { $programs += $base }
+    }
+    $n = 0
+    foreach ($program in $programs) {
+        $n++
+        $rule2 = "SmartAccess 前台尋找後台回覆 $n（只允許網路線直連與前台 Python）"
+        Get-NetFirewallRule -DisplayName $rule2 -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+        New-NetFirewallRule -DisplayName $rule2 -Direction Inbound -Protocol UDP -RemoteAddress "169.254.0.0/16" `
+            -RemotePort 8772 -Program $program -Action Allow | Out-Null
+    }
     Write-Host "已建立防火牆規則：只放行網路線直連那一段（169.254.x.x）。" -ForegroundColor Green
     Write-Host "網路線兩端的網卡請維持「自動取得 IP」（預設就是）。位址分配約需 30 到 60 秒。"
 }
@@ -129,7 +139,7 @@ if (Ask "現在建立防火牆規則？（需要系統管理員；稍後可用�
 # --- 6. 通行碼 ---
 Step 6 "通行碼（要和後台一模一樣；只存在這個使用者的環境變數，不寫進檔案）"
 $existing = [Environment]::GetEnvironmentVariable($TokenEnv, "User")
-if ($existing -and $existing.Length -ge 32 -and -not (Ask "已經設定過通行碼，要換成新的嗎？" "N")) { Write-Host "沿用目前的通行碼。" }
+if ($existing -and $existing -match "^[A-Za-z0-9_-]{43,}$" -and -not (Ask "已經設定過通行碼，要換成新的嗎？" "N")) { Write-Host "沿用目前的通行碼。" }
 else {
     Write-Host "在後台執行 python -m shared.role_config token 產生，再複製貼到這裡（貼上時畫面不會顯示）。"
     do {
@@ -137,8 +147,9 @@ else {
         $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
         try { $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
         $token = $token.Trim()
-        if ($token.Length -lt 32) { Write-Host "通行碼至少 32 個字元，請重貼。" -ForegroundColor Yellow }
-    } while ($token.Length -lt 32)
+        $valid = ($token -match "^[A-Za-z0-9_-]{43,}$") -and (($token.ToCharArray() | Select-Object -Unique).Count -ge 16)
+        if (-not $valid) { Write-Host "通行碼不合格：要用後台 python -m shared.role_config token 產生的那一組（43 個英數字元、底線或連字號），請重貼。" -ForegroundColor Yellow }
+    } while (-not $valid)
     [Environment]::SetEnvironmentVariable($TokenEnv, $token, "User")
     $token = $null
     Write-Host "通行碼已存入使用者環境變數。" -ForegroundColor Green
