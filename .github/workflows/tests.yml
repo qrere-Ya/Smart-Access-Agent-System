@@ -22,5 +22,25 @@ jobs:
           cache-dependency-path: requirements/test.txt
       - name: Install dependencies
         run: pip install -r requirements/test.txt -c requirements/lock.txt
+      - name: Install a virtual display for the Tk window tests
+        run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Run unit tests
-        run: python -m pytest tests -q
+        run: xvfb-run -a python -m pytest tests -q
+
+  ui:
+    name: Window tests (customtkinter, virtual display)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/test.txt
+      - name: Install dependencies
+        run: pip install -r requirements/test.txt -c requirements/lock.txt
+      - name: Install a virtual display for the Tk window tests
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Run window tests (tests that need real models skip themselves)
+        run: timeout 420 xvfb-run -a python -m pytest -m integration tests/integration -v

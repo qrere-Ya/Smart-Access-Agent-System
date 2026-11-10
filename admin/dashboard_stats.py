@@ -27,7 +27,8 @@ def get_today_attendance_summary(limit=20):
     try:
         conn = sqlite3.connect(database_mgr.DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT COUNT(DISTINCT name) FROM Attendance WHERE timestamp LIKE ?", (f"{today}%",))
+        c.execute("SELECT COUNT(DISTINCT COALESCE('u' || user_id, 'n' || name)) FROM Attendance "
+                  "WHERE timestamp LIKE ?", (f"{today}%",))   # 以員工識別區分人，舊紀錄才用姓名
         count = c.fetchone()[0]
         c.execute(
             "SELECT timestamp, name, status FROM Attendance WHERE timestamp LIKE ? ORDER BY timestamp DESC LIMIT ?",

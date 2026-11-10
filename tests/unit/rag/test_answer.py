@@ -208,10 +208,12 @@ def test_status_list_without_a_status_says_which_one_it_assumed(store, people):
     assert "沒有指定狀態，預設查「遲到」" in ask(make(store, llm), "今天誰有紀錄")
 
 
-def test_daily_summary_lists_people_without_records_with_a_warning(store, people):
+def test_daily_summary_lists_people_without_records_and_says_it_is_a_rest_day(store, people):
+    """測試用的「今天」是週六：摘要要說明是休息日，沒打卡屬正常（上班日的提醒見 test_rest_days_and_identity）。"""
     llm = FakeLLM({"今天出勤狀況": {"data": "summary"}})
     text = ask(make(store, llm), "今天出勤狀況")
-    assert "有打卡人數：2" in text and "在職但當天沒有打卡紀錄：葉君緯" in text and "不等於缺勤" in text
+    assert "有打卡人數：2" in text and "在職但當天沒有打卡紀錄：葉君緯" in text
+    assert "週休（週六），不用上班" in text and "休息日沒有打卡屬正常" in text
 
 
 def test_summary_for_a_range_falls_back_to_one_day_and_says_so(store, people):
@@ -232,7 +234,7 @@ def test_anomaly_question_lists_paths_and_never_the_picture(store, people):
                           timestamp="2026-10-16 09:15:00")
     llm = FakeLLM({"最近有尾隨事件嗎": {"data": "anomalies", "event_type": "tailgate"}}, reply="有一件。")
     text = ask(make(store, llm), "最近有尾隨事件嗎")
-    assert "2026-10-16 09:15:00　tailgate　畫面有 2 人" in text
+    assert "2026-10-16 09:15:00　尾隨　畫面有 2 人" in text
     assert "證據照片存放位置（不在此顯示照片）" in text and "tailgate_20261016_091500.jpg" in text
 
 
@@ -573,3 +575,54 @@ def test_a_database_failure_keeps_the_error_outcome(store, people, monkeypatch):
     a = make(store, llm)
     ask(a, "王小明遲到幾次")
     assert a.last.outcome == "error"
+
+
+# --- 記憶體吃緊時的重排載入 ---
+
+class DenyOnceReranker:
+    """第一次重排丟出資源不足，之後正常；用來模擬本機語言模型占著記憶體。"""
+
+    def __init__(self, inner):
+        self.inner, self.calls = inner, 0
+
+    def rerank(self, query, hits, top_k=5):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("ResourceDenied")
+        return self.inner.rerank(query, hits, top_k)
+
+
+class FreeableLLM(FakeLLM):
+    def __init__(self, *args, freed=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.freed, self.free_calls = freed, 0
+
+    def free_memory(self):
+        self.free_calls += 1
+        return self.freed
+
+
+def test_denied_rerank_frees_the_language_model_and_tries_again(store):
+    llm = FreeableLLM({"每年給幾天特別休假": {"docs": True}}, reply="七天 [1]。")
+    a = make(store, llm)
+    a.reranker = DenyOnceReranker(a.reranker)
+    text = ask(a, "每年給幾天特別休假")
+    assert llm.free_calls == 1 and a.reranker.calls == 2
+    assert text.startswith("七天 [1]。") and a.last.outcome == "answered"
+
+
+def test_denied_rerank_that_cannot_free_memory_still_fails(store):
+    llm = FreeableLLM({"每年給幾天特別休假": {"docs": True}}, freed=False)
+    a = make(store, llm)
+    a.reranker = DenyOnceReranker(a.reranker)
+    with pytest.raises(RuntimeError):
+        ask(a, "每年給幾天特別休假")
+    assert llm.free_calls == 1 and a.reranker.calls == 1
+
+
+def test_denied_rerank_with_a_language_model_that_cannot_unload_still_fails(store):
+    llm = FakeLLM({"每年給幾天特別休假": {"docs": True}})
+    a = make(store, llm)
+    a.reranker = DenyOnceReranker(a.reranker)
+    with pytest.raises(RuntimeError):
+        ask(a, "每年給幾天特別休假")

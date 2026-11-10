@@ -68,11 +68,24 @@ def roster(include_inactive: bool = True) -> List[Dict]:
     return [{"name": r[0], "employee_id": r[1], "active": bool(r[2])} for r in rows]
 
 
+def _person_clause(conn, name: str):
+    """
+    「這筆打卡是這個人的」條件與參數。名字對到唯一一位員工就用員工識別（user_id）認人，
+    舊紀錄（user_id 為空）才退回姓名；這樣離職刪除後同名的新員工，不會混進舊員工的紀錄。
+    """
+    rows = conn.execute("SELECT id FROM Users WHERE name = ?", (name,)).fetchall()
+    if len(rows) == 1:
+        return "(user_id = ? OR (user_id IS NULL AND name = ?))", [rows[0][0], name]
+    return "name = ?", [name]
+
+
 def attendance_records(name: str, start: Optional[str] = None, end: Optional[str] = None,
                        status: Optional[str] = None, limit: int = 200) -> List[Dict]:
     """某人的打卡紀錄，時間由新到舊；可限制日期區間與狀態（如「遲到」）。"""
     since, until = _range(start, end)
-    clauses, params = ["name = ?"], [name]
+    with closing(_connect()) as conn:
+        person_sql, person_params = _person_clause(conn, name)
+    clauses, params = [person_sql], list(person_params)
     if since:
         clauses.append("timestamp >= ?")
         params.append(since)
@@ -92,7 +105,9 @@ def attendance_records(name: str, start: Optional[str] = None, end: Optional[str
 def count_by_status(name: str, start: Optional[str] = None, end: Optional[str] = None) -> Dict[str, int]:
     """某人在區間內各種狀態的次數，例如 {"上班": 10, "遲到": 2, "下班": 11}。"""
     since, until = _range(start, end)
-    clauses, params = ["name = ?"], [name]
+    with closing(_connect()) as conn:
+        person_sql, person_params = _person_clause(conn, name)
+    clauses, params = [person_sql], list(person_params)
     if since:
         clauses.append("timestamp >= ?")
         params.append(since)
@@ -128,20 +143,31 @@ def status_events(start: str, end: str, status: str, limit: int = 200) -> List[D
 
 def daily_summary(day: str) -> Dict:
     """
-    某一天的出勤摘要：有打卡的人數、遲到、早退、加班名單，以及在職但當天沒有任何打卡紀錄的人。
-    「沒有打卡紀錄」不等於缺勤：系統沒有假日與請假資料，週末、國定假日、請假都會出現在這份名單。
+    某一天的出勤摘要：有打卡的人數、遲到、早退、加班名單，在職但當天沒有打卡紀錄的人，以及這天是否休息與誰請假。
+    day_off 是休息原因（登錄的假日或每週休息日，要上班則為 None）；on_leave 是請假中的人；
+    no_record 已排除請假的人，但休息日不會被排除，所以要搭配 day_off 一起判讀。
+    人以員工識別（user_id）區分，舊紀錄才用姓名。
     """
     since, until = _range(day, day)
     with closing(_connect()) as conn:
         punched = conn.execute(
-            "SELECT COUNT(DISTINCT name) FROM Attendance WHERE timestamp >= ? AND timestamp < ?",
-            (since, until)).fetchone()[0]
+            "SELECT COUNT(DISTINCT COALESCE('u' || user_id, 'n' || name)) FROM Attendance "
+            "WHERE timestamp >= ? AND timestamp < ?", (since, until)).fetchone()[0]
+        on_leave = [r[0] for r in conn.execute(
+            "SELECT name FROM Users u WHERE COALESCE(is_active, 1) = 1 AND EXISTS "
+            "(SELECT 1 FROM Leaves l WHERE l.user_id = u.id AND l.start_date <= ? AND l.end_date >= ?) "
+            "ORDER BY name", (day, day))]
         no_record = [r[0] for r in conn.execute(
-            "SELECT name FROM Users WHERE COALESCE(is_active, 1) = 1 AND name NOT IN "
-            "(SELECT name FROM Attendance WHERE timestamp >= ? AND timestamp < ?) ORDER BY name",
-            (since, until))]
+            "SELECT name FROM Users u WHERE COALESCE(is_active, 1) = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM Attendance a WHERE a.timestamp >= ? AND a.timestamp < ? "
+            "AND (a.user_id = u.id OR (a.user_id IS NULL AND a.name = u.name))) "
+            "AND NOT EXISTS (SELECT 1 FROM Leaves l WHERE l.user_id = u.id AND l.start_date <= ? AND l.end_date >= ?) "
+            "ORDER BY name", (since, until, day, day))]
+        day_off = database_mgr.day_off_reason(day, conn)
     return {
         "date": day,
+        "day_off": day_off,
+        "on_leave": on_leave,
         "punched_count": punched,
         "late": people_with_status(day, STATUS_LATE),
         "early_leave": people_with_status(day, STATUS_EARLY_LEAVE),

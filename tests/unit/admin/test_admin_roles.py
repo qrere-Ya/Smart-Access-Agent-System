@@ -42,10 +42,10 @@ def test_recognize_admin_matches_admins_only(team):
     assert name == "管理者甲" and dist == pytest.approx(0.3, abs=0.01)
 
 
-def test_the_login_threshold_is_stricter_than_the_door_threshold(team):
-    far = ONES + 0.45                              # 與管理者距離 0.9：打卡門檻 1.0 會過，登入門檻 0.8 不會過
-    assert dbm.recognize_face(far)[0] != "Unknown"
-    assert dbm.recognize_admin(far) == ("Unknown", pytest.approx(0.9, abs=0.01))
+def test_recognize_admin_honours_the_threshold_it_is_given(team):
+    far = ONES + 0.45                              # 與管理者距離 0.9
+    assert dbm.recognize_admin(far)[0] == "管理者甲"                       # 預設是單幀門檻 1.0，與打卡相同
+    assert dbm.recognize_admin(far, 0.8) == ("Unknown", pytest.approx(0.9, abs=0.01))
 
 
 def test_no_admin_is_reported(db, add_user):

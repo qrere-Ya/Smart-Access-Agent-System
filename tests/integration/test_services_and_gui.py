@@ -33,20 +33,10 @@ def test_registration_server_starts_serves_and_stops_through_service_manager():
     assert not sm.is_port_open("127.0.0.1", sm.PORT_WEB_SERVER)
 
 
-def test_admin_window_builds_and_shows_service_status():
-    import tkinter
+def test_admin_window_builds_and_shows_service_status(root):
+    from admin.backend_main import BackendManagerApp
 
-    import ttkbootstrap as ttk
-
-    try:
-        root = ttk.Window(themename="superhero")
-    except tkinter.TclError:
-        pytest.skip("沒有可用的顯示器")
-    try:
-        from admin.backend_main import BackendManagerApp
-
-        app = BackendManagerApp(root)
-        root.update()
-        assert app.face_status_var.get().startswith("⚪")
-    finally:
-        root.destroy()
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.update()
+    assert app.face_status_var.get().startswith("⚪")

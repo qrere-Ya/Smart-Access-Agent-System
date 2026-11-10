@@ -26,6 +26,7 @@ from shared import paths
 SESSION_TIMEOUT_SECONDS = 15 * 60
 MAX_FAILURES = 5
 LOCK_SECONDS = 60
+FAILURE_INTERVAL_SECONDS = 5   # 兩次計入的失敗至少相隔這麼久；同一次站在鏡頭前的連續不過只算一次
 TOKEN_ENV = "SMART_ACCESS_SESSION_TOKEN"  # noqa: S105  環境變數名稱，不是密碼
 
 
@@ -37,9 +38,12 @@ class LoginGuard:
     """登入失敗計數：連續 MAX_FAILURES 次失敗就鎖 LOCK_SECONDS 秒；成功後歸零。"""
 
     def __init__(self, max_failures: int = MAX_FAILURES, lock_seconds: float = LOCK_SECONDS,
-                 path: Optional[str] = None):
-        """path 不為 None 時，失敗次數與鎖定時間存在檔案裡，關掉後台再開不能重置。"""
+                 path: Optional[str] = None, min_interval: float = 0.0):
+        """path 不為 None 時，失敗次數與鎖定時間存在檔案裡，關掉後台再開不能重置。
+        min_interval：距離上一次計入的失敗不到這麼久的失敗不再累計（避免一次嘗試被連算好幾次）。"""
         self.max_failures, self.lock_seconds = max_failures, lock_seconds
+        self.min_interval = min_interval
+        self._last_failure = float("-inf")
         self.path = path
         self.failures = 0
         self._locked_until = 0.0
@@ -63,11 +67,17 @@ class LoginGuard:
         now = time.time() if now is None else now
         return max(0.0, self._locked_until - now)
 
+    def counts_now(self, now: Optional[float] = None) -> bool:
+        """這個時間點的失敗會不會被計入（鎖定中或距離上次計入太近都不會）。"""
+        now = time.time() if now is None else now
+        return self.locked_for(now) <= 0 and now - self._last_failure >= self.min_interval
+
     def record_failure(self, now: Optional[float] = None) -> bool:
         """記一次失敗；這次失敗導致鎖定時回傳 True。鎖定期間的失敗不再累計。"""
         now = time.time() if now is None else now
-        if self.locked_for(now) > 0:
+        if not self.counts_now(now):
             return False
+        self._last_failure = now
         self.failures += 1
         locked = self.failures >= self.max_failures
         if locked:
@@ -79,6 +89,7 @@ class LoginGuard:
     def record_success(self):
         self.failures = 0
         self._locked_until = 0.0
+        self._last_failure = float("-inf")
         self._save()
 
 

@@ -53,8 +53,8 @@ def window():
     try:
         win = AssistantWindow(runtime_factory=lambda progress: (progress("載入中…"), runtime)[1],
                               auto_start_ollama=False)
-    except tkinter.TclError:
-        pytest.skip("沒有可用的顯示器")
+    except tkinter.TclError as exc:
+        pytest.skip(f"沒有可用的顯示器：{exc}")
     win.runtime = runtime
     yield win
     try:
@@ -134,10 +134,13 @@ def test_closing_the_window_releases_the_models(window):
     assert window.runtime.closed == 1
 
 
-def test_startup_failure_is_explained(window):
+def test_startup_failure_is_explained(window, monkeypatch):
     import tkinter
 
+    from rag import chat_worker
     from rag.chat_window import AssistantWindow
+
+    monkeypatch.setattr(chat_worker, "LOAD_RETRIES", 0)            # 這個測試只看失敗說明，不等自動重試
 
     def boom(progress):
         raise RuntimeError("本機模型也無法使用")
@@ -152,6 +155,37 @@ def test_startup_failure_is_explained(window):
         assert failing.send("問題") is False
     finally:
         failing.destroy()
+
+
+def test_a_failed_start_can_be_retried_without_closing_the_window(monkeypatch):
+    """載入失敗（例如記憶體暫時不足）後出現「重新載入」按鈕，按下去就能恢復，不用關掉視窗重開。"""
+    import tkinter
+
+    from rag import chat_worker
+    from rag.chat_window import AssistantWindow
+
+    monkeypatch.setattr(chat_worker, "LOAD_RETRIES", 0)
+    runtime, calls = FakeRuntime(), []
+
+    def flaky(progress):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("記憶體暫時不足")
+        return runtime
+
+    try:
+        win = AssistantWindow(runtime_factory=flaky, auto_start_ollama=False)
+    except tkinter.TclError:
+        pytest.skip("沒有可用的顯示器")
+    try:
+        assert pump(win, lambda: "啟動失敗" in win.status.cget("text"))
+        assert win._header.retry_btn.winfo_manager() == "pack"       # 失敗後按鈕出現
+        assert win.send("問題") is False
+        win._header.retry_btn.invoke()
+        assert pump(win, lambda: win._controller is not None)        # 重新載入後恢復可用
+        assert len(calls) == 2 and win._header.retry_btn.winfo_manager() == ""
+    finally:
+        win.destroy()
 
 
 # --- 語言模型設定視窗：本機模型改成下拉選單 ---

@@ -4,6 +4,7 @@ tests/conftest.py：pytest 共用設定與 fixture。
 主要功能：
   - 在匯入任何專案模組之前，把執行期資料夾與法規資料夾導向臨時資料夾，測試不會讀寫真實的 runtime/ 與 data/
   - db：臨時資料庫並已初始化；add_user、add_attendance：快速塞測試資料
+  - 單元測試自動忽略真實的剩餘記憶體，不受同時執行的其他程式影響
   - clock：固定 database_mgr 使用的目前時間
   - fake_llm_server：本機假的雲端 API 與 Ollama 伺服器，不需要網路與金鑰
 """
@@ -24,6 +25,17 @@ os.environ["SMART_ACCESS_RUNTIME_DIR"] = os.path.join(_TEST_ROOT, "runtime")
 os.environ["SMART_ACCESS_DOCS_DIR"] = os.path.join(_TEST_ROOT, "docs")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+
+@pytest.fixture(autouse=True)
+def _ignore_real_free_memory(request, monkeypatch):
+    """單元測試不看這台機器當下的剩餘記憶體（否則同時開著別的程式就會誤判資源不足）；整合測試照常查詢。"""
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker("regression"):
+        return
+    from shared import resource_manager
+
+    monkeypatch.setattr(resource_manager, "_free_ram_mb", lambda: None)
+    monkeypatch.setattr(resource_manager, "_free_vram_mb", lambda: None)
 
 
 @pytest.fixture
