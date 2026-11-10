@@ -76,13 +76,29 @@ def check_gpu():
                               capture_output=True, text=True, timeout=10, check=True).stdout.strip().splitlines()[0]
     except (OSError, subprocess.SubprocessError, IndexError):
         return [("WARN", "nvidia-smi 執行失敗，無法確認顯卡")]
-    import onnxruntime
     import torch
     results = [("OK", f"PyTorch 可使用 {name}") if torch.cuda.is_available()
                else ("WARN", f"偵測到 {name}，但 PyTorch 用不到 GPU（驅動太舊或裝到 CPU 版）：尾隨偵測會用 CPU")]
-    results.append(("OK", "onnxruntime 有 CUDA") if "CUDAExecutionProvider" in onnxruntime.get_available_providers()
-                   else ("WARN", f"偵測到 {name}，但 onnxruntime 沒有 CUDA：人臉特徵與活體會用 CPU"))
+    results.append(_check_onnx_cuda(name))
     return results
+
+
+def _check_onnx_cuda(gpu_name):
+    """真的建一個 CUDA session 才算數（套件列出 CUDA provider 不代表 CUDA 12 與 cuDNN 的程式庫找得到）。"""
+    import onnxruntime
+    try:
+        onnxruntime.preload_dlls()
+    except Exception:  # noqa: BLE001, S110  # nosec B110  載不到就由下面的 session 結果回報
+        pass
+    model = os.path.join(paths.MODELS_DIR, "MiniFASNetV2.onnx")
+    try:
+        session = onnxruntime.InferenceSession(model, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+        device = session.get_providers()[0]
+    except Exception as e:  # noqa: BLE001
+        return ("WARN", f"onnxruntime 建立 session 失敗：{type(e).__name__}")
+    if device == "CUDAExecutionProvider":
+        return ("OK", f"onnxruntime 在 {gpu_name} 上用 GPU 推論")
+    return ("WARN", f"偵測到 {gpu_name}，但 onnxruntime 退回 CPU（缺 CUDA 12 或 cuDNN 9 程式庫）：人臉與活體會用 CPU")
 
 
 def check_camera(index=0):

@@ -26,7 +26,7 @@ function IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     return ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
-function Configure-Network {
+function Set-FirewallRules {
     # 兩台用網路線直連、網卡維持「自動取得 IP」：Windows 會各自分配 169.254.x.x，程式自動互相找到，不用手動設 IP；
     # 前台不設閘道也不改任何網卡設定。這裡只建防火牆規則，並且只放行 169.254.0.0/16（網路線直連那一段）。
     if (-not (IsAdmin)) {
@@ -46,7 +46,7 @@ function Configure-Network {
 }
 
 if ($NetworkOnly) {
-    Configure-Network
+    Set-FirewallRules
     Read-Host "完成，按 Enter 結束"
     return
 }
@@ -116,11 +116,15 @@ if ($hasGpu) {
     $ort = "onnxruntime==1.23.2"
 }
 Run $VenvPy @("-m", "pip", "install", $ort, "-r", (Join-Path $Root "requirements\front.txt"), "-c", $constraintsPath)
+if ($hasGpu) {
+    # onnxruntime-gpu 1.23 要 CUDA 12 與 cuDNN 9 的程式庫；PyTorch cu130 帶的是 CUDA 13，所以另外裝 CUDA 12 版（約 2.4 GB）
+    Run $VenvPy @("-m", "pip", "install", "nvidia-cuda-runtime-cu12==12.9.79", "nvidia-cublas-cu12==12.9.2.10", "nvidia-cudnn-cu12==9.28.1.4", "nvidia-cufft-cu12==11.4.1.4", "nvidia-curand-cu12==10.3.10.19", "nvidia-cuda-nvrtc-cu12==12.9.86")
+}
 Run $VenvPy @("-m", "pip", "install", "retinaface==1.1.1", "--no-deps")
 
 # --- 5. 網路 ---
 Step 5 "防火牆（網路位址由程式自動找，不用設 IP）"
-if (Ask "現在建立防火牆規則？（需要系統管理員；稍後可用「設定前台網路.bat」）") { Configure-Network }
+if (Ask "現在建立防火牆規則？（需要系統管理員；稍後可用「設定前台網路.bat」）") { Set-FirewallRules }
 
 # --- 6. 通行碼 ---
 Step 6 "通行碼（要和後台一模一樣；只存在這個使用者的環境變數，不寫進檔案）"
