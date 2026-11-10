@@ -18,7 +18,7 @@ from shared import lan_discovery, paths, role_config
 
 REQUIRED_MODELS = ("arcface_r100_v1.onnx", "MiniFASNetV2.onnx", "yolov8s.pt",
                    os.path.join("vits-piper-zh_CN-huayan-medium", "zh_CN-huayan-medium.onnx"))
-REQUIRED_PACKAGES = ("cv2", "numpy", "onnxruntime", "sklearn", "skimage", "PIL", "flask", "requests", "psutil",
+REQUIRED_PACKAGES = ("cv2", "numpy", "onnxruntime", "sklearn", "skimage", "PIL", "requests", "psutil",
                      "sherpa_onnx", "sounddevice", "ultralytics", "retinaface")
 FONT_NAME = "msjh.ttc"
 
@@ -28,12 +28,11 @@ def check_role():
     settings = role_config.load()
     if settings.role != role_config.FRONT:
         return [("FAIL", f"角色是 {settings.role}，不是 front（用 python -m shared.role_config set --role front …）")]
-    results = [("OK", f"角色：front，後台 {settings.back_host}:{settings.back_port}，本機 {settings.bind_host}")]
-    if settings.bind_host.strip().lower() == role_config.AUTO:
-        try:
-            results.append(("OK", f"網路線位址：{lan_discovery.auto_address()}"))
-        except lan_discovery.DiscoveryError as e:
-            results.append(("WARN", str(e)))
+    results = [("OK", f"角色：front，後台 {settings.back_host}:{settings.back_port}")]
+    try:
+        results.append(("OK", f"網路線位址：{lan_discovery.auto_address()}"))
+    except lan_discovery.DiscoveryError as e:
+        results.append(("WARN", str(e)))
     results.append(("OK", "通行碼已設定") if role_config.link_token()
                    else ("FAIL", f"通行碼沒設定或太短（環境變數 {role_config.TOKEN_ENV}，至少 "
                                  f"{role_config.MIN_TOKEN_CHARS} 字元，要和後台一樣）"))

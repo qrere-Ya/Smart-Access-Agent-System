@@ -16,12 +16,17 @@ def test_role_check_fails_on_standalone_and_needs_the_token(monkeypatch, tmp_pat
     monkeypatch.setattr(paths, "ROLE_PATH", str(tmp_path / "role.json"))
     monkeypatch.delenv(rc.TOKEN_ENV, raising=False)
     monkeypatch.delenv(rc.ROLE_ENV, raising=False)
+    monkeypatch.setattr(fc.lan_discovery, "auto_address", lambda: "169.254.1.1")
     assert levels(fc.check_role()) == ["FAIL"]
-    rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", bind_host="192.168.50.2",
-                             back_fingerprint="ab" * 32))
-    assert levels(fc.check_role()) == ["OK", "FAIL"]                      # 角色對了但還沒設通行碼
+    rc.save(rc.LinkSettings(rc.FRONT, back_host="192.168.50.1", back_fingerprint="ab" * 32))
+    assert levels(fc.check_role()) == ["OK", "OK", "FAIL"]                # 角色對了、網路線有位址，但還沒設通行碼
     monkeypatch.setenv(rc.TOKEN_ENV, TOKEN)
-    assert levels(fc.check_role()) == ["OK", "OK"]
+    assert levels(fc.check_role()) == ["OK", "OK", "OK"]
+
+    def no_address():
+        raise fc.lan_discovery.DiscoveryError("網路線還沒有位址")
+    monkeypatch.setattr(fc.lan_discovery, "auto_address", no_address)
+    assert levels(fc.check_role()) == ["OK", "WARN", "OK"]                # 網路線沒插好只是警告
 
 
 def test_file_check_names_every_missing_model(tmp_path):

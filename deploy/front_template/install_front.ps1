@@ -33,10 +33,8 @@ function Set-FirewallRules {
         Write-Host "目前不是系統管理員，略過防火牆。之後在「設定前台網路.bat」上按右鍵 → 以系統管理員身分執行。" -ForegroundColor Yellow
         return
     }
-    $rule = "SmartAccess 前台狀態（只允許網路線直連）"
-    Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-    New-NetFirewallRule -DisplayName $rule -Direction Inbound -Protocol TCP -LocalPort 8771 `
-        -RemoteAddress "169.254.0.0/16" -Action Allow | Out-Null
+    # 前台不開任何對外服務（狀態由前台主動回報給後台），舊版安裝留下的 8771 規則順便移除
+    Get-NetFirewallRule -DisplayName "SmartAccess 前台狀態（只允許網路線直連）" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     # 探測回覆只允許給前台的 Python（虛擬環境的啟動器與實際執行的基底直譯器各一條），不開放給其他程式
     $programs = @($VenvPy)
     if (Test-Path $VenvPy) {
@@ -157,7 +155,7 @@ else {
 
 # --- 7. 角色 ---
 Step 7 "設定成前台"
-Run $VenvPy @("-m", "shared.role_config", "set", "--role", "front", "--back-host", "auto", "--bind-host", "auto")
+Run $VenvPy @("-m", "shared.role_config", "set", "--role", "front", "--back-host", "auto")
 
 # --- 8. 捷徑 ---
 Step 8 "桌面捷徑"

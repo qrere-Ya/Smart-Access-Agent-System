@@ -24,6 +24,7 @@ class FakeClient:
 
     def __init__(self):
         self.sent, self.script, self.server_time, self.fail_ping = [], [], NOW, None
+        self.heartbeats, self.heartbeat_error = [], None
 
     def ping(self):
         if self.fail_ping:
@@ -35,6 +36,12 @@ class FakeClient:
 
     def morning(self):
         return {"ok": True, "brief": None}
+
+    def heartbeat(self, status):
+        if self.heartbeat_error:
+            raise self.heartbeat_error
+        self.heartbeats.append(status)
+        return {"ok": True}
 
     def send_event(self, event):
         outcome = self.script.pop(0) if self.script else None
@@ -238,19 +245,38 @@ def test_face_changes_on_the_backend_reach_the_front(backend, add_user, tmp_path
     assert len(agent.index) == 3 and agent.store.faces_version() != version
 
 
-def test_the_status_service_needs_the_token_and_shows_no_faces(backend, tmp_path, monkeypatch):
+def test_the_front_reports_its_status_to_the_back_and_opens_no_service(backend, tmp_path, monkeypatch):
+    """狀態由前台主動送給後台（後台從不連前台）；送的內容只有數字與開關，不含人臉或姓名。"""
+    from admin import front_status
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
     agent = real_agent(backend, tmp_path)
-    agent.sync_once()
-    server = make_server("127.0.0.1", 0, fa.create_status_app(agent), threaded=True)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        url = f"http://127.0.0.1:{server.port}/v1/status"
-        assert requests.get(url, timeout=3).status_code == 401
-        assert requests.get(url, headers={"Authorization": "Bearer wrong"}, timeout=3).status_code == 401
-        body = requests.get(url, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=3).json()
-        assert body["ok"] and body["back_online"] and body["faces"] == 2 and body["pending_events"] == 0
-        text = json.dumps(body, ensure_ascii=False)
-        assert "甲" not in text and "embedding" not in text                       # 狀態不含人臉與姓名
-    finally:
-        server.shutdown()
-        server.server_close()
+    assert agent.sync_once() is True
+    state = front_status.load()
+    assert state["online"] is True and state["status"]["faces"] == 2 and state["status"]["pending_events"] == 0
+    text = json.dumps(state, ensure_ascii=False)
+    assert "甲" not in text and "embedding" not in text
+    assert not hasattr(fa, "create_status_app") and not hasattr(fa, "make_status_server")
+
+
+def test_the_heartbeat_payload_is_accepted_by_the_backend_validation(store, tmp_path):
+    agent = make_agent(store, FakeClient(), tmp_path)
+    payload = agent.heartbeat_payload()
+    assert lp.validate_heartbeat(payload) == {**payload, "clock_offset_seconds": 0.0}
+    assert set(payload) == {"pending_events", "rejected_events", "dropped_events", "faces", "faces_version",
+                            "clock_offset_seconds", "clock_warning", "recognition_running", "camera_ok"}
+
+
+def test_a_heartbeat_is_sent_after_each_successful_sync_and_never_while_offline(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    assert agent.sync_once() is True and len(client.heartbeats) == 1
+    client.fail_ping = fa.BackOffline("down")
+    assert agent.sync_once() is False and len(client.heartbeats) == 1
+
+
+def test_a_rejected_heartbeat_does_not_break_the_sync(store, tmp_path):
+    client = FakeClient()
+    client.heartbeat_error = fa.BackRejected("400 invalid")
+    agent = make_agent(store, client, tmp_path)
+    assert agent.sync_once() is True and agent.status()["back_online"] is True      # 拒收心跳不影響同步與在線
+    assert client.heartbeats == []

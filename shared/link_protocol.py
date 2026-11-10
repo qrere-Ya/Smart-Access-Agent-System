@@ -159,3 +159,37 @@ def build_event(kind, when, user_id=None, detail="", evidence=None, event_id=Non
         data["evidence"] = base64.b64encode(evidence).decode("ascii")
     validate_event(data, now=when + datetime.timedelta(seconds=1))
     return data
+
+
+# --- 前台心跳（前台→後台；後台只顯示，不拿來做任何安全或打卡判斷）---
+
+_HEARTBEAT_COUNTS = ("pending_events", "rejected_events", "dropped_events", "faces")
+_HEARTBEAT_FLAGS = ("clock_warning", "recognition_running", "camera_ok")
+_MAX_COUNT = 10_000_000
+_MAX_CLOCK_OFFSET = 10 * 365 * 24 * 3600.0
+_HEX_VERSION = re.compile(r"^[0-9a-f]{0,64}$")
+
+
+def validate_heartbeat(data):
+    """後台：驗證前台回報的狀態，只留白名單欄位並限制範圍；不合格丟 ProtocolError（其他欄位一律丟棄）。"""
+    if not isinstance(data, dict):
+        raise ProtocolError("心跳要是 JSON 物件")
+    status = {}
+    for key in _HEARTBEAT_COUNTS:
+        value = data.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= _MAX_COUNT:
+            raise ProtocolError(f"{key} 要是 0 到 {_MAX_COUNT} 的整數")
+        status[key] = value
+    for key in _HEARTBEAT_FLAGS:
+        if not isinstance(data.get(key), bool):
+            raise ProtocolError(f"{key} 要是 true 或 false")
+        status[key] = data[key]
+    offset = data.get("clock_offset_seconds")
+    if not isinstance(offset, (int, float)) or isinstance(offset, bool) or abs(offset) > _MAX_CLOCK_OFFSET:
+        raise ProtocolError("clock_offset_seconds 要是合理範圍內的數字")
+    status["clock_offset_seconds"] = round(float(offset), 1)
+    version = data.get("faces_version", "")
+    if not isinstance(version, str) or not _HEX_VERSION.match(version):
+        raise ProtocolError("faces_version 要是十六進位字串")
+    status["faces_version"] = version
+    return status

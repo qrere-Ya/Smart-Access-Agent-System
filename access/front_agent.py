@@ -9,8 +9,9 @@ front_agent.py：前台代理——和後台保持連線，同步人臉與晨報
   - 時鐘：事件時間 = 前台時鐘 + 最近一次量到的差（取請求前後的中點扣掉網路延遲）；差超過 MAX_CLOCK_SKEW_SECONDS
     狀態會警告；差存在本機，重開機後離線也能沿用
   - submit_punch／submit_event：事件先寫進磁碟佇列才算數，之後由同步迴圈補送（後台在線時一個週期內就送出）
-  - 狀態服務（只綁前台的內網 IP、要通行碼）：GET /v1/status 回報後台連線、待補送事件數、人臉版本與數量、
-    時鐘差，以及辨識程式寫的心跳（辨識是否在跑、鏡頭是否正常；心跳超過 HEARTBEAT_STALE_SECONDS 視為沒在跑）
+  - 狀態回報：每個同步週期用 POST /v1/heartbeat 把待補送事件數、人臉版本與數量、時鐘差，以及辨識程式寫的心跳
+    （辨識是否在跑、鏡頭是否正常；心跳超過 HEARTBEAT_STALE_SECONDS 視為沒在跑）送給後台顯示。
+    前台不開任何對外服務、後台也從不主動連前台，呼叫方向永遠是前台往後台
   - 前台不上網：只連設定裡的後台內網位址；位址不是內網就拒絕建立；後台位址填 auto 時用 shared.lan_discovery 自動找，
     後台離線時每 10 秒重新探測（後台位址變了會自己換）
 
@@ -28,7 +29,6 @@ import time
 
 import requests
 from requests.adapters import HTTPAdapter
-from flask import Flask, jsonify, request
 
 from access.front_store import FaceIndex, FrontStore, Outbox
 from shared import lan_discovery, link_protocol as lp, link_tls, paths, role_config
@@ -142,6 +142,9 @@ class BackClient:
     def send_event(self, event):
         return self._call("POST", lp.API_PREFIX + "/events", json=event)
 
+    def heartbeat(self, status):
+        return self._call("POST", lp.API_PREFIX + "/heartbeat", json=status)
+
 
 class FrontAgent:
     def __init__(self, store, client, now=datetime.datetime.now, clock=time.time, heartbeat_path=None):
@@ -191,6 +194,7 @@ class FrontAgent:
             self._sync_faces()
             self._sync_morning()
             self.flush_queue()
+            self._send_heartbeat()
         except BackAuthError as e:
             self.back_online, self.auth_error, self.last_error = False, True, str(e)
             return False
@@ -225,6 +229,20 @@ class FrontAgent:
         brief = body.get("brief")
         if isinstance(brief, dict) or brief is None:
             self.store.set_meta("morning", brief)
+
+    def heartbeat_payload(self):
+        """要回報給後台的狀態（只有數字與開關，不含人臉、姓名或事件內容）。"""
+        status = self.status()
+        keys = ("pending_events", "rejected_events", "dropped_events", "faces", "faces_version",
+                "clock_offset_seconds", "clock_warning", "recognition_running", "camera_ok")
+        return {key: status[key] for key in keys}
+
+    def _send_heartbeat(self):
+        """回報狀態給後台；後台是舊版（沒有這個功能）或拒收都不影響同步，只有連線類錯誤才往上丟。"""
+        try:
+            self.client.heartbeat(self.heartbeat_payload())
+        except BackRejected as e:
+            self.last_error = f"心跳被後台拒收：{e}"
 
     def flush_queue(self):
         """依序補送；暫時失敗就停下（保持順序），永久失敗的移到 rejected 後繼續下一筆。回傳這次送出的筆數。"""
@@ -298,30 +316,6 @@ def write_heartbeat(recognition_running, camera_ok, path=None, clock=time.time):
     os.replace(tmp, target)
 
 
-def create_status_app(agent, token_matches=role_config.token_matches):
-    """狀態服務：只有 GET /v1/status，要通行碼；不回傳任何人臉或姓名資料。"""
-    app = Flask(__name__)
-
-    @app.before_request
-    def authenticate():
-        scheme, _, candidate = request.headers.get("Authorization", "").partition(" ")
-        if scheme != "Bearer" or not token_matches(candidate.strip()):
-            return jsonify({"ok": False, "error": "unauthorized"}), 401
-        return None
-
-    @app.get(lp.API_PREFIX + "/status")
-    def status():
-        return jsonify({"ok": True, **agent.status()})
-
-    return app
-
-
-def make_status_server(agent, settings):
-    from werkzeug.serving import make_server
-    host = lan_discovery.resolve(settings.bind_host)
-    return make_server(host, settings.front_status_port, create_status_app(agent), threaded=True)
-
-
 def _wait_for(stop, what, attempt, interval=3.0):
     """重複嘗試直到成功（或被停止）；第一次失敗時印一次原因，網路線剛插好時位址要等 30 到 60 秒。"""
     announced = False
@@ -370,25 +364,20 @@ def main():
             host, port, fingerprint = settings.back_host, settings.back_port, settings.back_fingerprint
         client = BackClient(host, port, token, fingerprint)
         agent = FrontAgent(FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db")), client)
-        server = _wait_for(stop, "網路線位址", lambda: make_status_server(agent, settings))
     except role_config.ConfigError as e:
         print(f"[front_agent] 無法啟動：{e}")
         return 2
     except KeyboardInterrupt:
         return 0
-    if server is None:
-        return 0
-    threading.Thread(target=server.serve_forever, daemon=True).start()
     if auto:
         threading.Thread(target=_rediscover_loop, args=(agent, token, stop), daemon=True).start()
-    print(f"[front_agent] 前台代理啟動：後台 {client.base}；狀態服務 http://{server.host}:{server.port}")
+    print(f"[front_agent] 前台代理啟動：後台 {client.base}（前台不開任何對外服務，狀態由前台主動回報）")
     try:
         agent.run(stop)
     except KeyboardInterrupt:
         stop.set()
     finally:
         stop.set()
-        server.shutdown()
     return 0
 
 

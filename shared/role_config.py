@@ -4,7 +4,7 @@ role_config.py：單機、後台、前台三種角色與兩台電腦之間的連
 主要功能：
   - 角色：standalone（單機，預設，行為與以前完全相同）、back（後台：唯一的資料庫與伺服器）、front（前台：門口那台，
     辨識在本機做，事件送回後台，不上網）。環境變數 SMART_ACCESS_ROLE 優先，其次 runtime/role.json，沒設就是單機
-  - 連線設定：後台位址與埠（前台連過去用）、後台綁定的網卡位址與埠、前台狀態服務的埠（後台輪詢用）
+  - 連線設定：後台位址與埠（前台連過去用）、後台綁定的網卡位址與埠（前台不開對外服務，狀態由前台主動回報）
   - 位址規則：只接受內網 IPv4（10.x、172.16–31.x、192.168.x、169.254.x、127.x），不接受網域名稱與公開位址，
     所以不會被設成連到外網；後台綁定位址不得是 0.0.0.0（萬用位址），要指定網路線那張網卡的 IP，
     或填 auto 由 lan_discovery 自動找（169.254.x.x）
@@ -46,8 +46,8 @@ class LinkSettings:
     role: str = STANDALONE
     back_host: str = ""                       # 前台連去的後台位址（內網 IPv4）
     back_port: int = DEFAULT_BACK_PORT
-    bind_host: str = ""                       # 本機綁定的位址（網路線那張網卡的 IPv4；後台服務與前台狀態服務都用）
-    front_status_port: int = DEFAULT_FRONT_STATUS_PORT
+    bind_host: str = ""                       # 後台連線服務綁定的位址（網路線那張網卡的 IPv4 或 auto）；前台不需要
+    front_status_port: int = DEFAULT_FRONT_STATUS_PORT   # 保留欄位讓舊設定檔照常讀取；前台已不開狀態服務，不再使用
     back_fingerprint: str = ""                # 前台手動填後台位址時要信任的憑證指紋（SHA-256）；auto 模式從探測回覆取得
 
 
@@ -95,7 +95,6 @@ def validate(settings):
         if settings.back_host.strip().lower() != AUTO and not link_tls.normalize(settings.back_fingerprint):
             raise ConfigError("手動填後台位址時，還要填後台憑證指紋（--back-fingerprint，64 字元十六進位）；"
                               "連線一律加密，不會退回明文。位址填 auto 就會自動取得")
-        _address_or_auto(settings.bind_host, "前台綁定位址（前台狀態服務用）")
     return settings
 
 
@@ -185,10 +184,8 @@ def _describe(settings):
     lines = [f"角色：{settings.role}"]
     if settings.role == BACK:
         lines.append(f"後台綁定位址：{settings.bind_host}:{settings.back_port}")
-        lines.append(f"前台狀態埠（後台去查）：{settings.front_status_port}")
     elif settings.role == FRONT:
         lines.append(f"後台位址：{settings.back_host}:{settings.back_port}")
-        lines.append(f"前台綁定位址（狀態服務）：{settings.bind_host}:{settings.front_status_port}")
     lines.append(f"通行碼：{token}")
     return "\n".join(lines)
 
@@ -201,7 +198,7 @@ def main(argv=None):
     put = sub.add_parser("set", help="設定角色與位址")
     put.add_argument("--role", choices=ROLES, required=True)
     put.add_argument("--back-host", default="", help="前台用：後台的內網 IPv4")
-    put.add_argument("--bind-host", default="", help="後台與前台都要填：本機網路線那張網卡的 IPv4")
+    put.add_argument("--bind-host", default="", help="後台要填：網路線那張網卡的 IPv4 或 auto；前台不需要")
     put.add_argument("--back-port", type=int, default=DEFAULT_BACK_PORT)
     put.add_argument("--front-status-port", type=int, default=DEFAULT_FRONT_STATUS_PORT)
     put.add_argument("--back-fingerprint", default="", help="前台手動填後台位址時：後台憑證的 SHA-256 指紋")

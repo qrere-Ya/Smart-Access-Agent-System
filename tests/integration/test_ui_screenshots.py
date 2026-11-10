@@ -217,3 +217,31 @@ def test_qr_window_shows_a_qr_image_from_the_server(root, db, screenshot, appear
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_back_role_dashboard_window_screenshot(root, db, add_user, add_attendance, screenshot, appearance, mode,
+                                               monkeypatch, tmp_path):
+    """雙機後台的營運狀態頁（前台連線卡片與事件串流）在亮暗兩種外觀下都能畫出來。"""
+    from admin import front_status, service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import paths
+
+    appearance(mode)
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    _seed(add_user, add_attendance)
+    today = time.strftime("%Y-%m-%d")
+    add_attendance("王小明", f"{today} 08:55:00", "上班")
+    front_status.record({"pending_events": 2, "rejected_events": 0, "dropped_events": 0, "faces": 3,
+                         "faces_version": "ab", "clock_offset_seconds": 0.3, "clock_warning": False,
+                         "recognition_running": True, "camera_ok": True}, "169.254.127.16")
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_win.geometry("1260x700+20+20")
+    assert screenshot(app.dash_win, f"後台_營運狀態_雙機_{mode}")
+    app.teardown()

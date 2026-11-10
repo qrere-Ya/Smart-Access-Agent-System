@@ -47,7 +47,7 @@ def user_id_of(db, name):
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}, {"Authorization": TOKEN},
                                      {"Authorization": "Basic " + TOKEN}, {"Authorization": "Bearer "}])
 @pytest.mark.parametrize("method,path", [("get", "/v1/ping"), ("get", "/v1/faces"), ("get", "/v1/morning"),
-                                         ("post", "/v1/events")])
+                                         ("post", "/v1/events"), ("post", "/v1/heartbeat")])
 def test_every_route_needs_the_token(client, method, path, headers):
     response = getattr(client, method)(path, headers=headers)
     assert response.status_code == 401 and response.get_json()["error"] == "unauthorized"
@@ -222,3 +222,37 @@ def test_the_server_refuses_to_start_outside_the_back_role_or_without_a_token(mo
         assert server.host == "127.0.0.1" and server.port == 18771
     finally:
         server.server_close()
+
+
+# --- 前台心跳 ---
+
+GOOD_HEARTBEAT = {"pending_events": 2, "rejected_events": 0, "dropped_events": 0, "faces": 5, "faces_version": "ab12",
+                  "clock_offset_seconds": 1.26, "clock_warning": False, "recognition_running": True, "camera_ok": True}
+
+
+def test_a_heartbeat_is_stored_for_the_backend_window_and_unknown_fields_are_dropped(client, tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
+    body = {**GOOD_HEARTBEAT, "name": "甲", "embedding": "AAAA", "__proto__": {"x": 1}}
+    assert client.post("/v1/heartbeat", json=body, headers=AUTH).get_json()["ok"] is True
+    saved = json.load(open(paths.FRONT_STATUS_PATH, encoding="utf-8"))
+    assert saved["status"] == {**GOOD_HEARTBEAT, "clock_offset_seconds": 1.3}
+    assert "甲" not in json.dumps(saved, ensure_ascii=False) and "embedding" not in saved["status"]
+
+
+@pytest.mark.parametrize("change", [{"pending_events": -1}, {"pending_events": "3"}, {"pending_events": True},
+                                    {"faces": 10 ** 9}, {"camera_ok": "yes"}, {"recognition_running": None},
+                                    {"clock_offset_seconds": 10 ** 12}, {"clock_offset_seconds": "x"},
+                                    {"faces_version": "not hex!"}, {"faces_version": "a" * 65}, {"faces": None}])
+def test_a_bad_heartbeat_is_rejected_and_nothing_is_stored(client, tmp_path, monkeypatch, change):
+    import os
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
+    response = client.post("/v1/heartbeat", json={**GOOD_HEARTBEAT, **change}, headers=AUTH)
+    assert response.status_code == 400 and response.get_json()["error"] == "invalid"
+    assert not os.path.exists(paths.FRONT_STATUS_PATH)
+
+
+@pytest.mark.parametrize("payload", [None, [], "text", 5])
+def test_a_heartbeat_that_is_not_an_object_is_rejected(client, tmp_path, monkeypatch, payload):
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
+    assert client.post("/v1/heartbeat", json=payload, headers=AUTH).status_code == 400

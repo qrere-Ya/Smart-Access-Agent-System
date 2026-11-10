@@ -6,6 +6,8 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
   - GET  /v1/faces   ：給前台的人臉快照（編號、姓名、員工編號、角色、特徵與整份資料的版本）；
                        帶 ?have=版本 且沒變時只回 unchanged，不重送
   - GET  /v1/morning ：最新晨報（只有科技新聞；日報與出勤資料不會從這裡出去）
+  - POST /v1/heartbeat：前台每個同步週期回報的狀態（鏡頭、辨識、待補送數、時鐘差）；只留最新一份給後台視窗顯示，
+                       不拿來做任何安全或打卡判斷。後台從不主動連前台，狀態都由前台送來
   - POST /v1/events  ：前台送來的打卡、尾隨、經過未打卡事件（證據照片用 base64 的 JPEG）
       · 打卡只信員工編號，姓名由後台查；事件時間用前台送來的（離線補送也能算在正確的時間）
       · event_id 已經收過就回 duplicate，不再寫入，所以前台可以放心重送
@@ -32,7 +34,7 @@ from flask import Flask, jsonify, request
 
 from access import pass_through
 from shared import database_mgr as db
-from admin import link_cert
+from admin import front_status, link_cert
 from shared import digest_store, lan_discovery, link_protocol as lp, link_tls, paths, role_config
 
 _EVIDENCE_PREFIX = {"tailgate": "tailgate", pass_through.EVENT_TYPE: pass_through.EVENT_TYPE}
@@ -88,6 +90,19 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
             return reply({"ok": True, "brief": None})
         keep = ("date", "generated_at", "news", "news_problem")
         return reply({"ok": True, "brief": {k: brief.get(k) for k in keep}})
+
+    @app.post(lp.API_PREFIX + "/heartbeat")
+    def heartbeat():
+        try:
+            status = lp.validate_heartbeat(request.get_json(silent=True))
+        except lp.ProtocolError as e:
+            return reply({"ok": False, "error": "invalid", "message": str(e)}, 400)
+        try:
+            front_status.record(status, remote_addr=request.remote_addr or "")
+        except OSError as e:
+            print(f"[link_server] 前台狀態寫入失敗：{type(e).__name__}")
+            return reply({"ok": False, "error": "server_error"}, 500)
+        return reply({"ok": True})
 
     @app.post(lp.API_PREFIX + "/events")
     def events():

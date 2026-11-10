@@ -40,3 +40,59 @@ def test_admin_window_builds_and_shows_service_status(root):
     app = BackendManagerApp(root)
     root.update()
     assert app.face_status_var.get().startswith("⚪")
+
+
+def test_back_role_dashboard_shows_the_front_link_and_the_event_stream(root, db, add_user, add_attendance,
+                                                                      monkeypatch, tmp_path):
+    """雙機後台：營運狀態頁用真的視窗顯示前台連線燈號（在線、離線、沒收過）與前台事件串流，且沒有人臉辨識開關。"""
+    import time
+
+    from admin import front_status, service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import paths
+
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    add_user("王小明", "E1")
+    add_attendance("王小明", time.strftime("%Y-%m-%d") + " 08:55:00", "上班")
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_win.update()
+    assert not hasattr(app, "face_btn") and app.link_wanted is True
+    assert "還沒收到前台回報" in app.link_headline.cget("text")                    # 沒收過心跳
+
+    front_status.record({"pending_events": 3, "rejected_events": 0, "dropped_events": 0, "faces": 4,
+                         "faces_version": "ab", "clock_offset_seconds": 0.1, "clock_warning": False,
+                         "recognition_running": True, "camera_ok": True}, "169.254.127.16")
+    app._refresh_link_card()
+    assert "前台連線中" in app.link_headline.cget("text")
+    assert "待補送事件 3 筆" in app.link_detail.cget("text") and "鏡頭正常" in app.link_detail.cget("text")
+    assert "連線服務執行中" in app.link_service_label.cget("text")
+    rows = [app.event_tree.item(i, "values") for i in app.event_tree.get_children()]
+    assert any("打卡　王小明　上班" in r[1] for r in rows)
+
+    front_status.record({"pending_events": 0, "rejected_events": 0, "dropped_events": 0, "faces": 4,
+                         "faces_version": "ab", "clock_offset_seconds": 0.0, "clock_warning": False,
+                         "recognition_running": True, "camera_ok": True}, "x", clock=lambda: time.time() - 120)
+    app._refresh_link_card()
+    assert "前台離線" in app.link_headline.cget("text")
+    app.teardown()
+
+
+def test_standalone_dashboard_keeps_the_face_switch_and_does_not_start_a_link_service(root, db, monkeypatch):
+    from admin import service_manager as sm
+    from admin.backend_main import BackendManagerApp
+
+    started = []
+    monkeypatch.setattr(sm, "start_link_service", lambda *a, **k: started.append(1) or (True, ""))
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_win.update()
+    assert app.link_wanted is False and hasattr(app, "face_btn") and started == []
+    app.teardown()
