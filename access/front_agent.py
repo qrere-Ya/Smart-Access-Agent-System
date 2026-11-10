@@ -11,7 +11,8 @@ front_agent.py：前台代理——和後台保持連線，同步人臉與晨報
   - submit_punch／submit_event：事件先寫進磁碟佇列才算數，之後由同步迴圈補送（後台在線時一個週期內就送出）
   - 狀態服務（只綁前台的內網 IP、要通行碼）：GET /v1/status 回報後台連線、待補送事件數、人臉版本與數量、
     時鐘差，以及辨識程式寫的心跳（辨識是否在跑、鏡頭是否正常；心跳超過 HEARTBEAT_STALE_SECONDS 視為沒在跑）
-  - 前台不上網：只連設定裡的後台內網位址；位址不是內網就拒絕建立
+  - 前台不上網：只連設定裡的後台內網位址；位址不是內網就拒絕建立；後台位址填 auto 時用 shared.lan_discovery 自動找，
+    後台離線時每 10 秒重新探測（後台位址變了會自己換）
 
 串接模組：
   - shared.link_protocol、shared.role_config：協定與角色設定；access.front_store：快取與佇列
@@ -28,7 +29,7 @@ import requests
 from flask import Flask, jsonify, request
 
 from access.front_store import FaceIndex, FrontStore, Outbox
-from shared import link_protocol as lp, paths, role_config
+from shared import lan_discovery, link_protocol as lp, paths, role_config
 
 SYNC_SECONDS = 10
 MAX_BACKOFF_SECONDS = 60
@@ -53,9 +54,17 @@ class BackAuthError(Exception):
 
 class BackClient:
     def __init__(self, host, port, token, timeout=(3.0, 10.0), session=None):
-        self.base = f"http://{role_config.private_ipv4(host, '後台位址')}:{role_config.valid_port(port, '後台埠')}"
+        self.set_address(host, port)
         self.headers = {"Authorization": f"Bearer {token}"}
         self.timeout, self.session = timeout, session or requests.Session()
+
+    def set_address(self, host, port):
+        """設定（或自動尋找到新位址時更換）連線目標。"""
+        self.host, self.port = role_config.private_ipv4(host, "後台位址"), role_config.valid_port(port, "後台埠")
+        self.base = f"http://{self.host}:{self.port}"
+
+    def host_port(self):
+        return (self.host, self.port)
 
     def _call(self, method, path, **kwargs):
         try:
@@ -273,7 +282,38 @@ def create_status_app(agent, token_matches=role_config.token_matches):
 
 def make_status_server(agent, settings):
     from werkzeug.serving import make_server
-    return make_server(settings.bind_host, settings.front_status_port, create_status_app(agent), threaded=True)
+    host = lan_discovery.resolve(settings.bind_host)
+    return make_server(host, settings.front_status_port, create_status_app(agent), threaded=True)
+
+
+def _wait_for(stop, what, attempt, interval=3.0):
+    """重複嘗試直到成功（或被停止）；第一次失敗時印一次原因，網路線剛插好時位址要等 30 到 60 秒。"""
+    announced = False
+    while not stop.is_set():
+        try:
+            result = attempt()
+        except role_config.ConfigError as e:
+            result, reason = None, str(e)
+        else:
+            reason = "後台沒有回應（後台還沒開、網路線或防火牆）"
+        if result:
+            return result
+        if not announced:
+            print(f"[front_agent] 等待{what}：{reason}")
+            announced = True
+        stop.wait(interval)
+    return None
+
+
+def _rediscover_loop(agent, token, stop, interval=10.0, discover=lan_discovery.discover_back):
+    """後台離線時重新探測位址（重開機或重插網路線後後台位址可能變了）；找到就換連線目標。"""
+    while not stop.wait(interval):
+        if agent.back_online:
+            continue
+        found = discover(token)
+        if found and found != (agent.client.host_port()):
+            agent.client.set_address(*found)
+            print(f"[front_agent] 後台位址更新：{found[0]}:{found[1]}")
 
 
 def main():
@@ -281,22 +321,36 @@ def main():
     if settings.role != role_config.FRONT:
         print("[front_agent] 目前的角色不是前台（python -m shared.role_config set --role front ...）")
         return 2
+    stop = threading.Event()
     try:
         token = role_config.require_token()
-        client = BackClient(settings.back_host, settings.back_port, token)
+        auto = settings.back_host.strip().lower() == role_config.AUTO
+        if auto:
+            host, port = _wait_for(stop, "自動找到後台", lambda: lan_discovery.discover_back(token)) or (None, None)
+            if host is None:
+                return 0
+        else:
+            host, port = settings.back_host, settings.back_port
+        client = BackClient(host, port, token)
+        agent = FrontAgent(FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db")), client)
+        server = _wait_for(stop, "網路線位址", lambda: make_status_server(agent, settings))
     except role_config.ConfigError as e:
         print(f"[front_agent] 無法啟動：{e}")
         return 2
-    agent = FrontAgent(FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db")), client)
-    server = make_status_server(agent, settings)
+    except KeyboardInterrupt:
+        return 0
+    if server is None:
+        return 0
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    if auto:
+        threading.Thread(target=_rediscover_loop, args=(agent, token, stop), daemon=True).start()
     print(f"[front_agent] 前台代理啟動：後台 {client.base}；狀態服務 http://{server.host}:{server.port}")
-    stop = threading.Event()
     try:
         agent.run(stop)
     except KeyboardInterrupt:
         stop.set()
     finally:
+        stop.set()
         server.shutdown()
     return 0
 

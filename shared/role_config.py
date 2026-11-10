@@ -6,7 +6,8 @@ role_config.py：單機、後台、前台三種角色與兩台電腦之間的連
     辨識在本機做，事件送回後台，不上網）。環境變數 SMART_ACCESS_ROLE 優先，其次 runtime/role.json，沒設就是單機
   - 連線設定：後台位址與埠（前台連過去用）、後台綁定的網卡位址與埠、前台狀態服務的埠（後台輪詢用）
   - 位址規則：只接受內網 IPv4（10.x、172.16–31.x、192.168.x、169.254.x、127.x），不接受網域名稱與公開位址，
-    所以不會被設成連到外網；後台綁定位址不得是 0.0.0.0（萬用位址），一定要指定網路線那張網卡的 IP
+    所以不會被設成連到外網；後台綁定位址不得是 0.0.0.0（萬用位址），要指定網路線那張網卡的 IP，
+    或填 auto 由 lan_discovery 自動找（169.254.x.x）
   - 通行碼（token）只走環境變數 SMART_ACCESS_LINK_TOKEN，不寫進任何檔案、不印出；至少 32 字元；比對用常數時間
   - 命令列：python -m shared.role_config show／set／token（token 只在產生時印一次，請自己存進環境變數）
 
@@ -27,6 +28,7 @@ ROLE_ENV = "SMART_ACCESS_ROLE"
 TOKEN_ENV = "SMART_ACCESS_LINK_TOKEN"  # noqa: S105  # nosec B105  環境變數名稱，不是密碼
 STANDALONE, BACK, FRONT = "standalone", "back", "front"
 ROLES = (STANDALONE, BACK, FRONT)
+AUTO = "auto"                 # bind_host／back_host 填 auto：直連網路線時自動找位址（shared.lan_discovery）
 MIN_TOKEN_CHARS = 32
 DEFAULT_BACK_PORT = 8770
 DEFAULT_FRONT_STATUS_PORT = 8771
@@ -70,6 +72,12 @@ def valid_port(value, what="埠"):
     return port
 
 
+def _address_or_auto(value, what):
+    """內網 IPv4 或 auto。"""
+    if str(value or "").strip().lower() != AUTO:
+        private_ipv4(value, what)
+
+
 def validate(settings):
     """檢查整組設定；不合法丟 ConfigError。後台需要綁定位址，前台需要後台位址。"""
     if settings.role not in ROLES:
@@ -77,10 +85,10 @@ def validate(settings):
     valid_port(settings.back_port, "後台埠")
     valid_port(settings.front_status_port, "前台狀態埠")
     if settings.role == BACK:
-        private_ipv4(settings.bind_host, "後台綁定位址")
+        _address_or_auto(settings.bind_host, "後台綁定位址")
     if settings.role == FRONT:
-        private_ipv4(settings.back_host, "後台位址")
-        private_ipv4(settings.bind_host, "前台綁定位址（前台狀態服務用）")
+        _address_or_auto(settings.back_host, "後台位址")
+        _address_or_auto(settings.bind_host, "前台綁定位址（前台狀態服務用）")
     return settings
 
 

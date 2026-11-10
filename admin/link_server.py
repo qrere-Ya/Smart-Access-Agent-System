@@ -17,6 +17,7 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
 串接模組：
   - shared.link_protocol：驗證與編碼；shared.role_config：角色、位址、通行碼
   - shared.database_mgr：人臉快照、打卡、異常事件、收件去重；shared.digest_store：晨報
+  - shared.lan_discovery：bind_host 填 auto 時找位址，並回覆前台的自動尋找
   - 之後由 service_manager 與 backend_main 啟動（雙機模式）；單機模式不會啟動這個服務
 
 不做的事：沒有 HTTPS（網路線直連、只放行前台 IP 的防火牆規則由 N2c 處理）、沒有登入失敗鎖定
@@ -30,7 +31,7 @@ from flask import Flask, jsonify, request
 
 from access import pass_through
 from shared import database_mgr as db
-from shared import digest_store, link_protocol as lp, paths, role_config
+from shared import digest_store, lan_discovery, link_protocol as lp, paths, role_config
 
 _EVIDENCE_PREFIX = {"tailgate": "tailgate", pass_through.EVENT_TYPE: pass_through.EVENT_TYPE}
 
@@ -143,7 +144,8 @@ def make_server(settings=None):
         raise role_config.ConfigError("目前的角色不是後台，不啟動連線服務"
                                       "（python -m shared.role_config set --role back ...）")
     role_config.require_token()
-    return werkzeug_make_server(settings.bind_host, settings.back_port, create_app(), threaded=True)
+    host = lan_discovery.resolve(settings.bind_host)     # 填 auto 就用網路線那張網卡的 169.254.x.x
+    return werkzeug_make_server(host, settings.back_port, create_app(), threaded=True)
 
 
 def main():
@@ -154,11 +156,19 @@ def main():
         print(f"[link_server] 無法啟動：{e}")
         return 2
     print(f"[link_server] 後台連線服務啟動：http://{server.host}:{server.port}（只給前台使用）")
+    responder = None
+    try:
+        responder = lan_discovery.DiscoveryResponder(server.host, server.port).start()
+        print(f"[link_server] 前台自動尋找：UDP {responder.port}")
+    except OSError as e:
+        print(f"[link_server] 無法開啟自動尋找（{type(e).__name__}）：前台要手動填後台位址")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if responder:
+            responder.stop()
         server.server_close()
     return 0
 
