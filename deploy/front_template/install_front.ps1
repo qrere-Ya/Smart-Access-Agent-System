@@ -162,12 +162,7 @@ Step 8 "桌面捷徑"
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "啟動前台門禁.lnk"))
 $link.TargetPath = Join-Path $Root "啟動前台.bat"; $link.WorkingDirectory = $Root; $link.Save()
-Write-Host "已在桌面建立「啟動前台門禁」。"
-if (Ask "開機登入後自動啟動前台？" "N") {
-    $startup = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Startup")) "啟動前台門禁.lnk"))
-    $startup.TargetPath = Join-Path $Root "啟動前台.bat"; $startup.WorkingDirectory = $Root; $startup.WindowStyle = 7; $startup.Save()
-    Write-Host "已加入開機自動啟動。"
-}
+Write-Host "已在桌面建立「啟動前台門禁」（不做開機自動啟動，要用時自己雙擊）。"
 
 # --- 9. 自我檢查 ---
 Step 9 "自我檢查"

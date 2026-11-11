@@ -8,11 +8,14 @@ front_view.py：前台儀表板（第二個螢幕）要顯示的內容整理—�
   - 警示：尾隨、經過未打卡、非活體三種，顯示 ALERT_SECONDS 秒後自動消失
   - 狀態：後台連線（前台離線也照樣辨識，所以離線是黃色提醒不是錯誤）、鏡頭、辨識、待補送事件
   - 文字長度在這裡截斷，避免外部新聞的超長標題把版面撐壞
+  - 新聞原文網址：只有 https 公開網域才給畫面做 QR Code；前台開了全本地模式就一律不給
 
 串接模組：
   - access.front_store（ScreenState、FrontStore）：資料來源；access.front_agent：辨識心跳讀取
   - access.front_dashboard：畫面；晨報內容來自後台（admin.morning_brief）經前台代理同步
 """
+from shared import link_check
+
 NEWS_PER_PAGE = 3
 PAGE_SECONDS = 20
 GREETING_ROWS = 5
@@ -50,8 +53,9 @@ def greeting_rows(punches):
             for p in punches[:GREETING_ROWS]]
 
 
-def news_view(brief, today, now_ts, per_page=NEWS_PER_PAGE, page_seconds=PAGE_SECONDS):
-    """晨報 → 畫面用的 dict：state（ok／empty／problem）、標題文字、目前這一頁的新聞卡片與頁碼。"""
+def news_view(brief, today, now_ts, per_page=NEWS_PER_PAGE, page_seconds=PAGE_SECONDS, local_only=False):
+    """晨報 → 畫面用的 dict：state（ok／empty／problem）、標題文字、目前這一頁的新聞卡片與頁碼。
+    卡片的 link 只在網址是 https 公開網域、且前台不是全本地模式時才有（給 QR Code 用）。"""
     if not isinstance(brief, dict):
         return {"state": "empty", "heading": "今日科技早報", "message": "還沒有晨報：後台尚未產生，或前台還沒同步到。",
                 "cards": [], "page": 0, "pages": 0}
@@ -66,9 +70,15 @@ def news_view(brief, today, now_ts, per_page=NEWS_PER_PAGE, page_seconds=PAGE_SE
     index = int(now_ts // page_seconds) % len(pages)
     shown = [{"category": _cut(c.get("category", ""), 12), "title": _cut(c["title"], MAX_TITLE),
               "what": _cut(c.get("what", ""), MAX_WHAT), "why": _cut(c.get("why", ""), MAX_NOTE),
-              "how": _cut(c.get("how", ""), MAX_NOTE), "source": _cut(c.get("source", ""), 30)}
+              "how": _cut(c.get("how", ""), MAX_NOTE), "source": _cut(c.get("source", ""), 30),
+              "link": _safe_link(c.get("link"), local_only)}
              for c in pages[index]]
     return {"state": "ok", "heading": heading, "message": "", "cards": shown, "page": index + 1, "pages": len(pages)}
+
+
+def _safe_link(url, local_only):
+    url = str(url or "").strip()
+    return url if url and not local_only and not link_check.link_problem(url) else ""
 
 
 def link_view(link_online, pending):
@@ -131,14 +141,14 @@ def speed_text(arrow, kbps):
     return f"{arrow} {kbps / 1024:.1f} MB/s" if kbps >= 1024 else f"{arrow} {kbps:.1f} KB/s"
 
 
-def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None):
+def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_only=False):
     """整理一份畫面內容。store 是 FrontStore，screen 是 ScreenState，read_heartbeat() 回傳辨識心跳。"""
     time_text, date_text = clock_texts(now)
     pending = store.pending_count() if pending is None else pending
     link_online = store.link_online(now=lambda: now_ts)
     faces = len(store.load_faces())
     greetings = greeting_rows(screen.recent_punches(GREETING_MAX_AGE, now=lambda: now_ts))
-    news = news_view(store.get_meta("morning"), now.date(), now_ts)
+    news = news_view(store.get_meta("morning"), now.date(), now_ts, local_only=local_only)
     status = status_rows(link_online, pending, faces, read_heartbeat())
     return {
         "time": time_text, "date": date_text,

@@ -56,6 +56,18 @@ def _ago(seconds):
     return f"{seconds // 3600} 小時前"
 
 
+def badge_view(state):
+    """主選單標題下的小徽章 → (徽章種類, 文字)：沒收過是灰、離線是紅、在線但辨識沒在跑是黃、在線正常是綠。"""
+    if not state["seen"]:
+        return "neutral", "● 前台未連線"
+    if not state["online"]:
+        return "danger", f"● 前台離線（{_ago(state['age'])}）"
+    status = state["status"]
+    if not status.get("recognition_running") or not status.get("camera_ok"):
+        return "warning", "● 前台連線中（辨識未執行）"
+    return "success", "● 前台連線中"
+
+
 def describe(state):
     """回傳 (色調, 標題, 細節列表)；色調是 success／danger／muted，由畫面決定實際顏色。"""
     if not state["seen"]:

@@ -69,7 +69,7 @@ def test_very_long_or_hostile_news_text_cannot_blow_up_the_layout():
     assert len(shown["title"]) <= fv.MAX_TITLE and shown["title"].endswith("…")
     assert len(shown["what"]) <= fv.MAX_WHAT and len(shown["why"]) <= fv.MAX_NOTE and len(shown["how"]) <= fv.MAX_NOTE
     assert len(shown["source"]) <= 30 and len(shown["category"]) <= 12
-    assert "link" not in shown                                              # 前台不上網，不顯示原文連結
+    assert shown["link"] == "https://example.com/x"                         # 網址原樣給 QR，不截斷也不顯示成文字
 
 
 def test_malformed_news_entries_are_skipped_not_fatal():
@@ -171,3 +171,13 @@ def test_load_tone_and_speed_text():
     assert [fv.load_tone(x) for x in (10, 70, 95)] == ["success", "warning", "danger"]
     assert fv.speed_text("↓", None) == "↓ —" and fv.speed_text("↓", 12.34) == "↓ 12.3 KB/s"
     assert fv.speed_text("↑", 2048) == "↑ 2.0 MB/s"
+
+
+def test_news_cards_carry_only_safe_https_links_and_none_in_local_only_mode():
+    today = dt.date(2026, 11, 11)
+    brief = {"date": today.isoformat(), "news": [
+        {"title": "a", "link": "https://example.com/a"}, {"title": "b", "link": "http://example.com/b"},
+        {"title": "c", "link": "https://127.0.0.1/c"}, {"title": "d"}]}
+    cards = fv.news_view(brief, today, 0, per_page=4)["cards"]
+    assert [c["link"] for c in cards] == ["https://example.com/a", "", "", ""]
+    assert all(c["link"] == "" for c in fv.news_view(brief, today, 0, per_page=4, local_only=True)["cards"])

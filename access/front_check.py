@@ -19,7 +19,7 @@ from shared import lan_discovery, paths, role_config
 REQUIRED_MODELS = ("arcface_r100_v1.onnx", "MiniFASNetV2.onnx", "yolov8s.pt",
                    os.path.join("vits-piper-zh_CN-huayan-medium", "zh_CN-huayan-medium.onnx"))
 REQUIRED_PACKAGES = ("cv2", "numpy", "onnxruntime", "sklearn", "skimage", "PIL", "requests", "customtkinter", "psutil",
-                     "sherpa_onnx", "sounddevice", "ultralytics", "retinaface")
+                     "pyqrcode", "sherpa_onnx", "sounddevice", "ultralytics", "retinaface")
 FONT_NAME = "msjh.ttc"
 
 

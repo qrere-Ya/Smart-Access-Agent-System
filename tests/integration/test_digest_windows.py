@@ -1,6 +1,7 @@
 """
-日報與晨報的真 Tk 測試：主選單多一張「日報與晨報」卡片（設定與立即產生都在裡面）、底部只有一顆「日報／晨報」按鈕、
-查看視窗只看不設定、時間不合法不儲存且不動到另一個、立即產生會更新畫面與查看視窗、日期欄不合法不產生。
+日報與晨報的真 Tk 測試：主選單多一張「日報與晨報」卡片（設定與立即產生都在裡面）、底部只有一顆「日報」按鈕、
+查看視窗只看日報不設定（晨報在前台螢幕顯示，後台不看）、時間不合法不儲存且不動到另一個、
+立即產生會更新畫面與查看視窗、日期欄不合法不產生。
 """
 import datetime
 import time
@@ -68,14 +69,15 @@ def test_the_main_menu_has_the_new_module_and_the_footer_has_one_button(root, db
     app = BackendManagerApp(root)
     pump(root)
     texts = texts_of(root)
-    assert "日報與晨報" in texts and "📰 日報／晨報" in texts
-    assert not {"🌅 晨報", "📋 日報", "⚙ 排程"} & set(texts)
+    assert "日報與晨報" in texts and "📋 日報" in texts and "📰 日報／晨報" not in texts
+    assert not {"🌅 晨報", "⚙ 排程"} & set(texts)
     app.open_schedule()
     app.open_report("digest")
     pump(root)
-    assert app.schedule_win.title() == "日報與晨報" and app.report_win.title() == "日報／晨報"
-    app.open_report("morning")                                   # 已開著就切分頁，不會重複開
-    assert app.report_win.tabs.get() == "🌅 晨報"
+    assert app.schedule_win.title() == "日報與晨報" and app.report_win.title() == "日報"
+    first = app.report_win
+    app.open_report("morning")                                   # 舊呼叫端傳 morning 也只開日報，且不重複開
+    assert app.report_win is first and app.report_win.tabs.get() == "📋 日報" and "morning" not in first.bubbles
     app.report_win.destroy()
     app.schedule_win.destroy()
     app.teardown()
@@ -91,7 +93,7 @@ def test_the_viewer_only_views(root, db, settings_files):
     labels = texts_of(win)
     assert not any("HH:MM" in t or "儲存" in t or "立即產生" in t for t in labels if isinstance(t, str))
     assert win.tabs.get() == "📋 日報" and "還沒有日報" in win.bubbles["digest"].get_text()
-    assert "還沒有晨報" in win.bubbles["morning"].get_text()
+    assert list(win.bubbles) == ["digest"]                        # 晨報不在後台看
     win.destroy()
 
 
@@ -131,7 +133,7 @@ def test_generate_now_updates_the_module_and_an_open_viewer(root, db, settings_f
     morning = fake_runner(root, "晨報", settings_files, calls)
     messages = []
     monkeypatch.setattr(ui_theme, "show_message", lambda master, title, message, kind="info": messages.append(message))
-    viewer = digest_window.open_report_window(root, digest, morning, "morning")
+    viewer = digest_window.open_report_window(root, digest, morning)
     win = schedule_window.open_schedule_window(root, digest, morning)
     win.date_entry.delete(0, "end")
     win.date_entry.insert(0, "亂打")
@@ -143,39 +145,37 @@ def test_generate_now_updates_the_module_and_an_open_viewer(root, db, settings_f
     assert str(win.digest_button.cget("state")) == "disabled"            # 產生中不能重複按
     win._run_morning()
     end = time.time() + 5
-    while time.time() < end and "測試新聞" not in viewer.bubbles["morning"].get_text():
+    while time.time() < end and not (any(n == "晨報" for n, _ in calls) and "前台" in win.status.cget("text")):
         pump(root, 0.1)
     assert ("日報", "2026-11-03") in calls and any(n == "晨報" for n, _ in calls)
     assert "出勤日報 2026-11-03" in viewer.bubbles["digest"].get_text()
-    assert "測試新聞" in viewer.bubbles["morning"].get_text()
-    assert "已更新" in win.status.cget("text") and str(win.digest_button.cget("state")) == "normal"
+    assert "前台" in win.status.cget("text") and str(win.digest_button.cget("state")) == "normal"
+    assert "測試新聞" in settings_files.load_brief()["news"][0]["title"]       # 晨報有存檔（給前台同步），後台不顯示
     win.destroy()
     viewer.destroy()
 
 
-def long_brief(settings_files, links=5):
-    from admin import news_feed
-
-    cards = [news_feed._to_card({"title": f"新聞 {i}", "summary": "摘要。" * 30, "link": f"https://example.com/n/{i}",
-                                 "time": None}, "來源") for i in range(links)]
-    settings_files.save_brief({"date": "2026-11-06", "generated_at": "2026-11-05 19:00", "news": cards,
-                               "news_problem": "", "news_tries": 1})
+def long_digest(settings_files, links=5):
+    """一份很長、內含網址的日報（日報明細裡可能有文件連結）。"""
+    lines = [f"第 {i} 段 " + "明細。" * 30 + f" 參考 https://example.com/n/{i}" for i in range(links)]
+    lines += ["補充說明。" * 20] * 24                                      # 夠長才需要捲動
+    settings_files.save({"date": "2026-11-06", "generated_at": "2026-11-05 19:00", "facts": "\n".join(lines),
+                         "summary": ""})
 
 
 def open_viewer(root, settings_files):
     from admin import digest_window
 
-    win = digest_window.open_report_window(root, digest_window.digest_runner(root), digest_window.morning_runner(root),
-                                           "morning")
+    win = digest_window.open_report_window(root, digest_window.digest_runner(root))
     win.deiconify()
     pump(root, 0.6)
     return win
 
 
 def test_the_wheel_over_a_message_scrolls_the_outer_area(root, db, settings_files):
-    long_brief(settings_files)
+    long_digest(settings_files)
     win = open_viewer(root, settings_files)
-    bubble = win.bubbles["morning"]
+    bubble = win.bubbles["digest"]
     canvas = bubble._scroll_parent()
     assert canvas.yview() != (0.0, 1.0)                            # 內容比視窗長，需要捲動
     text = bubble.box._textbox
@@ -195,15 +195,15 @@ def test_only_safe_https_urls_become_clickable_and_a_click_opens_them(root, db, 
 
     opened = []
     monkeypatch.setattr(chat_view.webbrowser, "open", lambda url: opened.append(url))
-    long_brief(settings_files, links=2)
+    long_digest(settings_files, links=2)
     win = open_viewer(root, settings_files)
-    bubble = win.bubbles["morning"]
+    bubble = win.bubbles["digest"]
     text = bubble.box._textbox
     spans = text.tag_ranges("link")
     assert [text.get(str(spans[i]), str(spans[i + 1])) for i in range(0, len(spans), 2)] == [
         "https://example.com/n/0", "https://example.com/n/1"]
     bubble.set_text("a http://insecure.example.com/x b https://127.0.0.1/y c https://ok.example.com/z.")
-    bubble.linkify(lambda u: __import__("admin.news_feed", fromlist=["x"]).link_problem(u) == "")
+    bubble.linkify(lambda u: __import__("shared.link_check", fromlist=["x"]).link_problem(u) == "")
     spans = text.tag_ranges("link")
     assert [text.get(str(spans[i]), str(spans[i + 1])) for i in range(0, len(spans), 2)] == ["https://ok.example.com/z"]
     text.see(str(spans[0]))
@@ -219,10 +219,10 @@ def test_only_safe_https_urls_become_clickable_and_a_click_opens_them(root, db, 
 
 
 def test_the_viewer_is_big_and_the_messages_follow_the_window_width(root, db, settings_files):
-    long_brief(settings_files, links=1)
+    long_digest(settings_files, links=1)
     win = open_viewer(root, settings_files)
     assert win.winfo_width() >= 900 and win.winfo_height() >= 800
-    bubble = win.bubbles["morning"]
+    bubble = win.bubbles["digest"]
     before = int(bubble.box.cget("width"))
     win.geometry("1300x860")
     pump(root, 0.6)

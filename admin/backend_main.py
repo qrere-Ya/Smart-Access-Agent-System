@@ -96,6 +96,10 @@ class BackendManagerApp:
                      text_color=ui_theme.pair("text"), anchor="w").pack(anchor="w")
         ui_theme.muted_label(brand_col, "邊緣運算門禁後臺系統").pack(anchor="w", pady=(2, 0))
         ui_theme.status_badge(brand_col, "● 系統運作中", "success").pack(anchor="w", pady=(6, 0))
+        if self.link_wanted:      # 雙機後台：主選單就看得到前台有沒有連上，不用點進營運狀態頁
+            self.front_badge = ui_theme.status_badge(brand_col, "● 前台未連線", "neutral")
+            self.front_badge.pack(anchor="w", pady=(4, 0))
+            self._refresh_front_badge()
 
         clock_col = ctk.CTkFrame(header, fg_color="transparent", height=1)
         clock_col.pack(side="right")
@@ -130,7 +134,7 @@ class BackendManagerApp:
              self.open_assistant_window),
             ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
              lambda: calendar_panel.open_calendar_window(self.root)),
-            ("📰", "日報與晨報", "設定每天自動產生的時間、立即產生、查看每日出勤日報與科技早報", "info",
+            ("📰", "日報與晨報", "設定每天自動產生的時間、立即產生、查看每日出勤日報；科技早報送到前台螢幕", "info",
              self.open_schedule),
         ]
         for idx, (icon, title, desc, accent, cmd) in enumerate(modules):
@@ -248,8 +252,8 @@ class BackendManagerApp:
         self.notification_bar = notification_bar.NotificationBar(footer, on_open=self.open_anomalies)  # 紅點與彈窗
         self.notification_bar.frame.pack(side="right")
         self.digest_runner = digest_window.digest_runner(self.root, on_new=lambda r: self.open_report("digest"))
-        self.morning_runner = digest_window.morning_runner(self.root, on_new=lambda r: self.open_report("morning"))
-        ui_theme.link_button(footer, "📰 日報／晨報", lambda: self.open_report("morning"), width=90,
+        self.morning_runner = digest_window.morning_runner(self.root, on_new=self._morning_ready)   # 晨報只給前台
+        ui_theme.link_button(footer, "📋 日報", lambda: self.open_report("digest"), width=90,
                              height=24).pack(side="right", padx=(0, 10))
         self.root.after(5000, self._tick_digest)
         self._tick_system_status()
@@ -268,10 +272,17 @@ class BackendManagerApp:
             self.link_note = ""
         self.root.after(10000, self._tick_link_service)
 
+    def _refresh_front_badge(self):
+        """依後台收到的最新前台心跳更新主選單的前台連線徽章（不連任何機器）。"""
+        kind, text = front_status.badge_view(front_status.load())
+        ui_theme.set_badge(self.front_badge, text, kind)
+
     def _tick_system_status(self):
         """每 3 秒讀取一次 CPU/RAM 顯示在狀態列；讀不到（沒裝 psutil）就顯示提示"""
         if not self._alive or not self.root.winfo_exists():
             return
+        if self.link_wanted and self.front_badge.winfo_exists():
+            self._refresh_front_badge()
         res = dashboard_stats.get_system_resources()
         if res is not None:
             self.sys_status_var.set(
@@ -513,8 +524,13 @@ class BackendManagerApp:
         self.digest_runner.tick()
         self.root.after(60000, self._tick_digest)
 
-    def open_report(self, kind):
-        """開啟日報／晨報查看視窗並切到 kind（"morning" 或 "digest"）；已開著就切分頁。排程產生新報告時也走這裡彈出。"""
+    @staticmethod
+    def _morning_ready(_report):
+        """晨報產生完成：後台不顯示，前台代理下一輪同步就會拿到。"""
+        print("[後台] 晨報已產生，前台下次同步會顯示。")
+
+    def open_report(self, kind="digest"):
+        """開啟日報查看視窗（kind 保留給舊呼叫端）；已開著就拉到最前面。排程產生新日報時也走這裡彈出。"""
         win = getattr(self, "report_win", None)
         if win is not None and win.winfo_exists():
             win.show(kind)

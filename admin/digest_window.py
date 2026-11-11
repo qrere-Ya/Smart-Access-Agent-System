@@ -1,18 +1,19 @@
 """
-digest_window.py：日報與晨報的背景產生與查看視窗（CustomTkinter）。
+digest_window.py：日報與晨報的背景產生，以及日報的查看視窗（CustomTkinter）。
 
 主要功能：
   - DigestRunner：在背景執行緒產生報告（查資料庫、必要時呼叫雲端模型、抓新聞），完成後在主執行緒回呼；
     tick() 由後台每分鐘呼叫一次，依 pending 判斷該不該產生；失敗 10 分鐘後才會再試，不會狂重試
     digest_runner（傍晚日報，預設 18:00）與 morning_runner（早上晨報，預設 08:30）是兩個設定好的 DigestRunner
-  - open_report_window：只看的視窗，晨報、日報兩個分頁，聊天室樣式、只有助理的訊息、沒有輸入框
+  - open_report_window：只看日報的視窗，聊天室樣式、只有助理的訊息、沒有輸入框
     （AI 摘要標示「數字與人名已核對」，沒有摘要就只顯示明細）；視窗可放大、訊息寬度跟著變，滾輪在訊息上也能捲動；
-    報告裡的原文網址可以點（只有 https 公開網域，用預設瀏覽器開）；排程自動產生新報告時會彈出並切到對應分頁
+    文字裡的網址可以點（只有 https 公開網域，用預設瀏覽器開）；排程自動產生新日報時會彈出
+  - 晨報後台不顯示：產生後由前台代理同步、在前台的螢幕上顯示（後台只留排程時間與立即產生）
   - 產生時間與立即產生不在這裡，在主選單的「日報與晨報」模組（schedule_window）
 
 串接模組：
   - daily_digest／morning_brief：產生與排程判斷；shared.digest_store：存檔與設定；ui_theme：外觀
-  - backend_main：底部「日報／晨報」按鈕開啟本視窗、每分鐘 tick、有新報告時彈出
+  - backend_main：底部「日報」按鈕開啟本視窗、每分鐘 tick、有新日報時彈出
 """
 import datetime
 import queue
@@ -22,9 +23,9 @@ import customtkinter as ctk
 
 from admin import daily_digest
 from admin import morning_brief
-from admin import news_feed
 from rag.chat_view import Bubble
 from shared import digest_store
+from shared import link_check
 from shared import ui_theme
 
 RETRY_AFTER = datetime.timedelta(minutes=10)
@@ -136,14 +137,14 @@ def digest_text(digest) -> str:
 
 
 class ReportWindow(ctk.CTkToplevel):
-    """查看視窗：晨報與日報兩個分頁，各一則助理訊息。"""
+    """查看視窗：只有日報，一則助理訊息（晨報在前台螢幕顯示，後台不看）。"""
 
-    TABS = (("morning", "🌅 晨報"), ("digest", "📋 日報"))
+    TABS = (("digest", "📋 日報"),)
 
-    def __init__(self, root, digest, morning, tab="morning"):
+    def __init__(self, root, digest, morning=None, tab="digest"):
         super().__init__(root)
-        self.runners = {"digest": digest, "morning": morning}
-        self.title("日報／晨報")
+        self.runners = {"digest": digest}
+        self.title("日報")
         self.geometry("960x860")
         self.minsize(640, 520)
         ui_theme.style_window(self)
@@ -168,13 +169,12 @@ class ReportWindow(ctk.CTkToplevel):
         self.bind("<Destroy>", self._on_destroy)
         self.show(tab)
 
-    def show(self, kind):
-        """重畫兩個分頁的內容並切到 kind。"""
-        self.bubbles["morning"].set_text(morning_brief.brief_text(digest_store.load_brief()))
+    def show(self, kind="digest"):
+        """重畫日報內容並拉到最前面（kind 保留給舊呼叫端，只有日報）。"""
         self.bubbles["digest"].set_text(digest_text(digest_store.load()))
         for bubble in self.bubbles.values():
-            bubble.linkify(lambda url: news_feed.link_problem(url) == "")
-        self.tabs.set(dict(self.TABS)[kind])
+            bubble.linkify(lambda url: link_check.link_problem(url) == "")
+        self.tabs.set(dict(self.TABS)["digest"])
         self.lift()
 
     def _on_resize(self, event):
@@ -194,9 +194,9 @@ class ReportWindow(ctk.CTkToplevel):
 
     def _on_done(self, runner, report, error):
         if self.winfo_exists() and report:
-            self.show("morning" if runner is self.runners["morning"] else "digest")
+            self.show()
 
 
-def open_report_window(root, digest, morning, tab="morning"):
-    """開啟日報／晨報查看視窗並回傳它。"""
+def open_report_window(root, digest, morning=None, tab="digest"):
+    """開啟日報查看視窗並回傳它（morning、tab 參數保留給舊呼叫端）。"""
     return ReportWindow(root, digest, morning, tab)

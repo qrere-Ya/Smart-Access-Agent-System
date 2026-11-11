@@ -75,3 +75,19 @@ def test_a_healthy_front_shows_no_warning_lines(path):
                                               (7200, "2 小時前")])
 def test_elapsed_time_is_written_in_plain_words(seconds, expected):
     assert fs._ago(seconds) == expected
+
+
+def test_badge_view_covers_never_seen_offline_degraded_and_healthy():
+    from admin import front_status as fs
+
+    never = {"seen": False, "online": False, "age": 0, "status": {}, "remote_addr": ""}
+    assert fs.badge_view(never) == ("neutral", "● 前台未連線")
+    off = {"seen": True, "online": False, "age": 45, "status": {}, "remote_addr": ""}
+    kind, text = fs.badge_view(off)
+    assert kind == "danger" and "前台離線" in text and "45 秒前" in text
+    idle = {"seen": True, "online": True, "age": 2, "status": {"camera_ok": True, "recognition_running": False},
+            "remote_addr": ""}
+    assert fs.badge_view(idle) == ("warning", "● 前台連線中（辨識未執行）")
+    good = {"seen": True, "online": True, "age": 2, "status": {"camera_ok": True, "recognition_running": True},
+            "remote_addr": ""}
+    assert fs.badge_view(good) == ("success", "● 前台連線中")

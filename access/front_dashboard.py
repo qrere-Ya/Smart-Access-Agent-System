@@ -7,6 +7,8 @@ front_dashboard.py：前台儀表板——門口那台電腦「第二個螢幕�
   - 點功能模組進入全版畫面、按「← 返回」回主畫面（沒人操作 90 秒自動回主畫面）：
       今日科技早報（晨報來自後台，前台離線也顯示最後同步到的；每頁 3 則、每 20 秒自動換頁）、
       剛剛打卡（姓名與早安／午安／晚安，10 分鐘後消失）、系統狀態
+  - 早報每則右側有原文的 QR Code 讓人用手機掃（前台不上網、不開瀏覽器）；前台開了全本地模式（shared.network_policy，
+    前台自己的 runtime 設定，之後放在維護選單）就不顯示 QR
   - 尾隨、經過未打卡、非活體時，任何畫面上方都會出現紅色警示橫幅（60 秒後消失）
   - 兩種主題可切換並記住：深色藍（預設）與半透明白（淺色底加視窗半透明）；沒有帳號，也不連網路
   - 資料來自前台本機（FrontStore、辨識程式寫的心跳、front_resources 的系統資源）；這支只讀、不寫（主題設定除外）
@@ -27,7 +29,10 @@ import customtkinter as ctk
 
 from access import front_agent, front_resources, front_view
 from access.front_store import FrontStore, ScreenState
-from shared import paths, ui_theme
+from PIL import ImageTk
+
+from access import front_qr
+from shared import network_policy, paths, ui_theme
 
 REFRESH_MS = 1000
 DETAIL_IDLE_SECONDS = 90.0            # 在模組全版畫面沒人操作這麼久，自動回主畫面
@@ -36,6 +41,7 @@ THEME_LABELS = {"dark": "🌙 深色藍", "frosted": "☀ 半透明白"}
 FROSTED_ALPHA = 0.97                  # 半透明白：只讓桌面微弱透出，不影響閱讀
 DESIGN_WIDTH, DESIGN_HEIGHT = 1920, 1080
 TONE_COLOR = {"success": "success", "warning": "warning", "danger": "danger", "info": "info"}
+QR_SIZE = 150                         # 新聞卡片右側 QR Code 的邊長（未縮放）
 BIG_STYLE, MINI_STYLE = "Smart.Treeview", "Smart.Mini.Treeview"
 TABLE_FONT_BIG, TABLE_FONT_MINI = 19, 16     # 表格字級（點）：模組全版畫面的表格大，主畫面的小表格小一點
 GREET_COLUMNS = (("time", "時間", 90), ("name", "姓名", 260), ("greeting", "問候", 120))
@@ -267,6 +273,9 @@ class FrontDashboard:
         self.news_body = ctk.CTkFrame(self.panels["news"], fg_color="transparent")
         self.news_body.pack(fill="both", expand=True, padx=28, pady=16)
         self._news_labels = []
+        self._qr_cache = {}
+        self._qr_widgets = []
+        self._last_view = None
         self.panels["news"].bind("<Configure>", self._wrap_news, add="+")
         self.greet_table = self._table(self.panels["greetings"], GREET_COLUMNS, height=4)
         self.status_table = self._table(self.panels["status"], STATUS_COLUMNS, height=4)
@@ -297,6 +306,8 @@ class FrontDashboard:
 
         def spread(event):
             """欄寬依比例撐滿表格（Tk 自己的伸縮不按比例，欄位會被擠得很窄）。"""
+            if not tree.winfo_exists():
+                return
             for key, _title, width, *_ in columns:
                 tree.column(key, width=max(40, int(event.width * width / total) - 2))
 
@@ -357,7 +368,7 @@ class FrontDashboard:
 
     def _rescale(self):
         self._resize_job = None
-        if not self.root.winfo_exists():
+        if not self.root.winfo_exists() or not self.home.winfo_exists():   # 畫面已被拆掉就不要再動全域縮放
             return
         try:
             dpi = ctk.ScalingTracker.get_window_scaling(self.root)
@@ -368,6 +379,10 @@ class FrontDashboard:
             self._scale = scale
             ctk.set_widget_scaling(scale)
             self._style_tables()
+            self._signatures.pop("news", None)                   # QR 圖片要用新倍率重做
+            self._qr_cache.clear()
+            if self._last_view is not None:
+                self._render_news(self._last_view["news"])
 
     def _note_touch(self, _event=None):
         self._touched = self._clock()
@@ -397,7 +412,9 @@ class FrontDashboard:
     # --- 更新 ---
     def refresh(self):
         """讀一次本機資料並更新畫面；內容沒變的區塊不重畫。"""
-        view = front_view.snapshot(self.store, self.screen, self._read_heartbeat, self._now(), self._clock())
+        view = front_view.snapshot(self.store, self.screen, self._read_heartbeat, self._now(), self._clock(),
+                                   local_only=network_policy.local_only())
+        self._last_view = view
         self.time_label.configure(text=view["time"])
         self.date_label.configure(text=view["date"])
         tone, text = view["link"]
@@ -450,8 +467,8 @@ class FrontDashboard:
             self.detail_title.configure(text=self._titles.get(self.current, ""))
 
     def _render_news(self, news):
-        signature = (news["state"], news["heading"], news["page"], tuple(c["title"] for c in news["cards"]),
-                     news["message"])
+        signature = (news["state"], news["heading"], news["page"],
+                     tuple((c["title"], c["link"]) for c in news["cards"]), news["message"])
         if not self._changed("news", signature):
             return
         self._titles["news"] = news["heading"]
@@ -462,6 +479,7 @@ class FrontDashboard:
         for child in self.news_body.winfo_children():
             child.destroy()
         self._news_labels = []
+        self._qr_widgets = []
         if news["state"] != "ok":
             self._news_text(self.news_body, news["message"], 22, muted=True).pack(anchor="w", pady=30)
         else:
@@ -478,8 +496,12 @@ class FrontDashboard:
 
     def _news_card(self, index, card):
         """一則新聞，像 AI 回覆一樣由上到下讀：類別與標題、發生什麼事、為什麼重要、可以怎麼用、來源。"""
-        box = ctk.CTkFrame(self.news_body, fg_color=ui_theme.pair("bg"), corner_radius=ui_theme.RADIUS_CARD)
-        box.pack(fill="x", pady=7)
+        outer = ctk.CTkFrame(self.news_body, fg_color=ui_theme.pair("bg"), corner_radius=ui_theme.RADIUS_CARD)
+        outer.pack(fill="x", pady=7)
+        if card.get("link"):
+            self._qr_box(outer, card["link"])
+        box = ctk.CTkFrame(outer, fg_color="transparent")
+        box.pack(side="left", fill="both", expand=True)
         head = ctk.CTkFrame(box, fg_color="transparent")
         head.pack(fill="x", padx=22, pady=(12, 0))
         ctk.CTkLabel(head, text=f" {card['category']} ", font=_font(16, bold=True), corner_radius=10,
@@ -491,6 +513,23 @@ class FrontDashboard:
         self._news_text(box, f"為什麼重要：{card['why']}", 17, muted=True).pack(fill="x", padx=22, pady=(4, 0))
         self._news_text(box, f"可以怎麼用：{card['how']}", 17, muted=True).pack(fill="x", padx=22, pady=(0, 12))
 
+    def _qr_box(self, master, url):
+        """卡片右側的 QR Code：手機掃了就能開原文（前台自己不上網）。圖片做不出來就不放。"""
+        size = max(60, int(QR_SIZE * self._scale))            # 純 tk 的圖片不吃 CustomTkinter 縮放，自己依倍率縮
+        photo = self._qr_cache.get((url, size))
+        if photo is None:
+            img = front_qr.image(url, size)
+            if img is None:
+                return
+            photo = self._qr_cache[(url, size)] = ImageTk.PhotoImage(img)
+        side = ctk.CTkFrame(master, fg_color="transparent")
+        side.pack(side="right", padx=(0, 18), pady=12)
+        label = tk.Label(side, image=photo, bd=0, highlightthickness=0, bg=ui_theme.color("bg"))   # 純 tk，只吃單一顏色
+        label.pack()
+        ctk.CTkLabel(side, text="手機掃描看原文", font=_font(14),
+                     text_color=ui_theme.pair("text_muted")).pack(pady=(4, 0))
+        self._qr_widgets.append(label)
+
     def _wrap_news(self, _event=None):
         """文字的換行寬度跟著早報區的寬度走，放大縮小都不會超出。"""
         panel = self.panels["news"]
@@ -499,7 +538,8 @@ class FrontDashboard:
             return
         for label in self._news_labels:
             try:
-                label.configure(wraplength=max(200, int(label._reverse_widget_scaling(width - 130))))
+                reserve = 130 + (QR_SIZE + 40 if self._qr_widgets else 0)
+                label.configure(wraplength=max(200, int(label._reverse_widget_scaling(width - reserve))))
             except Exception:  # noqa: BLE001, S110  # nosec B110  元件剛被銷毀時略過
                 pass
 

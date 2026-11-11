@@ -6,7 +6,7 @@ schedule_window.py：主選單「日報與晨報」模組的視窗（CustomTkint
     有一個格式不對就都不存並說明哪一個不對
   - 「立即產生晨報」（今天）、「立即產生日報」（可指定日期，預設今天），產生中按鈕停用，完成後顯示結果；
     日期格式不對不會產生
-  - 「查看報告」開啟日報／晨報查看視窗
+  - 「查看日報」開啟日報查看視窗；晨報產生後送到前台螢幕顯示，後台不看
   - 「全本地模式」開關：開啟後語言模型只用本機、晨報不連網抓新聞（shared.network_policy）；
     已開啟的語言模型要重新開啟助理視窗才會換成本機
   - 說明排程怎麼跑：後台開著才會產生、到時間且當天要上班才產生、開機比設定時間晚會補產、假日與休息日不產生；
@@ -26,7 +26,7 @@ from shared import network_policy
 from shared import ui_theme
 
 EXPLAIN = ("後台開著的時候，每分鐘檢查一次。到了設定的時間、而且當天要上班（不是假日或每週休息日），"
-           "就自動產生並彈出視窗。\n"
+           "就自動產生：日報會彈出視窗，晨報送到前台的螢幕顯示（後台不顯示）。\n"
            "如果開機時已經超過設定的時間，會補產：晨報補今天的，日報補最近一個上班日。\n"
            "改完按「儲存」，下一分鐘就生效，不用重開後台。")
 
@@ -72,7 +72,7 @@ class ScheduleWindow(ctk.CTkToplevel):
         gen.pack(fill="x", padx=pad)
         self.morning_button = ui_theme.secondary_button(gen, "🌅 產生今天的晨報", self._run_morning, width=150)
         self.morning_button.grid(row=0, column=0, sticky="w", pady=4)
-        ui_theme.muted_label(gen, "抓新聞與語言模型摘要約需 45 秒").grid(row=0, column=1, sticky="w", padx=10)
+        ui_theme.muted_label(gen, "抓新聞約需 45 秒，產生後送到前台顯示").grid(row=0, column=1, sticky="w", padx=10)
         self.digest_button = ui_theme.secondary_button(gen, "📋 產生日報", self._run_digest, width=150)
         self.digest_button.grid(row=1, column=0, sticky="w", pady=4)
         date_box = ctk.CTkFrame(gen, fg_color="transparent")
@@ -87,7 +87,7 @@ class ScheduleWindow(ctk.CTkToplevel):
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=pad, pady=(8, pad), side="bottom")
         if on_view is not None:
-            ui_theme.primary_button(bottom, "查看報告", lambda: on_view("morning"), width=100).pack(side="left")
+            ui_theme.primary_button(bottom, "查看日報", lambda: on_view("digest"), width=100).pack(side="left")
         ui_theme.secondary_button(bottom, "關閉", self.destroy, width=80).pack(side="right")
         for runner in self.runners.values():
             runner.listeners.append(self._on_done)
@@ -109,8 +109,13 @@ class ScheduleWindow(ctk.CTkToplevel):
     def _on_done(self, runner, report, error):
         if not self.winfo_exists():
             return
-        self.status.configure(text=f"{runner.name}產生失敗（{error}），10 分鐘後會自動再試。" if error
-                              else f"{runner.name}已更新，可以按「查看報告」。")
+        if error:
+            text = f"{runner.name}產生失敗（{error}），10 分鐘後會自動再試。"
+        elif runner is self.runners["morning"]:
+            text = "晨報已更新，前台下次同步（約 10 秒內）就會顯示。"
+        else:
+            text = "日報已更新，可以按「查看日報」。"
+        self.status.configure(text=text)
         self._sync_buttons()
 
     def save(self):

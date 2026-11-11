@@ -25,11 +25,11 @@ import time
 # 標準函式庫的 XML 解析器擋不住實體膨脹；parse_feed 在解析前已拒收 DOCTYPE／ENTITY，且讀取有大小上限
 import xml.etree.ElementTree as ET  # nosec B405
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import requests
 
-from shared import network_policy
+from shared import link_check, network_policy
 
 OFFLINE_NOTE = "全本地模式已開啟，沒有連網抓新聞"
 
@@ -60,8 +60,6 @@ HN_PENALTY = 2                     # Hacker News 的名次往後延，只在其�
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 _TAG = re.compile(r"<[^>]+>")
-_IP_HOST = re.compile(r"^[\d.]+$|:")
-_PRIVATE_SUFFIXES = (".local", ".internal", ".lan", ".home", ".localdomain")
 _AI = re.compile(r"\bAI\b|\bLLMs?\b|GPT|Claude|Gemini|OpenAI|Anthropic|Llama|Mistral|DeepSeek|Qwen|Gemma|"
                  r"diffusion|transformer|inference|agentic|chatbot|\bmodel|人工智慧|生成式|大型語言|模型|機器學習",
                  re.I)
@@ -88,20 +86,7 @@ HOW = {
 }
 
 
-def link_problem(url):
-    """網址不能用就回傳原因，可以用回傳空字串（只接受 https 的公開網域）。"""
-    try:
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
-    except ValueError:
-        return "網址格式不對"
-    if parsed.scheme != "https":
-        return "只接受 https 網址"
-    if not host or "." not in host or _IP_HOST.search(host) or host == "localhost" or host.endswith(_PRIVATE_SUFFIXES):
-        return "只接受公開網域，不接受 IP 位址或內網名稱"
-    if parsed.username or parsed.password:
-        return "網址不可帶帳號密碼"
-    return ""
+link_problem = link_check.link_problem        # 網址檢查搬到 shared.link_check（前台也要用），這裡保留同名
 
 
 def clean_text(text, limit):

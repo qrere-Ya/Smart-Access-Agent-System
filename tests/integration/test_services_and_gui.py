@@ -83,6 +83,43 @@ def test_back_role_dashboard_shows_the_front_link_and_the_event_stream(root, db,
     app.teardown()
 
 
+def test_main_menu_shows_the_front_connection_badge_only_for_the_back_role(root, db, monkeypatch, tmp_path):
+    """雙機後台：主選單標題下就有前台連線徽章（未連線、連線中、辨識未執行、離線）；單機沒有。"""
+    import time
+
+    from admin import front_status, service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import paths
+
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.update()
+    assert "前台未連線" in app.front_badge.cget("text")
+    healthy = {"pending_events": 0, "rejected_events": 0, "dropped_events": 0, "faces": 4, "faces_version": "ab",
+               "clock_offset_seconds": 0.0, "clock_warning": False, "recognition_running": True, "camera_ok": True}
+    front_status.record(healthy, "169.254.1.2")
+    app._refresh_front_badge()
+    assert app.front_badge.cget("text") == "● 前台連線中"
+    front_status.record({**healthy, "recognition_running": False}, "169.254.1.2")
+    app._refresh_front_badge()
+    assert "辨識未執行" in app.front_badge.cget("text")
+    front_status.record(healthy, "x", clock=lambda: time.time() - 120)
+    app._refresh_front_badge()
+    assert "前台離線" in app.front_badge.cget("text")
+    app.teardown()
+    for child in root.winfo_children():
+        child.destroy()
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: False)
+    standalone = BackendManagerApp(root)
+    root.update()
+    assert not hasattr(standalone, "front_badge")
+    standalone.teardown()
+
+
 def test_standalone_dashboard_keeps_the_face_switch_and_does_not_start_a_link_service(root, db, monkeypatch):
     from admin import service_manager as sm
     from admin.backend_main import BackendManagerApp
