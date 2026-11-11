@@ -1,6 +1,8 @@
 """前台自我檢查：角色與通行碼、模型檔、後台連線（連不上只警告）。"""
 import os
 
+import pytest
+
 from access import front_check as fc
 from shared import role_config as rc
 
@@ -49,3 +51,39 @@ def test_back_check_only_warns_when_the_back_is_unreachable(monkeypatch, tmp_pat
                              back_fingerprint="ab" * 32))
     assert levels(fc.check_back()) == ["WARN"]
     assert os.environ[rc.TOKEN_ENV] == TOKEN
+
+
+class _FakeSession:
+    """假的 onnxruntime session：記錄呼叫次數，可設定成推論時出錯。"""
+
+    class _Meta:
+        name, shape = "input", [1, 3, "batch", 80]
+
+    def __init__(self, fail=False):
+        self.calls, self.fail = 0, fail
+
+    def get_inputs(self):
+        return [self._Meta()]
+
+    def run(self, _outputs, feed):
+        if self.fail:
+            raise RuntimeError("cudnn")
+        assert feed["input"].shape == (1, 3, 1, 80)               # 不固定的維度當 1
+        self.calls += 1
+
+
+def test_time_inference_warms_up_once_and_runs_the_requested_times():
+    session = _FakeSession()
+    assert fc.time_inference(session, runs=5) >= 0
+    assert session.calls == 6                                      # 1 次暖機＋5 次計時
+
+
+def test_a_failing_inference_is_raised_so_the_check_can_warn():
+    with pytest.raises(RuntimeError):
+        fc.time_inference(_FakeSession(fail=True), runs=2)
+
+
+def test_gpu_speed_is_ok_only_when_faster_than_cpu():
+    assert fc.judge_gpu_speed(3.0, 12.0)[0] == "OK"
+    level, text = fc.judge_gpu_speed(15.0, 12.0)
+    assert level == "WARN" and "cuDNN" in text

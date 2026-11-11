@@ -39,6 +39,7 @@ class AnomalyPanel(ctk.CTkFrame):
         self._fetch = fetch or database_mgr.list_anomaly_events
         self._events = {}                                  # iid（事件編號）-> 事件
         self._preview_image = None                         # 持有圖片參照，避免被回收而不顯示
+        self._blank_image = ctk.CTkImage(light_image=Image.new("RGBA", (1, 1), (0, 0, 0, 0)), size=(1, 1))
         pad = ui_theme.PAD_LG
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -120,8 +121,10 @@ class AnomalyPanel(ctk.CTkFrame):
 
     def _set_preview(self, image, text):
         """顯示預覽圖片，或沒有圖片時顯示說明文字。"""
+        # image=None 時 tkinter 會略過這個選項，標籤仍指著舊圖；舊圖一被回收就出現 pyimageNN doesn't exist。
+        # 所以沒有照片時改放一張永遠存活的透明小圖，標籤永遠指著有效的圖
+        self.preview.configure(image=image if image is not None else self._blank_image, text=text)
         self._preview_image = image
-        self.preview.configure(image=image, text=text)
 
     def open_photo(self):
         """用系統看圖軟體開啟選取事件的證據原圖（路徑先確認在證據資料夾內）。"""

@@ -13,6 +13,7 @@ front_check.py：前台自我檢查——安裝完或出問題時跑一次，逐
 import importlib
 import os
 import sys
+import time
 
 from shared import lan_discovery, paths, role_config
 
@@ -78,26 +79,66 @@ def check_gpu():
     import torch
     results = [("OK", f"PyTorch 可使用 {name}") if torch.cuda.is_available()
                else ("WARN", f"偵測到 {name}，但 PyTorch 用不到 GPU（驅動太舊或裝到 CPU 版）：尾隨偵測會用 CPU")]
-    results.append(_check_onnx_cuda(name))
+    results.extend(_check_onnx_cuda(name))
     return results
 
 
+def _dummy_input(session):
+    """依模型的輸入形狀做一張全零的假輸入（沒寫死的維度當 1）。"""
+    import numpy as np
+    meta = session.get_inputs()[0]
+    shape = [d if isinstance(d, int) and d > 0 else 1 for d in meta.shape]
+    return {meta.name: np.zeros(shape, dtype=np.float32)}
+
+
+def time_inference(session, runs=20):
+    """用假輸入真的推論 runs 次，回傳每次平均毫秒（先暖機一次，不算在內）；推論出錯就丟例外。"""
+    feed = _dummy_input(session)
+    session.run(None, feed)
+    start = time.perf_counter()
+    for _ in range(runs):
+        session.run(None, feed)
+    return (time.perf_counter() - start) / runs * 1000.0
+
+
+def judge_gpu_speed(gpu_ms, cpu_ms):
+    """GPU 與 CPU 每次推論的毫秒數 → (等級, 說明)：GPU 比 CPU 快才算真的有加速。"""
+    if gpu_ms < cpu_ms:
+        return "OK", f"GPU 每次推論約 {gpu_ms:.1f} 毫秒（CPU 約 {cpu_ms:.1f} 毫秒）"
+    return ("WARN", f"GPU 推論 {gpu_ms:.1f} 毫秒不比 CPU（{cpu_ms:.1f} 毫秒）快：可能 cuDNN 沒載好，辨識速度會受影響")
+
+
 def _check_onnx_cuda(gpu_name):
-    """真的建一個 CUDA session 才算數（套件列出 CUDA provider 不代表 CUDA 12 與 cuDNN 的程式庫找得到）。"""
+    """真的建一個 CUDA session 並實際推論、和 CPU 比速度才算數（套件列出 CUDA provider 不代表程式庫找得到，
+    建得出 session 也不代表推論跑得動；啟動時印的 cuDNN 載入失敗訊息就是這種情況）。"""
     import onnxruntime
     try:
         onnxruntime.preload_dlls()
     except Exception:  # noqa: BLE001, S110  # nosec B110  載不到就由下面的 session 結果回報
         pass
-    model = os.path.join(paths.MODELS_DIR, "MiniFASNetV2.onnx")
+    # 用大模型：GPU 該明顯比 CPU 快，才看得出 cuDNN 有沒有載好
+    model = os.path.join(paths.MODELS_DIR, "arcface_r100_v1.onnx")
     try:
         session = onnxruntime.InferenceSession(model, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
         device = session.get_providers()[0]
     except Exception as e:  # noqa: BLE001
-        return ("WARN", f"onnxruntime 建立 session 失敗：{type(e).__name__}")
-    if device == "CUDAExecutionProvider":
-        return ("OK", f"onnxruntime 在 {gpu_name} 上用 GPU 推論")
-    return ("WARN", f"偵測到 {gpu_name}，但 onnxruntime 退回 CPU（缺 CUDA 12 或 cuDNN 9 程式庫）：人臉與活體會用 CPU")
+        return [("WARN", f"onnxruntime 建立 session 失敗：{type(e).__name__}")]
+    if device != "CUDAExecutionProvider":
+        return [("WARN", f"偵測到 {gpu_name}，但 onnxruntime 退回 CPU（缺 CUDA 12 或 cuDNN 9 程式庫）："
+                         "人臉與活體會用 CPU")]
+    results = [("OK", f"onnxruntime 在 {gpu_name} 上用 GPU 建立 session")]
+    try:
+        gpu_ms = time_inference(session)
+    except Exception as e:  # noqa: BLE001
+        results.append(("WARN", f"GPU 實際推論失敗（{type(e).__name__}）：cuDNN 可能沒載好，辨識可能出錯或退回 CPU"))
+        return results
+    try:
+        cpu_ms = time_inference(onnxruntime.InferenceSession(model, providers=["CPUExecutionProvider"]))
+    except Exception as e:  # noqa: BLE001
+        results.append(("OK", f"GPU 實際推論正常，每次約 {gpu_ms:.1f} 毫秒（CPU 對照失敗：{type(e).__name__}）"))
+        return results
+    results.append(judge_gpu_speed(gpu_ms, cpu_ms))
+    return results
 
 
 def check_camera(index=0):

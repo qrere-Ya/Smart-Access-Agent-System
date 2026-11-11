@@ -96,7 +96,7 @@ Run $VenvPy @("-m", "pip", "install", "--upgrade", "pip", "--quiet")
 
 # --- 4. 套件 ---
 Step 4 "安裝套件（需要網路，約 10 到 30 分鐘；之後前台不需要上網）"
-$hasGpu = $false; $cudaTag = "cu126"
+$hasGpu = $false; $cudaTag = "cu126"; $torchVer = "2.13.0"; $tvVer = "0.28.0"
 if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
     $info = & nvidia-smi --query-gpu=driver_version,name --format=csv,noheader 2>$null
     if ($LASTEXITCODE -eq 0 -and $info) {
@@ -104,19 +104,22 @@ if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
         $parts = ($info | Select-Object -First 1) -split ",\s*"
         $driver = [int](($parts[0] -split "\.")[0]); $gpuName = $parts[1]
         Write-Host "NVIDIA 顯卡：$gpuName，驅動 $($parts[0])"
-        # RTX 50 系列（Blackwell）要 CUDA 12.8 以上；PyTorch 2.13 對應的是 cu130，驅動需要 580 以上
-        if ($driver -ge 580) { $cudaTag = "cu130" }
-        elseif ($gpuName -match "RTX\s*50") { throw "$gpuName 需要 NVIDIA 驅動 580 以上（目前 $($parts[0])）。請先到 nvidia.com 或 GeForce Experience 更新驅動，再重新執行安裝。" }
+        # 用 CUDA 12.8 版 PyTorch（torch 2.11，驅動 570 以上）：RTX 50 系列（Blackwell）要 CUDA 12.8 以上，
+        # 而且 onnxruntime-gpu 是 CUDA 12 版，兩邊同樣是 CUDA 12 才不會互搶 cuDNN
+        # （PyTorch 的 cu130 版和 onnxruntime 的 CUDA 12 版同時載入時，cuDNN 子檔案版本對不上，會彈出「無法找到輸入點」，
+        # 先載入 onnxruntime 再載入 PyTorch 時 PyTorch 甚至載入失敗）
+        if ($driver -ge 570) { $cudaTag = "cu128"; $torchVer = "2.11.0"; $tvVer = "0.26.0" }
+        elseif ($gpuName -match "RTX\s*50") { throw "$gpuName 需要 NVIDIA 驅動 570 以上（目前 $($parts[0])）。請先到 nvidia.com 或 GeForce Experience 更新驅動，再重新執行安裝。" }
     }
 }
 $lock = Get-Content (Join-Path $Root "requirements\lock.txt") -Encoding UTF8
 $constraints = $lock | Where-Object { $_ -notmatch "^(torch|torchvision|onnxruntime|onnxruntime-gpu|retinaface)(==|\s|$)" }
-$constraintsPath = Join-Path $Root "runtime\constraints.txt"
-New-Item -ItemType Directory -Force (Split-Path $constraintsPath) | Out-Null
+# 版本限制檔用每次都不同的暫存檔名：上次安裝還沒關的 pip、防毒或檔案總管若還握著舊檔，不會讓這次安裝卡住
+$constraintsPath = Join-Path ([IO.Path]::GetTempPath()) ("smartaccess-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
 $constraints | Set-Content -Path $constraintsPath -Encoding UTF8
 if ($hasGpu) {
     Write-Host "安裝 GPU 版（$cudaTag，辨識較快）。"
-    Run $VenvPy @("-m", "pip", "install", "torch==2.13.0", "torchvision==0.28.0", "--index-url", "https://download.pytorch.org/whl/$cudaTag", "--extra-index-url", "https://pypi.org/simple", "-c", $constraintsPath)
+    Run $VenvPy @("-m", "pip", "install", "torch==$torchVer", "torchvision==$tvVer", "--index-url", "https://download.pytorch.org/whl/$cudaTag", "--extra-index-url", "https://pypi.org/simple", "-c", $constraintsPath)
     $ort = "onnxruntime-gpu==1.23.2"
 } else {
     Write-Host "沒有 NVIDIA 顯卡，安裝 CPU 版（辨識較慢，門禁仍可用）。"
@@ -124,8 +127,8 @@ if ($hasGpu) {
     $ort = "onnxruntime==1.23.2"
 }
 Run $VenvPy @("-m", "pip", "install", $ort, "-r", (Join-Path $Root "requirements\front.txt"), "-c", $constraintsPath)
-if ($hasGpu) {
-    # onnxruntime-gpu 1.23 要 CUDA 12 與 cuDNN 9 的程式庫；PyTorch cu130 帶的是 CUDA 13，所以另外裝 CUDA 12 版（約 2.4 GB）
+if ($hasGpu -and $cudaTag -eq "cu128") {
+    # onnxruntime-gpu 1.23 要 CUDA 12 與 cuDNN 9 的程式庫；不論 onnxruntime 或 PyTorch 誰先載入都找得到（約 2.4 GB）
     Run $VenvPy @("-m", "pip", "install", "nvidia-cuda-runtime-cu12==12.9.79", "nvidia-cublas-cu12==12.9.2.10", "nvidia-cudnn-cu12==9.28.1.4", "nvidia-cufft-cu12==11.4.1.4", "nvidia-curand-cu12==10.3.10.19", "nvidia-cuda-nvrtc-cu12==12.9.86")
 }
 Run $VenvPy @("-m", "pip", "install", "retinaface==1.1.1", "--no-deps")

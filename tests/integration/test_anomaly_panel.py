@@ -72,6 +72,34 @@ def test_selecting_an_event_previews_its_photo_or_explains_there_is_none(root, d
     panel.destroy()
 
 
+def test_switching_between_photo_and_no_photo_raises_no_tk_errors(root, db, notifier, evidence_photo):
+    """回歸：有照片→沒照片→有照片反覆切換，標籤不能指著已回收的圖（TclError: image "pyimageNN" doesn't exist）。"""
+    import gc
+
+    from admin import anomaly_panel
+    from shared import database_mgr as dbm
+
+    dbm.add_anomaly_event("tailgate", evidence_photo, "有照片")
+    dbm.add_anomaly_event("no_scan_walkby", None, "沒照片")
+    errors = []
+    root.report_callback_exception = lambda *exc: errors.append(exc[1])     # Tk 回呼的例外預設只印出、不會讓測試失敗
+    panel = anomaly_panel.AnomalyPanel(root, notifier)
+    panel.pack()
+    root.update()
+    items = list(panel.tree.get_children())
+    with_photo = [i for i in items if panel.tree.item(i, "values")[5] == "有"][0]
+    without_photo = [i for i in items if panel.tree.item(i, "values")[5] == "無"][0]
+    for item in (with_photo, without_photo, with_photo, without_photo):
+        panel.tree.selection_set(item)
+        root.update()
+        gc.collect()
+    panel.tree.selection_remove(*panel.tree.selection())
+    root.update()
+    gc.collect()
+    assert errors == []
+    panel.destroy()
+
+
 def test_an_evidence_path_outside_the_folder_is_never_loaded(root, db, notifier, tmp_path):
     from admin import anomaly_panel
     from shared import database_mgr as dbm
