@@ -27,6 +27,7 @@ from shared import database_mgr as db
 UNKNOWN_NAMES = ("Unknown", "Empty DB")
 GREEN, CYAN, GRAY, WHITE = (0, 255, 0), (0, 255, 255), (200, 200, 200), (255, 255, 255)
 INDEX_REFRESH_SECONDS = 5.0
+ALERT_THROTTLE_SECONDS = 3.0
 
 
 def greeting_for(hour):
@@ -92,6 +93,9 @@ class LocalBackend:
     def note(self):
         return ""
 
+    def alert(self, kind, detail=""):
+        pass                                   # 單機沒有第二個螢幕，警示只在辨識畫面上
+
     def heartbeat(self, camera_ok, running=True):
         pass
 
@@ -111,7 +115,10 @@ class FrontBackend:
         self.outbox = Outbox(store, now)
         self._index, self._version, self._checked = FaceIndex(store.load_faces()), store.faces_version(), clock()
         self._last_sent = {}
+        self._last_alert = {}
         self._heartbeat = heartbeat
+        from access.front_store import ScreenState
+        self.screen = ScreenState(store)
 
     def start(self):
         pass
@@ -141,10 +148,27 @@ class FrontBackend:
             return PunchOutcome("無法打卡：沒有員工編號", WHITE)
         self.outbox.submit_punch(recognition.user_id)
         hello = greeting_for(moment.hour)
+        self._screen_call(self.screen.note_punch, recognition.name, hello, clock_text=moment.strftime("%H:%M"))
         return PunchOutcome("打卡成功", GREEN, True, hello, f"{recognition.name}，{hello}",
                             voice_key=f"打卡成功_{hello}")
 
+    def alert(self, kind, detail=""):
+        """通知第二個螢幕的儀表板顯示警示（每種最多每 ALERT_THROTTLE_SECONDS 秒寫一次，不會每幀寫檔）。"""
+        if self._clock() - self._last_alert.get(kind, -ALERT_THROTTLE_SECONDS) < ALERT_THROTTLE_SECONDS:
+            return
+        self._last_alert[kind] = self._clock()
+        self._screen_call(self.screen.set_alert, kind, detail)
+
+    @staticmethod
+    def _screen_call(function, *args, **kwargs):
+        """畫面用的狀態寫入失敗（檔案被鎖、磁碟問題）不能讓辨識與打卡中斷。"""
+        try:
+            function(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            print(f"[terminal_backend][WARN] 儀表板狀態寫入失敗：{type(e).__name__}")
+
     def anomaly(self, kind, detail, frame, box):
+        self.alert(kind, detail)
         if self._clock() - self._last_sent.get(kind, -self._throttle) < self._throttle:
             return
         self._last_sent[kind] = self._clock()

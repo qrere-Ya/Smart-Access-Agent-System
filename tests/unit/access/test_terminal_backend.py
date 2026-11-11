@@ -222,3 +222,48 @@ def test_the_message_box_stays_inside_a_small_image():
     img = np.zeros((60, 100, 3), dtype=np.uint8)
     out = utils.draw_message_box(img, [("打卡成功打卡成功打卡成功", (0, 255, 0), 54)])
     assert out.shape == img.shape
+
+
+# --- 第二個螢幕（前台儀表板）的狀態 ---
+
+def test_a_successful_punch_is_noted_for_the_second_screen_but_a_refused_one_is_not(store):
+    backend = front(store, when=MORNING)
+    backend.punch(backend.recognize(EMB))
+    rows = backend.screen.recent_punches(now=lambda: __import__("time").time())
+    assert [(r["name"], r["greeting"], r["clock"]) for r in rows] == [("甲", "早安", "07:50")]
+    closed = front(store, when=dt.datetime(2026, 11, 10, 13, 0, 0))             # 午休時段：不記
+    closed.punch(closed.recognize(EMB))
+    assert len(closed.screen.recent_punches(now=lambda: __import__("time").time())) == 1
+
+
+def test_alerts_are_throttled_per_kind_and_anomalies_raise_them(store):
+    clock = Clock()
+    backend = front(store, clock=clock)
+    frame = rng.integers(0, 255, size=(480, 540, 3), dtype=np.uint8)
+    seen = []
+    backend.screen.set_alert = lambda kind, detail="": seen.append((kind, detail))
+    backend.alert("spoof", "x")
+    backend.alert("spoof", "x")                                                  # 3 秒內同一種只寫一次
+    backend.alert("tailgate", "y")                                               # 不同種各算各的
+    clock.t += tb.ALERT_THROTTLE_SECONDS + 0.1
+    backend.alert("spoof", "x")
+    assert seen == [("spoof", "x"), ("tailgate", "y"), ("spoof", "x")]
+    backend.anomaly("no_scan_walkby", "", frame, (50, 50, 300, 450))             # 異常事件順便通知儀表板
+    assert seen[-1][0] == "no_scan_walkby"
+
+
+def test_a_failing_screen_write_never_breaks_punching_or_recognition(store, capsys):
+    backend = front(store, when=MORNING)
+
+    def broken(*args, **kwargs):
+        raise OSError("disk locked")
+    backend.screen.note_punch = broken
+    backend.screen.set_alert = broken
+    outcome = backend.punch(backend.recognize(EMB))
+    backend.alert("spoof", "x")
+    assert outcome.success is True and store.pending_count() == 1
+    assert "儀表板狀態寫入失敗" in capsys.readouterr().out
+
+
+def test_the_standalone_backend_ignores_alerts():
+    tb.LocalBackend().alert("spoof", "x")                                        # 單機沒有第二個螢幕，不會出錯

@@ -13,6 +13,8 @@ def test_front_entry_closure_on_the_real_project_covers_the_front_and_nothing_of
     mods = bb.project_modules(root=paths.PROJECT_ROOT)
     for needed in ("access/terminal_app.py", "access/terminal_backend.py", "access/front_store.py",
                    "access/front_agent.py", "access/front_check.py", "shared/role_config.py",
+                   "access/front_dashboard.py",
+                   "access/front_view.py", "shared/ui_theme.py",
                    "shared/link_protocol.py", "shared/database_mgr.py", "access/__init__.py", "shared/__init__.py"):
         assert needed in mods
     assert not [m for m in mods if m.startswith(("admin/", "rag/"))]

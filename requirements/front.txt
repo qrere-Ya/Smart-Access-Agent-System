@@ -17,3 +17,5 @@ sherpa-onnx==1.13.2
 sounddevice==0.5.5
 requests==2.34.2
 psutil==7.2.2
+customtkinter==6.0.0
+darkdetect==0.8.0

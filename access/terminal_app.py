@@ -169,6 +169,7 @@ def analyze_in_background(frame_copy, detector):
                     # 非活體只顯示畫面文字，不播語音
                     print(f"[terminal_app] 非活體判定：liveness_score={liveness_score:.4f}"
                           f"（門檻 0.80，分數越接近 1.0 越像真人，越接近 0.0 越像攻擊）")
+                    backend.alert("spoof", "偵測到非真人（照片或螢幕翻拍）")
 
                     _publish_face_data({
                         'coords': (x1, y1, x2, y2),

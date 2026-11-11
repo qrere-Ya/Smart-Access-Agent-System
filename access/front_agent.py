@@ -286,14 +286,7 @@ class FrontAgent:
     # --- 狀態 ---
     def heartbeat(self):
         """辨識程式寫的心跳；太舊或讀不到視為沒在跑。"""
-        try:
-            with open(self.heartbeat_path, encoding="utf-8") as f:
-                data = json.load(f)
-            fresh = self._clock() - float(data["ts"]) <= HEARTBEAT_STALE_SECONDS
-        except (OSError, ValueError, KeyError, TypeError):
-            return {"recognition_running": False, "camera_ok": False}
-        return {"recognition_running": bool(data.get("recognition_running")) and fresh,
-                "camera_ok": bool(data.get("camera_ok")) and fresh}
+        return read_terminal_heartbeat(self.heartbeat_path, self._clock)
 
     def status(self):
         skew = self.clock_offset()
@@ -305,6 +298,18 @@ class FrontAgent:
                 "faces_version": (self.store.faces_version() or "")[:12],
                 "clock_offset_seconds": round(skew, 1), "clock_warning": abs(skew) > MAX_CLOCK_SKEW_SECONDS,
                 **self.heartbeat()}
+
+
+def read_terminal_heartbeat(path=None, clock=time.time):
+    """讀辨識程式寫的心跳（前台代理與儀表板共用）；太舊或讀不到視為沒在跑、鏡頭異常。"""
+    try:
+        with open(path or HEARTBEAT_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        fresh = clock() - float(data["ts"]) <= HEARTBEAT_STALE_SECONDS
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"recognition_running": False, "camera_ok": False}
+    return {"recognition_running": bool(data.get("recognition_running")) and fresh,
+            "camera_ok": bool(data.get("camera_ok")) and fresh}
 
 
 def write_heartbeat(recognition_running, camera_ok, path=None, clock=time.time):

@@ -26,7 +26,8 @@ import zipfile
 from shared import paths
 
 BUNDLE_NAME = "SmartAccessFront"
-ENTRY_MODULES = ("access.terminal_app", "access.front_agent", "access.front_check", "shared.role_config")
+ENTRY_MODULES = ("access.terminal_app", "access.front_agent", "access.front_dashboard", "access.front_check",
+                 "shared.role_config")
 PROJECT_PACKAGES = ("access", "shared")           # 前台允許打包的專案套件（不含 admin、rag）
 MODEL_FILES = ("arcface_r100_v1.onnx", "MiniFASNetV2.onnx",
                "antispoof_mobilenetv3_antispoof_finetuned_best_sim.onnx", "yolov8s.pt")

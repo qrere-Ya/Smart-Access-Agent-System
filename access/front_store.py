@@ -10,6 +10,7 @@ front_store.py：前台電腦的本機儲存——人臉快取與持久的離線
     後台回「永遠不會成功」（欄位不合格、查無此人）的移到 rejected 留下原因（不含照片）；
     佇列有上限，超過時丟掉最舊的並累計 dropped，狀態會回報
   - meta：版本、時鐘差、最後同步時間、晨報（JSON）等小資料
+  - ScreenState：前台畫面用的小狀態（最近打卡問候、最新警示、主題），辨識程式寫、儀表板讀
 
 限制：快取在前台硬碟上，硬碟被拿走就能讀到人臉特徵（沒有加密）；實體安全要靠前台機器本身。
 
@@ -162,6 +163,52 @@ class FrontStore:
             return bool(state["online"]) and now() - float(state["ts"]) <= max_age
         except (TypeError, KeyError, ValueError):
             return False
+
+
+class ScreenState:
+    """前台畫面用的小狀態：辨識程式（terminal_app）寫、儀表板（front_dashboard）讀，兩個行程共用同一個檔。
+    只留最近幾筆打卡問候與最新一則警示；都帶時間，過期就不顯示。"""
+
+    KEEP_PUNCHES = 8
+
+    def __init__(self, store):
+        self.store = store
+
+    def note_punch(self, name, greeting, now=time.time, clock_text=""):
+        """記一筆辨識成功的打卡問候（儀表板顯示「剛剛打卡」用）。"""
+        items = self.store.get_meta("recent_punches", [])
+        if not isinstance(items, list):
+            items = []
+        items.append({"name": str(name)[:50], "greeting": str(greeting)[:10], "ts": now(), "clock": clock_text[:8]})
+        self.store.set_meta("recent_punches", items[-self.KEEP_PUNCHES:])
+
+    def recent_punches(self, max_age=600.0, now=time.time):
+        """最近 max_age 秒內的打卡問候，新的在前。"""
+        items = self.store.get_meta("recent_punches", [])
+        if not isinstance(items, list):
+            return []
+        fresh = [i for i in items if isinstance(i, dict) and now() - float(i.get("ts", 0) or 0) <= max_age]
+        return list(reversed(fresh))
+
+    def set_alert(self, kind, detail="", now=time.time):
+        """記下最新一則警示（尾隨、經過未打卡、非活體）；儀表板顯示成紅色橫幅。"""
+        self.store.set_meta("alert", {"kind": str(kind)[:30], "detail": str(detail)[:200], "ts": now()})
+
+    def current_alert(self, max_age=60.0, now=time.time):
+        """還沒過期的警示，沒有就回傳 None。"""
+        alert = self.store.get_meta("alert")
+        try:
+            if alert and now() - float(alert["ts"]) <= max_age:
+                return {"kind": str(alert["kind"]), "detail": str(alert.get("detail", "")), "ts": float(alert["ts"])}
+        except (TypeError, KeyError, ValueError):
+            pass
+        return None
+
+    def theme(self, default="dark"):
+        return self.store.get_meta("theme", default)
+
+    def set_theme(self, name):
+        self.store.set_meta("theme", name)
 
 
 class Outbox:

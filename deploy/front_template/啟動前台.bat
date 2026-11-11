@@ -12,10 +12,12 @@ if "%SMART_ACCESS_LINK_TOKEN%"=="" (
   pause
   exit /b 1
 )
-echo 前台啟動中：先開連線代理，再開辨識畫面。這個視窗請不要關閉。
+echo 前台啟動中：先開連線代理與第二個螢幕的儀表板，再開辨識畫面。這個視窗請不要關閉。
 start "SmartAccessFrontAgent" /min ".venv\Scripts\python.exe" -m access.front_agent
+start "SmartAccessFrontDashboard" /min ".venv\Scripts\python.exe" -m access.front_dashboard
 ".venv\Scripts\python.exe" -m access.terminal_app
 echo.
-echo 辨識畫面已結束，關閉連線代理。
+echo 辨識畫面已結束，關閉連線代理與儀表板。
 taskkill /fi "WINDOWTITLE eq SmartAccessFrontAgent*" /f >nul 2>&1
+taskkill /fi "WINDOWTITLE eq SmartAccessFrontDashboard*" /f >nul 2>&1
 pause
