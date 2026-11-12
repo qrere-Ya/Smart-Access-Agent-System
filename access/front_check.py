@@ -4,14 +4,18 @@ front_check.py：前台自我檢查——安裝完或出問題時跑一次，逐
 主要功能：
   - 角色設定與通行碼（是否為前台、位址合法、通行碼已設定）
   - 必要的模型檔、字型、套件是否都在、能不能載入
+  - 前台是否同時連著 Wi-Fi 或行動網路（前台設計上不上網，有連只警告：測試時可能需要上網，可忽略）
   - 攝影機能不能開、後台連不連得上（用通行碼 ping 後台；連不上只警告，前台離線也能辨識）
   - 每項回報 OK／WARN／FAIL，有 FAIL 時結束碼為 1
 
 串接模組：
   - role_config、front_agent（BackClient）、paths；install_front.ps1 安裝最後一步會呼叫它
 """
+import base64
 import importlib
+import json
 import os
+import subprocess  # noqa: S404  # nosec B404  只執行固定的唯讀 PowerShell 查詢
 import sys
 import time
 
@@ -175,9 +179,52 @@ def check_back():
         return [("WARN", f"連不上後台（{type(e).__name__}）：後台還沒開、網路線、防火牆或通行碼不一致都有可能")]
 
 
+_ADAPTER_QUERY = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+                  "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object {[pscustomobject]@{"
+                  "Name=$_.Name;Description=$_.InterfaceDescription;Media=[string]$_.PhysicalMediaType}} "
+                  "| ConvertTo-Json -Compress")
+_WIRELESS_WORDS = ("802.11", "wi-fi", "wifi", "wireless", "wlan", "無線", "mobile broadband", "wwan", "cellular",
+                   "行動")
+
+
+def _read_adapters():
+    """已連線（Up）的網卡 [{"Name", "Description", "Media"}]；系統呼叫，測試時替換。讀不到丟例外。"""
+    exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0",
+                       "powershell.exe")
+    encoded = base64.b64encode(_ADAPTER_QUERY.encode("utf-16-le")).decode("ascii")
+    done = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],  # noqa: S603
+                          capture_output=True, timeout=15, check=False)           # nosec B603
+    if done.returncode != 0:
+        raise RuntimeError("PowerShell 查詢網卡失敗")
+    text = done.stdout.decode("utf-8", "replace").strip()
+    data = json.loads(text) if text else []
+    return [data] if isinstance(data, dict) else [row for row in data if isinstance(row, dict)]
+
+
+def wireless_adapters(adapters):
+    """從已連線網卡中挑出無線或行動網路（看實體媒體類型、網卡名稱與描述），回傳名稱清單。"""
+    found = []
+    for row in adapters:
+        text = " ".join(str(row.get(key) or "") for key in ("Name", "Description", "Media")).lower()
+        if any(word in text for word in _WIRELESS_WORDS):
+            found.append(str(row.get("Name") or row.get("Description") or "未命名網卡"))
+    return found
+
+
+def check_wifi(read_adapters=None):
+    """前台設計上不上網：有連著 Wi-Fi 或行動網路就警告（不是失敗，測試時可能需要上網）；查不到也只警告。"""
+    try:
+        found = wireless_adapters((read_adapters or _read_adapters)())
+    except Exception as e:  # noqa: BLE001
+        return [("WARN", f"無法檢查 Wi-Fi 是否連線（{type(e).__name__}）")]
+    if found:
+        return [("WARN", f"前台設計為不連網，建議關閉 Wi-Fi（目前連著：{'、'.join(found)}）；測試時可忽略")]
+    return [("OK", "前台沒有連 Wi-Fi 或行動網路（符合不連網的設計）")]
+
+
 def main():
     results = []
-    for step in (check_role, check_files, check_packages, check_gpu, check_camera, check_back):
+    for step in (check_role, check_files, check_packages, check_gpu, check_wifi, check_camera, check_back):
         results += step()
     for level, text in results:
         print(f"[{level:4}] {text}")

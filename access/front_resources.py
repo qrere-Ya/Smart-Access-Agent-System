@@ -11,6 +11,7 @@ front_resources.py：前台電腦的資源監控（CPU、記憶體、GPU、網�
 """
 import shutil
 import subprocess  # nosec B404
+import threading
 import time
 
 GPU_INTERVAL = 5.0
@@ -75,3 +76,34 @@ class ResourceMonitor:
             pass
         result["gpu"] = self._read_gpu(now)
         return result
+
+
+class ResourceSampler:
+    """在背景執行緒定時讀資源，read() 立刻回傳最新值；畫面不會被 nvidia-smi 之類的慢呼叫卡住（實測一次約 0.5 秒）。"""
+
+    EMPTY = {"cpu": None, "ram": None, "gpu": None, "down_kbps": None, "up_kbps": None}
+
+    def __init__(self, monitor=None, interval=1.0, sleep=time.sleep):
+        self._monitor = monitor or ResourceMonitor()
+        self._interval, self._sleep = interval, sleep
+        self._latest = dict(self.EMPTY)
+        self._thread = None
+        self._stop = False
+
+    def _loop(self):
+        while not self._stop:
+            try:
+                self._latest = self._monitor.read()
+            except Exception:  # noqa: BLE001, S110  # nosec B110  讀不到這一輪就沿用上一輪
+                pass
+            self._sleep(self._interval)
+
+    def read(self):
+        """回傳最新一次的資源值（第一次呼叫時才啟動背景執行緒，剛啟動還沒有值時是空值）。"""
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._loop, name="front-resources", daemon=True)
+            self._thread.start()
+        return dict(self._latest)
+
+    def stop(self):
+        self._stop = True

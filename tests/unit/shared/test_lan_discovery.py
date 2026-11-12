@@ -7,6 +7,15 @@ import pytest
 from access import front_agent as fa
 from shared import lan_discovery as ld, role_config as rc
 
+
+def test_link_local_details_mark_wired_adapters_and_chinese_wireless_names_are_not_wired():
+    interfaces = {"Tailscale": [(socket.AF_INET, "169.254.83.107")], "乙太網路": [(socket.AF_INET, "169.254.211.163")],
+                  "無線區域網路": [(socket.AF_INET, "169.254.5.5")], "乙太網路 2": [(socket.AF_INET, "192.168.1.5")]}
+    details = ld.link_local_details(interfaces)
+    assert details[0] == ("乙太網路", "169.254.211.163", True)                          # 有線排最前面
+    assert {(n, w) for n, _a, w in details[1:]} == {("Tailscale", False), ("無線區域網路", False)}
+    assert ld.link_local_addresses(interfaces)[0] == "169.254.211.163"
+
 TOKEN = "oGo0iq6_xu9Jp7cwTM0ttP-BTbTQ9Zefin8GaJMQpyc"
 NONCE = "a1" * 16
 FP = "ab" * 32

@@ -468,3 +468,54 @@ def test_the_qr_codes_appear_and_disappear_as_the_synced_switch_changes(root, se
     app.refresh()
     root.update()
     assert _qr_labels(root)
+
+
+def test_the_back_can_stop_recognition_and_resuming_does_not_start_it_by_itself(root, seeded):
+    from access import front_agent
+
+    store, _screen = seeded
+    rec = FakeRecognition()
+    app = build(root, store, recognition=rec)
+    app.start_recognition()
+    assert rec.on is True and "執行中" in app.face_button.cget("text")
+    store.set_meta(front_agent.BACK_RECOGNITION_KEY, False)                       # 後台下了停止
+    app.refresh()
+    root.update()
+    assert rec.on is False and rec.stops == 1
+    assert "後台已停止" in app.face_button.cget("text") and app.face_button.cget("state") == "disabled"
+    app.start_recognition()                                                       # 停止期間按不起來
+    assert rec.on is False and rec.starts == 1
+    store.set_meta(front_agent.BACK_RECOGNITION_KEY, True)                        # 後台恢復
+    app.refresh()
+    root.update()
+    assert rec.on is False and rec.starts == 1                                    # 不會自己啟動
+    assert "啟動人臉辨識" in app.face_button.cget("text") and app.face_button.cget("state") == "normal"
+    app.start_recognition()
+    assert rec.on is True
+
+
+def test_a_stop_before_recognition_ever_started_keeps_it_off_and_a_bad_value_means_allowed(root, seeded):
+    from access import front_agent
+
+    store, _screen = seeded
+    rec = FakeRecognition()
+    store.set_meta(front_agent.BACK_RECOGNITION_KEY, False)
+    app = build(root, store, recognition=rec)
+    assert "後台已停止" in app.face_button.cget("text") and rec.stops == 0
+    store.set_meta(front_agent.BACK_RECOGNITION_KEY, "no")                        # 值壞掉：當作允許
+    app.refresh()
+    root.update()
+    assert "啟動人臉辨識" in app.face_button.cget("text")
+
+
+def test_the_start_button_shows_the_exit_code_when_recognition_ends_by_itself(root, seeded):
+    store, _screen = seeded
+    rec = FakeRecognition()
+    rec.last_exit = None
+    app = build(root, store, recognition=rec)
+    app.start_recognition()
+    assert "執行中" in app.face_button.cget("text")
+    rec.on, rec.last_exit = False, 2                                            # 辨識程式啟動後自己結束
+    app.refresh()
+    text = app.face_button.cget("text")
+    assert "重新啟動" in text and "代碼 2" in text and str(app.face_button.cget("state")) == "normal"

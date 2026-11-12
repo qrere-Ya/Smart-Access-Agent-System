@@ -337,3 +337,32 @@ def test_a_rejected_heartbeat_does_not_break_the_sync(store, tmp_path):
     agent = make_agent(store, client, tmp_path)
     assert agent.sync_once() is True and agent.status()["back_online"] is True      # 拒收心跳不影響同步與在線
     assert client.heartbeats == []
+
+
+# --- 後台對前台人臉辨識的遙控 ---
+
+def test_the_backs_recognition_switch_is_stored_and_ignored_when_not_a_boolean(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    agent.sync_once()
+    assert store.get_meta(fa.BACK_RECOGNITION_KEY) is None                        # 沒收過：沒有值（儀表板當作允許）
+    client.morning_body = {"ok": True, "brief": None, "recognition_enabled": False}
+    agent.sync_once()
+    assert store.get_meta(fa.BACK_RECOGNITION_KEY) is False
+    for junk in ("true", 1, 0, None, [], {"x": 1}):
+        client.morning_body = {"ok": True, "brief": None, "recognition_enabled": junk}
+        assert agent.sync_once() is True and store.get_meta(fa.BACK_RECOGNITION_KEY) is False
+    client.morning_body = {"ok": True, "brief": None}                                    # 缺欄位
+    assert agent.sync_once() is True and store.get_meta(fa.BACK_RECOGNITION_KEY) is False
+    client.morning_body = {"ok": True, "brief": None, "recognition_enabled": True}
+    agent.sync_once()
+    assert store.get_meta(fa.BACK_RECOGNITION_KEY) is True
+
+
+def test_the_last_recognition_switch_is_kept_while_the_back_is_offline(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    client.morning_body = {"ok": True, "brief": None, "recognition_enabled": False}
+    agent.sync_once()
+    client.fail_ping = fa.BackOffline("連不上")
+    assert agent.sync_once() is False and store.get_meta(fa.BACK_RECOGNITION_KEY) is False

@@ -133,3 +133,73 @@ def test_standalone_dashboard_keeps_the_face_switch_and_does_not_start_a_link_se
     app.dash_win.update()
     assert app.link_wanted is False and hasattr(app, "face_btn") and started == []
     app.teardown()
+
+
+def test_the_back_card_stops_and_resumes_the_front_recognition_with_a_confirmation(root, db, monkeypatch, tmp_path):
+    """雙機後台：前台連線卡片的「停止前台辨識」要在卡片內二次確認才寫入設定，也能取消；單機模式沒有這個按鈕。"""
+    from admin import service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import front_control, paths
+
+    monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_win.update()
+    assert "停止前台辨識" in app.face_control_btn.cget("text") and front_control.recognition_enabled() is True
+    app.face_control_btn.invoke()                                                    # 第一次：只進入確認
+    assert front_control.recognition_enabled() is True and "確定停止" in app.face_control_btn.cget("text")
+    app.face_control_cancel.invoke()                                                 # 取消：沒有寫入
+    assert front_control.recognition_enabled() is True and "停止前台辨識" in app.face_control_btn.cget("text")
+    app.face_control_btn.invoke()
+    app.face_control_btn.invoke()                                                    # 第二次：確定
+    assert front_control.recognition_enabled() is False
+    assert "恢復前台辨識" in app.face_control_btn.cget("text") and "已由後台停止" in app.face_control_label.cget("text")
+    app.face_control_btn.invoke()
+    app.face_control_btn.invoke()                                                    # 確定恢復
+    assert front_control.recognition_enabled() is True and "停止前台辨識" in app.face_control_btn.cget("text")
+    app.teardown()
+
+
+def test_the_single_machine_dashboard_has_no_front_recognition_button(root, db, monkeypatch):
+    from admin import service_manager as sm
+    from admin.backend_main import BackendManagerApp
+
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: False)
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_win.update()
+    assert not hasattr(app, "face_control_btn")
+    app.teardown()
+
+
+def test_back_card_front_recognition_control_screenshot(root, db, monkeypatch, tmp_path, screenshot):
+    """截圖：雙機後台的前台連線卡片，辨識已由後台停止的狀態（按鈕變成「恢復前台辨識」）。"""
+    from admin import front_status, service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import front_control, paths
+
+    monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
+    monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    front_status.record({"pending_events": 0, "rejected_events": 0, "dropped_events": 0, "faces": 4,
+                         "faces_version": "ab", "clock_offset_seconds": 0.1, "clock_warning": False,
+                         "recognition_running": False, "camera_ok": False}, "169.254.127.16")
+    front_control.set_recognition_enabled(False)
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_win.attributes("-topmost", True)
+    app.dash_win.update()
+    app._refresh_link_card()
+    assert screenshot(app.dash_win, "後台_前台辨識控制")
+    app.teardown()

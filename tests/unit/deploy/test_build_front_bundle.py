@@ -110,3 +110,37 @@ def test_batch_files_run_from_the_repo_use_crlf_so_cmd_does_not_die_on_them():
         if name.endswith(".bat"):
             data = open(os.path.join(folder, name), "rb").read()
             assert data.count(LF) == data.count(CRLF), name
+
+
+def test_the_real_usage_guide_is_in_the_template_and_describes_only_what_exists():
+    path = os.path.join(paths.PROJECT_ROOT, "deploy", "front_template", "前台使用說明.txt")
+    text = open(path, encoding="utf-8").read()
+    for needle in ("啟動前台門禁", "▶ 啟動人臉辨識", "F11", "第二個螢幕", "主螢幕", "停止前台辨識",
+                   "runtime" + chr(92) + "logs", "前台檢查.bat", "設定前台網路.bat", "SMART_ACCESS_ALERT_SOUND",
+                   "紅色橫幅"):
+        assert needle in text, needle
+    assert "維護選單" not in text                                        # 沒有維護選單，不能寫成有
+
+
+def test_usage_guide_is_bundled_with_crlf_and_a_bom_so_notepad_reads_the_chinese(fake):
+    root, out = fake
+    guide = root / "deploy" / "front_template" / "前台使用說明.txt"
+    guide.write_bytes("第一行".encode("utf-8") + LF + "第二行".encode("utf-8") + LF)
+    bundle, _a, _c = bb.build(str(out), make_zip=False, root=str(root))
+    data = open(os.path.join(bundle, "前台使用說明.txt"), "rb").read()
+    bom = bytes([0xEF, 0xBB, 0xBF])
+    assert data.startswith(bom) and data.count(bom) == 1
+    assert CRLF in data and LF not in data.replace(CRLF, b"")
+    manifest = json.load(open(os.path.join(bundle, "MANIFEST.json"), encoding="utf-8"))["files"]
+    assert "前台使用說明.txt" in manifest
+
+
+def test_text_files_inside_model_folders_are_copied_byte_for_byte(fake):
+    """回歸：語音模型的 tokens.txt 被轉成 CRLF 加 BOM，sherpa-onnx 讀不了，辨識程式一啟動就死。"""
+    root, out = fake
+    tokens = b"_ 0" + LF + b"^ 1" + LF
+    (root / "models" / "voice" / "tokens.txt").write_bytes(tokens)
+    bundle, _a, _c = bb.build(str(out), make_zip=False, root=str(root))
+    copied = open(os.path.join(bundle, "models", "voice", "tokens.txt"), "rb").read()
+    assert copied == tokens
+    assert bytes([0xEF, 0xBB, 0xBF]) not in copied and CRLF not in copied

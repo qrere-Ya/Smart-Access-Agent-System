@@ -87,3 +87,40 @@ def test_gpu_speed_is_ok_only_when_faster_than_cpu():
     assert fc.judge_gpu_speed(3.0, 12.0)[0] == "OK"
     level, text = fc.judge_gpu_speed(15.0, 12.0)
     assert level == "WARN" and "cuDNN" in text
+
+
+# --- Wi-Fi 警告 ---
+
+WIFI = {"Name": "Wi-Fi", "Description": "Intel(R) Wi-Fi 6E AX211 160MHz", "Media": "Native 802.11"}
+WIRED = {"Name": "乙太網路", "Description": "Realtek PCIe GbE Family Controller", "Media": "802.3"}
+VPN = {"Name": "Tailscale", "Description": "Tailscale Tunnel", "Media": "Unspecified"}
+
+
+def test_wireless_adapters_are_found_by_media_type_name_or_description():
+    assert fc.wireless_adapters([WIRED, VPN]) == []
+    assert fc.wireless_adapters([WIRED, WIFI]) == ["Wi-Fi"]
+    assert fc.wireless_adapters([{"Name": "無線網路", "Description": "", "Media": ""}]) == ["無線網路"]
+    assert fc.wireless_adapters([{"Name": "行動", "Description": "Mobile Broadband Adapter", "Media": "Wireless WAN"}])
+    assert fc.wireless_adapters([{"Name": "x", "Description": "WLAN card", "Media": None}]) == ["x"]
+    assert fc.wireless_adapters([{}, {"Name": None}]) == []                      # 壞資料不出錯
+
+
+def test_wifi_connected_is_a_warning_with_the_adapter_name_never_a_failure():
+    level, text = fc.check_wifi(lambda: [WIRED, WIFI])[0]
+    assert level == "WARN" and "Wi-Fi" in text and "建議關閉" in text and "測試時可忽略" in text
+
+
+def test_no_wifi_is_ok_and_a_failed_query_only_warns():
+    assert fc.check_wifi(lambda: [WIRED, VPN])[0][0] == "OK"
+    assert fc.check_wifi(lambda: [])[0][0] == "OK"
+
+    def broken():
+        raise OSError("powershell 不存在")
+
+    level, text = fc.check_wifi(broken)[0]
+    assert level == "WARN" and "無法檢查" in text and "OSError" in text
+
+
+def test_the_wifi_check_runs_as_part_of_the_front_check():
+    import inspect
+    assert "check_wifi" in inspect.getsource(fc.main)

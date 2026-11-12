@@ -35,6 +35,9 @@ MODEL_DIRS = ("vits-piper-zh_CN-huayan-medium",)
 REQUIREMENT_FILES = ("front.txt", "lock.txt")
 REQUIREMENTS_TXT = ("requirements/front.txt", "requirements/lock.txt")   # 有中文註解，加 BOM 才不會被 gbk 誤讀
 TEXT_SUFFIXES = (".bat",)                          # 這些複製時轉成 CRLF
+BOM, LF, CRLF = bytes([0xEF, 0xBB, 0xBF]), bytes([10]), bytes([13, 10])
+DOC_FILES = ("前台使用說明.txt",)   # 給人讀的說明：轉 CRLF 加 UTF-8 BOM（記事本才讀得對中文）；只限這些檔名，
+#                                                   模型資料夾裡的 .txt（例如語音的 tokens.txt）一個位元組都不能動
 README = """Smart Access 前台安裝包
 
 安裝（第一次）：
@@ -47,6 +50,7 @@ README = """Smart Access 前台安裝包
 日常使用：
   - 後台先開，再雙擊桌面「啟動前台門禁」（只開儀表板，沒有黑色視窗；
     連線代理在背景跟著開，人臉辨識要按儀表板右上角「啟動人臉辨識」）。
+  - 完整的操作說明（雙螢幕、F11、怎麼停止、警示聲音、記錄檔）看資料夾裡的「前台使用說明.txt」。
   - 出問題先雙擊「前台檢查.bat」。防火牆要重做：右鍵「設定前台網路.bat」→ 以系統管理員身分執行。
 
 限制：
@@ -126,6 +130,11 @@ def _copy(source, target):
             data = f.read().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         with open(target, "wb") as f:
             f.write(data)
+    elif os.path.basename(source) in DOC_FILES:
+        with open(source, "rb") as f:
+            data = f.read().replace(BOM, b"").replace(CRLF, LF).replace(LF, CRLF)
+        with open(target, "wb") as f:
+            f.write(BOM + data)
     elif source.endswith(".ps1") or target.replace("\\", "/").endswith(REQUIREMENTS_TXT):  # 加 BOM
         with open(source, "rb") as f:
             data = f.read()

@@ -44,7 +44,7 @@ from admin import (
     schedule_window,
     service_manager,
 )
-from shared import auth, paths, ui_theme
+from shared import auth, front_control, paths, ui_theme
 from shared import database_mgr as db
 
 ANOMALY_DIR = paths.ANOMALY_DIR
@@ -457,7 +457,50 @@ class BackendManagerApp:
         self.link_detail.pack(fill="x", padx=15, pady=(2, 0))
         self.link_service_label = ui_theme.muted_label(box, "")
         self.link_service_label.configure(anchor="w")
-        self.link_service_label.pack(fill="x", padx=15, pady=(6, 12))
+        self.link_service_label.pack(fill="x", padx=15, pady=(6, 6))
+        # 前台人臉辨識的遠端停止／恢復：前台只有「啟動」按鈕，停止由這裡下指令（前台同步時套用）
+        control = ctk.CTkFrame(box, fg_color="transparent")
+        control.pack(fill="x", padx=15, pady=(0, 12))
+        self.face_control_label = ui_theme.muted_label(control, "")
+        self.face_control_label.configure(anchor="w", justify="left", wraplength=520)
+        self.face_control_label.pack(side="left", fill="x", expand=True)
+        self.face_control_confirming = False
+        self.face_control_cancel = ui_theme.secondary_button(control, "取消", self._cancel_face_control, width=70)
+        self.face_control_btn = ui_theme.secondary_button(control, "", self._press_face_control, width=170)
+        self.face_control_btn.pack(side="right")
+        self._refresh_face_control()
+
+    def _refresh_face_control(self):
+        """依後台目前的設定更新「停止／恢復前台辨識」按鈕與說明（按下去要在卡片內再確認一次）。"""
+        enabled = front_control.recognition_enabled()
+        if self.face_control_confirming:
+            self.face_control_btn.configure(text="確定停止" if enabled else "確定恢復")
+            self.face_control_cancel.pack(side="right", padx=(0, 8))
+            return
+        self.face_control_cancel.pack_forget()
+        if enabled:
+            self.face_control_btn.configure(text="⏸ 停止前台辨識")
+            self.face_control_label.configure(text="前台人臉辨識：允許（前台的使用者自己按「啟動」）")
+        else:
+            self.face_control_btn.configure(text="▶ 恢復前台辨識")
+            self.face_control_label.configure(
+                text="前台人臉辨識：已由後台停止（最慢約 10 秒套用；恢復後前台仍要有人按「啟動」；"
+                     "前台離線時下次連上才套用）")
+
+    def _press_face_control(self):
+        """第一次按進入確認，第二次按才寫入設定。"""
+        if not self.face_control_confirming:
+            self.face_control_confirming = True
+            self.face_control_label.configure(text="確定要停止前台人臉辨識嗎？前台門禁將無法打卡。"
+                                              if front_control.recognition_enabled() else "確定要恢復前台人臉辨識嗎？")
+        else:
+            self.face_control_confirming = False
+            front_control.set_recognition_enabled(not front_control.recognition_enabled())
+        self._refresh_face_control()
+
+    def _cancel_face_control(self):
+        self.face_control_confirming = False
+        self._refresh_face_control()
 
     def _build_event_stream(self, parent):
         """雙機後台：右邊顯示前台送來的事件（打卡、尾隨、經過未打卡），新的在前。"""
@@ -479,6 +522,7 @@ class BackendManagerApp:
         else:
             reason = f"：{self.link_note}" if self.link_note else "（正在嘗試啟動）"
             self.link_service_label.configure(text=f"🔴 後台連線服務未執行{reason}")
+        self._refresh_face_control()
         events = dashboard_stats.get_recent_events(limit=30)
         if events is not None:
             ui_theme.fill_table(self.event_tree, [(ts[5:], text) for ts, text in events])

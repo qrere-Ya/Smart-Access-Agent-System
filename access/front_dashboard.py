@@ -77,7 +77,7 @@ class FrontDashboard:
         self.root, self.store, self._now, self._clock = root, store, now, clock
         self.screen = ScreenState(store)
         self._read_heartbeat = read_heartbeat or front_agent.read_terminal_heartbeat
-        self._read_resources = read_resources or front_resources.ResourceMonitor().read
+        self._read_resources = read_resources or front_resources.ResourceSampler().read
         self._signatures = {}
         self._trees = []
         self._grid_opts = {}
@@ -451,25 +451,39 @@ class FrontDashboard:
 
     def start_recognition(self):
         """啟動人臉辨識（會在筆電螢幕開攝影機畫面）；前台只能啟動、不能停止，要停止由後台或前台電腦的 Windows 操作。"""
-        if self.recognition is None or self.recognition.running():
+        if self.recognition is None or self.recognition.running() or not self.recognition_allowed():
             return
         ok, message = self.recognition.start()
         if not ok:
             print(f"[front_dashboard][WARN] 人臉辨識{message}")
         self._render_recognition()
 
+    def recognition_allowed(self):
+        """後台是否允許人臉辨識（前台同步時取得，沒收過或值不是布林都當作允許；離線沿用最後一次的值）。"""
+        return self.store.get_meta(front_agent.BACK_RECOGNITION_KEY) is not False
+
     def _render_recognition(self):
-        """依辨識程式是否還活著更新按鈕：執行中停用（不能停止）；辨識程式自己結束（按 q）就回到可啟動。"""
+        """依後台指令與辨識程式狀態更新按鈕：後台停止→收掉辨識並停用；執行中停用（不能停止）；
+        辨識程式自己結束（按 q）或後台恢復就回到可啟動（恢復後不自動啟動，要有人去按）。"""
         if self.recognition is None:
             return
+        allowed = self.recognition_allowed()
+        if not allowed and self.recognition.running():
+            self.recognition.stop()                        # 只有後台的指令能停止辨識
         on = self.recognition.running()
-        if self._changed("recognition_switch", on):
-            if on:
+        last_exit = getattr(self.recognition, "last_exit", None)
+        if self._changed("recognition_switch", (on, allowed, last_exit)):
+            if not allowed:
+                self.face_button.configure(text="⏸ 後台已停止人臉辨識", state="disabled", fg_color="transparent",
+                                           border_width=1, border_color=ui_theme.pair("warning"),
+                                           text_color_disabled=ui_theme.pair("warning"))
+            elif on:
                 self.face_button.configure(text="✔ 人臉辨識執行中", state="disabled", fg_color="transparent",
                                            border_width=1, border_color=ui_theme.pair("success"),
                                            text_color_disabled=ui_theme.pair("success"))
             else:
-                self.face_button.configure(text="▶ 啟動人臉辨識", state="normal", fg_color=ui_theme.pair("primary"),
+                again = "▶ 啟動人臉辨識" if last_exit is None else f"▶ 重新啟動（剛結束，代碼 {last_exit}）"
+                self.face_button.configure(text=again, state="normal", fg_color=ui_theme.pair("primary"),
                                            border_width=0, hover_color=ui_theme.pair("primary_hover"),
                                            text_color=ui_theme.pair("on_primary"))
 

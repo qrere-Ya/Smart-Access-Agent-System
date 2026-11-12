@@ -33,8 +33,11 @@ function Set-FirewallRules {
         Write-Host "目前不是系統管理員，略過防火牆。之後在「設定前台網路.bat」上按右鍵 → 以系統管理員身分執行。" -ForegroundColor Yellow
         return
     }
-    # 前台不開任何對外服務（狀態由前台主動回報給後台），舊版安裝留下的 8771 規則順便移除
-    Get-NetFirewallRule -DisplayName "SmartAccess 前台狀態（只允許網路線直連）" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    # 前台不開任何對外服務（狀態由前台主動回報給後台）：連線是前台往後台的出站，Windows 預設允許，不需要規則。
+    # 唯一要放行的是「找後台」的 UDP 回覆（前台廣播探測，後台從 8772 回來）。
+    # 先把所有「SmartAccess 前台」開頭的舊規則清掉（舊版的 8771 狀態規則、改過名稱或數量的探測規則），再重建，不會留下過期規則。
+    $old = Get-NetFirewallRule -DisplayName "SmartAccess 前台*" -ErrorAction SilentlyContinue
+    if ($old) { Write-Host "移除舊的前台規則 $(@($old).Count) 條。"; $old | Remove-NetFirewallRule }
     # 探測回覆只允許給前台的 Python（虛擬環境的啟動器與實際執行的基底直譯器各一條），不開放給其他程式
     $programs = @($VenvPy)
     if (Test-Path $VenvPy) {
@@ -45,11 +48,11 @@ function Set-FirewallRules {
     foreach ($program in $programs) {
         $n++
         $rule2 = "SmartAccess 前台尋找後台回覆 $n（只允許網路線直連與前台 Python）"
-        Get-NetFirewallRule -DisplayName $rule2 -ErrorAction SilentlyContinue | Remove-NetFirewallRule
         New-NetFirewallRule -DisplayName $rule2 -Direction Inbound -Protocol UDP -RemoteAddress "169.254.0.0/16" `
             -RemotePort 8772 -Program $program -Action Allow | Out-Null
+        Write-Host ("已建立規則：{0}（入站允許 UDP，來源埠 8772，只放行 169.254.0.0/16，限 {1}）" -f $rule2, $program) -ForegroundColor Green
     }
-    Write-Host "已建立防火牆規則：只放行網路線直連那一段（169.254.x.x）。" -ForegroundColor Green
+    Write-Host "完成：只放行網路線直連那一段（169.254.x.x）；前台連後台是出站，不需要規則。" -ForegroundColor Green
     Write-Host "網路線兩端的網卡請維持「自動取得 IP」（預設就是）。位址分配約需 30 到 60 秒。"
 }
 
@@ -175,6 +178,6 @@ $env:SMART_ACCESS_LINK_TOKEN = [Environment]::GetEnvironmentVariable($TokenEnv, 
 & $VenvPy -m access.front_check
 $code = $LASTEXITCODE
 Write-Host ""
-if ($code -eq 0) { Write-Host "安裝完成。後台開好之後，雙擊桌面「啟動前台門禁」。" -ForegroundColor Green }
+if ($code -eq 0) { Write-Host "安裝完成。後台開好之後，雙擊桌面「啟動前台門禁」；操作方式看資料夾裡的「前台使用說明.txt」。" -ForegroundColor Green }
 else { Write-Host "安裝已完成，但自我檢查有失敗項目（見上方 FAIL），處理後可雙擊「前台檢查.bat」再檢查。" -ForegroundColor Yellow }
 Read-Host "按 Enter 結束"

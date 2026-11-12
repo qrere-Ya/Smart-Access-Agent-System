@@ -102,7 +102,8 @@ def test_morning_carries_the_backs_local_only_switch_as_a_plain_boolean(client, 
     monkeypatch.setattr(paths, "NETWORK_POLICY_PATH", str(tmp_path / "policy.json"))
     monkeypatch.delenv(network_policy.ENV_NAME, raising=False)
     body = client.get("/v1/morning", headers=AUTH).get_json()
-    assert body["local_only"] is False and set(body) == {"ok", "brief", "local_only", "server_time"}
+    assert body["local_only"] is False
+    assert set(body) == {"ok", "brief", "local_only", "recognition_enabled", "server_time"}
     network_policy.set_local_only(True)
     assert client.get("/v1/morning", headers=AUTH).get_json()["local_only"] is True
     digest_store.save_brief({"date": "2026-11-10", "generated_at": "x", "news": [], "news_problem": ""})
@@ -271,3 +272,15 @@ def test_a_bad_heartbeat_is_rejected_and_nothing_is_stored(client, tmp_path, mon
 def test_a_heartbeat_that_is_not_an_object_is_rejected(client, tmp_path, monkeypatch, payload):
     monkeypatch.setattr(paths, "FRONT_STATUS_PATH", str(tmp_path / "front_status.json"))
     assert client.post("/v1/heartbeat", json=payload, headers=AUTH).status_code == 400
+
+
+def test_morning_carries_the_backs_recognition_switch_as_a_plain_boolean(client, monkeypatch, tmp_path):
+    from shared import front_control
+    monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
+    assert client.get("/v1/morning", headers=AUTH).get_json()["recognition_enabled"] is True      # 沒設定：允許
+    front_control.set_recognition_enabled(False)
+    assert client.get("/v1/morning", headers=AUTH).get_json()["recognition_enabled"] is False
+    digest_store.save_brief({"date": "2026-11-10", "generated_at": "x", "news": [], "news_problem": ""})
+    assert client.get("/v1/morning", headers=AUTH).get_json()["recognition_enabled"] is False      # 有晨報時也帶
+    front_control.set_recognition_enabled(True)
+    assert client.get("/v1/morning", headers=AUTH).get_json()["recognition_enabled"] is True

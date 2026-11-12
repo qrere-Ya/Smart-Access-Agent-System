@@ -13,7 +13,9 @@ lan_discovery.py：兩台電腦用網路線直連時的自動互相找到（不�
 
 限制：位址在重新插拔網路線或重開機後可能改變，後台連線服務綁的位址要重啟才會更新，前台會自動重新探測；
 探測與回覆是明文 UDP，同一條網路線上的人可以看到後台的位址，但沒有通行碼就連不上、也無法偽造有效回覆；
-Windows 防火牆要允許後台的 UDP 探測埠（deploy\\設定後台網路.bat）；實際分配位址要 30 到 60 秒。
+Windows 防火牆：後台要放行 TCP 8770 與 UDP 8772（deploy\\設定後台網路.bat），前台要放行後台 8772 回來的 UDP 回覆
+（設定前台網路.bat，只綁前台的 Python）；檢查用 python -m admin.network_check（後台）與前台檢查.bat；
+實際分配位址要 30 到 60 秒。
 
 串接模組：
   - role_config（bind_host／back_host 可填 auto）；admin.link_server（後台啟動時取位址並開回覆）；
@@ -38,7 +40,7 @@ DISCOVERY_KEY_LABEL = b"smart-access-discovery-v2"
 MAX_DATAGRAM = 512
 # 不是「網路線」的網卡：無線、藍牙、VPN 與虛擬網卡（Wi-Fi Direct 的「區域連線* N」名稱帶星號）
 _UNWANTED_ADAPTERS = ("wi-fi", "wifi", "wireless", "bluetooth", "藍牙", "vethernet", "loopback", "virtual", "vmware",
-                      "tailscale", "vpn", "radmin", "zerotier", "hyper-v", "docker", "wsl", "*")
+                      "tailscale", "vpn", "radmin", "zerotier", "hyper-v", "docker", "wsl", "無線", "*")
 
 
 class DiscoveryError(role_config.ConfigError):
@@ -54,8 +56,8 @@ def _is_lan_sender(ip):
     return address.is_private or address.is_link_local or address.is_loopback
 
 
-def link_local_addresses(interfaces=None):
-    """本機「已連線」的 169.254.x.x 位址清單，有線網卡排前面（Wi-Fi、藍牙、VPN、虛擬網卡排後面）。"""
+def link_local_details(interfaces=None):
+    """本機「已連線」的 169.254.x.x 位址明細 [(網卡名稱, 位址, 是否像網路線網卡)]，有線網卡排前面。"""
     if interfaces is None:
         import psutil
         up = {name for name, stat in psutil.net_if_stats().items() if stat.isup}
@@ -71,8 +73,14 @@ def link_local_addresses(interfaces=None):
                     continue
             except ValueError:
                 continue
-            (other if any(word in name.lower() for word in _UNWANTED_ADAPTERS) else wired).append(address)
+            is_wired = not any(word in name.lower() for word in _UNWANTED_ADAPTERS)
+            (wired if is_wired else other).append((name, address, is_wired))
     return wired + other
+
+
+def link_local_addresses(interfaces=None):
+    """本機「已連線」的 169.254.x.x 位址清單，有線網卡排前面（Wi-Fi、藍牙、VPN、虛擬網卡排後面）。"""
+    return [address for _name, address, _wired in link_local_details(interfaces)]
 
 
 def auto_address(interfaces=None):

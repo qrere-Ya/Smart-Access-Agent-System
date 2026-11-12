@@ -64,3 +64,34 @@ def test_gpu_query_runs_without_a_console_window(monkeypatch):
     monkeypatch.setattr(fr.subprocess, "run", lambda *a, **k: seen.update(k) or Out())
     assert fr.ResourceMonitor().read()["gpu"] == 37.0
     assert seen["creationflags"] == getattr(fr.subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def test_sampler_returns_instantly_even_when_the_monitor_is_slow_and_survives_failures():
+    import threading
+    import time as _t
+
+    from access import front_resources as fr
+
+    release = threading.Event()
+    calls = {"n": 0}
+
+    class SlowMonitor:
+        def read(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                release.wait(3)                                   # 第一次很慢（像 nvidia-smi）
+                return {"cpu": 1.0, "ram": 2.0, "gpu": 3.0, "down_kbps": None, "up_kbps": None}
+            if calls["n"] == 2:
+                raise OSError("這一輪讀失敗")
+            return {"cpu": 9.0, "ram": 2.0, "gpu": 3.0, "down_kbps": None, "up_kbps": None}
+
+    sampler = fr.ResourceSampler(SlowMonitor(), interval=0.01)
+    started = _t.perf_counter()
+    first = sampler.read()
+    assert _t.perf_counter() - started < 0.5 and first == fr.ResourceSampler.EMPTY    # 慢呼叫不卡住呼叫端
+    release.set()
+    deadline = _t.time() + 3
+    while sampler.read()["cpu"] != 9.0 and _t.time() < deadline:                      # 失敗那輪沿用舊值、之後恢復
+        _t.sleep(0.02)
+    assert sampler.read()["cpu"] == 9.0
+    sampler.stop()

@@ -36,7 +36,8 @@ from flask import Flask, jsonify, request
 from access import pass_through
 from shared import database_mgr as db
 from admin import front_status, link_cert
-from shared import digest_store, lan_discovery, link_protocol as lp, link_tls, network_policy, paths, role_config
+from shared import (digest_store, front_control, lan_discovery, link_protocol as lp, link_tls, network_policy, paths,
+                    role_config)
 
 _EVIDENCE_PREFIX = {"tailgate": "tailgate", pass_through.EVENT_TYPE: pass_through.EVENT_TYPE}
 
@@ -87,11 +88,12 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
     @app.get(lp.API_PREFIX + "/morning")
     def morning():
         local = network_policy.local_only() is True          # 後台的全本地開關，前台同步時一起取得（只有布林）
+        control = {"local_only": local, "recognition_enabled": front_control.recognition_enabled() is True}
         brief = digest_store.load_brief()
         if not brief:
-            return reply({"ok": True, "brief": None, "local_only": local})
+            return reply({"ok": True, "brief": None, **control})
         keep = ("date", "generated_at", "news", "news_problem")
-        return reply({"ok": True, "brief": {k: brief.get(k) for k in keep}, "local_only": local})
+        return reply({"ok": True, "brief": {k: brief.get(k) for k in keep}, **control})
 
     @app.post(lp.API_PREFIX + "/heartbeat")
     def heartbeat():

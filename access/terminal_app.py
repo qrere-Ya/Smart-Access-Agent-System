@@ -16,6 +16,7 @@ terminal_app.py：門禁現場即時人臉辨識主程式。
   - security：YOLO 人數統計與尾隨證據圖
   - audio_player：TTS 語音播報
   - utils：畫面中文字繪製
+  - alert_sound：尾隨、非活體、經過未打卡時在背景響短提示音（各自冷卻，SMART_ACCESS_ALERT_SOUND=0 可關）
   - front_screens：前台角色時辨識視窗放在主螢幕，F11／f 切全螢幕、Esc 離開（其他角色維持原本視窗）
   - 由 service_manager（backend_main 管理後台）啟動
 """
@@ -33,6 +34,7 @@ from access import pose
 from access import punch_state
 from access import terminal_backend
 from access import front_screens
+from access.alert_sound import AlertSound
 from shared import role_config
 from access.audio_player import SmartAudioPlayer
 import traceback
@@ -70,6 +72,7 @@ attack_counter = 0  # 連續假臉幀數
 real_counter = 0    # 連續真臉幀數
 
 audio_player = SmartAudioPlayer(speed=1.0)
+alert_sound = AlertSound()      # 警示提示音（尾隨、非活體、經過未打卡），各自冷卻 20 秒、背景播放
 
 # 資料後端：單機讀寫本機資料庫，前台用本機快取與佇列（main 依角色建立）
 backend = terminal_backend.LocalBackend()
@@ -118,6 +121,7 @@ def _check_pass_through(frame, person_boxes, tailgate_logged):
         if pass_monitor.update(time.time(), person_boxes, frame.shape[1], tailgate_logged):
             big = max(person_boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
             backend.anomaly(pass_through.EVENT_TYPE, pass_through.EVENT_DETAIL, frame, big)
+            alert_sound.notify(pass_through.EVENT_TYPE)
     except Exception as e:
         print(f"[terminal_app][WARN] 經過未打卡判斷或寫入失敗: {e}")
 
@@ -179,6 +183,7 @@ def analyze_in_background(frame_copy, detector):
                     print(f"[terminal_app] 非活體判定：liveness_score={liveness_score:.4f}"
                           f"（門檻 0.80，分數越接近 1.0 越像真人，越接近 0.0 越像攻擊）")
                     backend.alert("spoof", "偵測到非真人（照片或螢幕翻拍）")
+                    alert_sound.notify("spoof")
 
                     _publish_face_data({
                         'coords': (x1, y1, x2, y2),
@@ -280,6 +285,7 @@ def analyze_in_background(frame_copy, detector):
                 except Exception as e:
                     print(f"[terminal_app][WARN] 異常事件寫入失敗（不影響警示與證據照片）: {e}")
                 _publish_tailgate_alert(current_time)
+                alert_sound.notify("tailgate")
 
             _publish_face_data(result_packet)
 
@@ -345,6 +351,9 @@ def main():
     window = _TerminalWindow(enabled=role_config.role() == "front")
     detector = vc.detector
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        print("[terminal_app][ERROR] 開不起攝影機 0（確認有接攝影機、沒有別的程式在用、"
+              "Windows 隱私設定允許桌面程式使用攝影機）")
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
@@ -364,6 +373,8 @@ def main():
             backend.heartbeat(bool(ret))
             note_text = backend.note()
         if not ret:
+            print("[terminal_app][ERROR] 讀不到攝影機畫面（沒接、被別的程式占用，或 Windows 隱私設定擋住），"
+                  "辨識程式結束。")
             break
 
         canvas = np.zeros((720, 1280, 3), dtype=np.uint8)

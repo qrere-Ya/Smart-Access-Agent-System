@@ -112,3 +112,17 @@ def test_windowless_python_gets_its_output_redirected_to_a_log(tmp_path, monkeyp
     print("沒有視窗也能印")
     sys.stdout.flush()
     assert "沒有視窗也能印" in open(fl.log_path("front_dashboard"), encoding="utf-8").read()
+
+
+def test_a_process_that_dies_by_itself_reports_its_exit_code_until_restarted_or_stopped(tmp_path, monkeypatch):
+    made = []
+    proc = make(tmp_path, monkeypatch, lambda cmd, **kw: made.append(FakeProc()) or made[-1])
+    assert proc.last_exit is None
+    proc.start()
+    made[0].code = 3                                          # 啟動後自己結束（例如讀不到攝影機）
+    assert proc.running() is False and proc.last_exit == 3
+    proc.start()
+    assert proc.last_exit is None and proc.running() is True  # 重新啟動就清掉
+    made[1].code = 1
+    proc.running()
+    assert proc.last_exit == 1

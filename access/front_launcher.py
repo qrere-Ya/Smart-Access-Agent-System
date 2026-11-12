@@ -51,14 +51,22 @@ class ManagedProcess:
         self._python = python or python_exe()
         self._cwd = cwd or paths.PROJECT_ROOT
         self._proc = None
+        self.last_exit = None                  # 子行程自己結束時的結束代碼；從沒結束過或重新啟動後是 None
 
     def running(self):
-        return self._proc is not None and self._proc.poll() is None
+        if self._proc is None:
+            return False
+        code = self._proc.poll()
+        if code is None:
+            return True
+        self.last_exit = code                  # 自己結束了（不是被 stop 收掉）：記下結束代碼，畫面可以提示
+        return False
 
     def start(self):
         """啟動；已在執行就不重複啟動。回傳 (成功與否, 說明)。"""
         if self.running():
             return True, "已在執行"
+        self.last_exit = None
         path = log_path(self.name)
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -79,6 +87,7 @@ class ManagedProcess:
     def stop(self):
         """結束子行程與它開的子行程（Windows 用 taskkill /T）；沒在執行就什麼都不做。"""
         proc, self._proc = self._proc, None
+        self.last_exit = None
         if proc is None or proc.poll() is not None:
             return
         if os.name == "nt":

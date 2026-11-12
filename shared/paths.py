@@ -31,6 +31,7 @@ BRIEF_PATH = os.path.join(RUNTIME_DIR, "morning_brief.json")
 DIGEST_SETTINGS_PATH = os.path.join(RUNTIME_DIR, "digest_settings.json")
 ROLE_PATH = os.path.join(RUNTIME_DIR, "role.json")
 NETWORK_POLICY_PATH =os.path.join(RUNTIME_DIR, "network_policy.json")
+FRONT_CONTROL_PATH = os.path.join(RUNTIME_DIR, "front_control.json")      # 後台對前台的遙控（人臉辨識允許與否）
 FRONT_STATUS_PATH = os.path.join(RUNTIME_DIR, "front_status.json")      # 前台最後一次心跳（後台連線服務寫、後台視窗讀）
 LINK_TLS_DIR = os.path.join(RUNTIME_DIR, "link_tls")          # 後台連線服務的憑證與私鑰（只在後台，不進版控）
 REMOTE_KEYS_PATH =os.path.join(RUNTIME_DIR, "remote_keys.json")
