@@ -36,16 +36,16 @@ def seeded(tmp_path):
 RES = {"cpu": 3.0, "ram": 42.0, "gpu": None, "down_kbps": 0.1, "up_kbps": 1536.0}
 
 
-def build(root, store, heartbeat=None, resources=None):
+def build(root, store, heartbeat=None, resources=None, recognition=None, monitors=(), clock=None):
     from shared import ui_theme
 
     ui_theme.apply_theme("dark")
     for child in root.winfo_children():                      # 上一個測試留下的畫面要先清掉，不然會疊在一起
         child.destroy()
     root.deiconify()
-    app = fd.FrontDashboard(root, store, clock=lambda: TS,
+    app = fd.FrontDashboard(root, store, clock=clock or (lambda: TS),
                             read_heartbeat=heartbeat or (lambda: {"camera_ok": True, "recognition_running": True}),
-                            read_resources=resources or (lambda: RES))
+                            read_resources=resources or (lambda: RES), recognition=recognition, monitors=monitors)
     root.update()
     return app
 
@@ -272,3 +272,199 @@ def test_shrinking_after_a_large_window_still_fits(root, seeded):
             assert root.winfo_reqwidth() <= root.winfo_width() + 2, (size, key, root.winfo_reqwidth())
             need, have = root.winfo_reqheight(), root.winfo_height()
             assert need <= have + 2, (size, key, need, have)
+
+
+class FakeRecognition:
+    def __init__(self):
+        self.on, self.starts, self.stops = False, 0, 0
+
+    def running(self):
+        return self.on
+
+    def start(self):
+        self.on, self.starts = True, self.starts + 1
+        return True, "已啟動"
+
+    def stop(self):
+        self.on, self.stops = False, self.stops + 1
+
+
+def test_face_recognition_is_off_until_started_then_the_button_is_disabled(root, seeded):
+    store, _screen = seeded
+    rec = FakeRecognition()
+    app = build(root, store, recognition=rec)
+    assert rec.starts == 0 and "啟動人臉辨識" in app.face_button.cget("text")     # 開前台不會自己開辨識
+    assert app.face_button.cget("state") == "normal"
+    app.start_recognition()
+    assert rec.starts == 1 and "執行中" in app.face_button.cget("text")
+    assert app.face_button.cget("state") == "disabled"                            # 執行中不能按、前台沒有停止
+
+
+def test_the_front_can_never_stop_recognition(root, seeded):
+    store, _screen = seeded
+    rec = FakeRecognition()
+    rec.on = True
+    app = build(root, store, recognition=rec)
+    app.start_recognition()                                                       # 已在執行：什麼都不做
+    app.face_button.invoke()                                                      # 停用的按鈕按了也沒作用
+    root.update()
+    assert rec.starts == 0 and rec.stops == 0 and rec.on is True
+    assert not hasattr(app, "toggle_recognition") and not hasattr(app, "exit_front")
+
+
+def test_recognition_ending_by_itself_makes_the_button_startable_again(root, seeded):
+    store, _screen = seeded
+    rec = FakeRecognition()
+    app = build(root, store, recognition=rec)
+    app.start_recognition()
+    rec.on = False                                                                # 使用者在辨識視窗按 q 結束
+    app.refresh()
+    assert "啟動人臉辨識" in app.face_button.cget("text") and app.face_button.cget("state") == "normal"
+    app.start_recognition()
+    assert rec.starts == 2
+
+
+def test_the_dashboard_has_no_maintenance_or_admin_features(root, seeded):
+    store, _screen = seeded
+    app = build(root, store, recognition=FakeRecognition())
+    everything = "\n".join(str(t) for t in texts(root))
+    assert "維護" not in everything and "管理員" not in everything
+    for name in ("maint_button", "open_maintenance", "maintenance", "MaintenanceWindow"):
+        assert not hasattr(app, name) and not hasattr(fd, name)
+
+
+def test_header_buttons_do_not_overflow_at_small_sizes(root, seeded):
+    store, _screen = seeded
+    app = build(root, store, recognition=FakeRecognition())
+    for size in ("1920x1000", "1280x720", "1024x640"):
+        root.geometry(size)
+        root.update()
+        end = time.time() + 0.5
+        while time.time() < end:
+            root.update()
+            time.sleep(0.02)
+        right_edge = max(w.winfo_rootx() + w.winfo_width() for w in (app.face_button, app.theme_button,
+                                                                        app.fullscreen_button))
+        assert right_edge <= root.winfo_rootx() + root.winfo_width() + 2, size
+    root.geometry("1920x1000+0+0")
+    root.update()
+    app._rescale()
+    root.update()
+
+
+def test_without_a_recognition_manager_the_button_is_hidden(root, seeded):
+    store, _screen = seeded
+    app = build(root, store)
+    assert app.face_button.winfo_manager() == ""
+    app.start_recognition()                                                       # 不會出錯
+
+
+def test_dashboard_opens_on_the_second_screen_and_f11_toggles_fullscreen(root, seeded, tmp_path, monkeypatch):
+    from access import front_screens
+
+    monkeypatch.setattr(front_screens.paths, "RUNTIME_DIR", str(tmp_path))
+    store, _screen = seeded
+    laptop = front_screens.Monitor(0, 0, 1920, 1080, 0, 0, 1920, 1040, True)
+    external = front_screens.Monitor(1920, 0, 1600, 900, 1920, 0, 1600, 860, False)
+    app = build(root, store, monitors=[laptop, external])
+    assert app.monitor is external and app._window_geometry == f"1600x{860 - front_screens.TITLEBAR_ALLOWANCE}+1920+0"
+    assert app.fullscreen is False
+    root.event_generate("<F11>")
+    root.update()
+    assert app.fullscreen is True and bool(root.attributes("-fullscreen"))
+    assert "離開全螢幕" in app.fullscreen_button.cget("text")
+    assert front_screens.load_pref("dashboard_fullscreen") is True                    # 記住了
+    root.event_generate("<Escape>")
+    root.update()
+    assert app.fullscreen is False and not root.attributes("-fullscreen")
+    assert root.geometry().endswith("+1920+0") or root.geometry().startswith("1600x")   # 回到第二螢幕上的一般視窗
+    app.toggle_fullscreen()
+    app.toggle_fullscreen()
+    assert app.fullscreen is False
+
+
+def test_the_dashboard_starts_fullscreen_when_it_was_left_that_way(root, seeded, tmp_path, monkeypatch):
+    from access import front_screens
+
+    monkeypatch.setattr(front_screens.paths, "RUNTIME_DIR", str(tmp_path))
+    front_screens.save_pref("dashboard_fullscreen", True)
+    store, _screen = seeded
+    app = build(root, store)
+    root.update()
+    root.after(400, root.quit)
+    root.mainloop()
+    assert app.fullscreen is True
+    app.set_fullscreen(False)
+
+
+def test_f11_still_works_after_the_window_was_shrunk(root, seeded, tmp_path, monkeypatch):
+    """回歸：把視窗縮小後再按 F11，不能出現「max width/height is too small」。"""
+    from access import front_screens
+
+    monkeypatch.setattr(front_screens.paths, "RUNTIME_DIR", str(tmp_path))
+    store, _screen = seeded
+    app = build(root, store)
+    root.geometry("1024x640+0+0")
+    end = time.time() + 0.6
+    while time.time() < end:
+        root.update()
+        time.sleep(0.02)
+    app.set_fullscreen(True)
+    assert app.fullscreen is True and bool(root.attributes("-fullscreen"))
+    app.set_fullscreen(False)
+    root.geometry("1920x1000+0+0")
+    root.update()
+    app._rescale()
+    root.update()
+
+
+def _qr_labels(root):
+    return [t for t in texts(root) if "手機掃描看原文" in str(t)]
+
+
+@pytest.mark.parametrize("local_env,back_value,qr_shown", [
+    (None, None, True),          # 都沒設：顯示 QR
+    (None, False, True),         # 後台關：顯示
+    (None, True, False),         # 後台開：不顯示
+    ("1", False, False),         # 前台本機開（環境變數）：不顯示
+    ("1", True, False),          # 兩邊都開：不顯示
+    (None, "yes", True),         # 後台值壞掉（不是布林）：當作關
+])
+def test_the_qr_codes_follow_the_front_local_switch_or_the_backs_synced_switch(root, seeded, tmp_path, monkeypatch,
+                                                                                local_env, back_value, qr_shown):
+    from access import front_agent
+    from shared import network_policy, paths
+
+    monkeypatch.setattr(paths, "NETWORK_POLICY_PATH", str(tmp_path / "policy.json"))
+    if local_env is None:
+        monkeypatch.delenv(network_policy.ENV_NAME, raising=False)
+    else:
+        monkeypatch.setenv(network_policy.ENV_NAME, local_env)
+    store, _screen = seeded
+    if back_value is not None:
+        store.set_meta(front_agent.BACK_LOCAL_ONLY_KEY, back_value)
+    app = build(root, store)
+    app.open_module("news")
+    root.update()
+    assert bool(_qr_labels(root)) is qr_shown
+
+
+def test_the_qr_codes_appear_and_disappear_as_the_synced_switch_changes(root, seeded, tmp_path, monkeypatch):
+    from access import front_agent
+    from shared import network_policy, paths
+
+    monkeypatch.setattr(paths, "NETWORK_POLICY_PATH", str(tmp_path / "policy.json"))
+    monkeypatch.delenv(network_policy.ENV_NAME, raising=False)
+    store, _screen = seeded
+    app = build(root, store)
+    app.open_module("news")
+    root.update()
+    assert _qr_labels(root)
+    store.set_meta(front_agent.BACK_LOCAL_ONLY_KEY, True)                       # 後台切到全本地，前台下一輪同步寫入
+    app.refresh()
+    root.update()
+    assert not _qr_labels(root)
+    store.set_meta(front_agent.BACK_LOCAL_ONLY_KEY, False)
+    app.refresh()
+    root.update()
+    assert _qr_labels(root)

@@ -30,7 +30,7 @@ from shared import paths
 PAD = 0.2
 TERMINAL_THRESHOLD = 0.80      # 與 terminal_app 一致：分數低於它算一次攻擊
 TERMINAL_RUN = 3               # 與 terminal_app 一致：連續幾次才拒絕
-LOGIN_THRESHOLD = 0.90         # 與 face_login.LIVENESS_MIN 一致
+LOGIN_THRESHOLD = 0.85         # 與 face_login.LIVENESS_MIN 一致
 MODELS = (("minifasnet", "MiniFASNetV2.onnx"),
           ("mobilenetv3", "antispoof_mobilenetv3_antispoof_finetuned_best_sim.onnx"))
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -157,7 +157,7 @@ def main(argv=None):
             print(f"[{name}] 沒有量到任何一幀（要正對鏡頭、畫面裡只有一張臉）")
             continue
         print(f"[{name}] {s['n']} 幀，最小 {s['min']:.3f}／中位數 {s['median']:.3f}／最大 {s['max']:.3f}；"
-              f"低於 0.80 {s['below_terminal']:.0%}、低於 0.90 {s['below_login']:.0%}；"
+              f"低於 0.80 {s['below_terminal']:.0%}、低於 0.85 {s['below_login']:.0%}；"
               f"依終端機規則會被拒絕 {s['terminal_rejections']} 次")
 
 

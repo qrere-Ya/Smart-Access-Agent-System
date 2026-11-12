@@ -44,5 +44,5 @@ def test_summary_numbers():
     assert lp.summarize([]) == {"n": 0}
     s = lp.summarize([0.5, 0.7, 0.85, 0.95])
     assert s["n"] == 4 and s["min"] == 0.5 and s["max"] == 0.95
-    assert s["below_terminal"] == 0.5 and s["below_login"] == 0.75
+    assert s["below_terminal"] == 0.5 and s["below_login"] == 0.5          # 登入門檻 0.85：剛好 0.85 不算低於
     assert s["terminal_rejections"] == 0

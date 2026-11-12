@@ -34,6 +34,7 @@ from access.front_store import FaceIndex, FrontStore, Outbox
 from shared import lan_discovery, link_protocol as lp, link_tls, paths, role_config
 
 SYNC_SECONDS = 10
+BACK_LOCAL_ONLY_KEY = "back_local_only"      # 後台的全本地開關（同步時取得，離線沿用最後一次的值）
 MAX_BACKOFF_SECONDS = 60
 MAX_CLOCK_SKEW_SECONDS = 30
 HEARTBEAT_STALE_SECONDS = 15
@@ -229,6 +230,8 @@ class FrontAgent:
         brief = body.get("brief")
         if isinstance(brief, dict) or brief is None:
             self.store.set_meta("morning", brief)
+        if isinstance(body.get("local_only"), bool):          # 只收布林；缺欄位或別的型別就保留上一次的值
+            self.store.set_meta(BACK_LOCAL_ONLY_KEY, body["local_only"])
 
     def heartbeat_payload(self):
         """要回報給後台的狀態（只有數字與開關，不含人臉、姓名或事件內容）。"""

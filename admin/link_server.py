@@ -5,7 +5,8 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
   - GET  /v1/ping    ：回應與後台時間（前台用來校正時鐘、判斷後台是否在線）
   - GET  /v1/faces   ：給前台的人臉快照（編號、姓名、員工編號、角色、特徵與整份資料的版本）；
                        帶 ?have=版本 且沒變時只回 unchanged，不重送
-  - GET  /v1/morning ：最新晨報（只有科技新聞；日報與出勤資料不會從這裡出去）
+  - GET  /v1/morning ：最新晨報（只有科技新聞；日報與出勤資料不會從這裡出去），
+    並附後台的全本地開關（布林，前台據此決定是否顯示 QR）
   - POST /v1/heartbeat：前台每個同步週期回報的狀態（鏡頭、辨識、待補送數、時鐘差）；只留最新一份給後台視窗顯示，
                        不拿來做任何安全或打卡判斷。後台從不主動連前台，狀態都由前台送來
   - POST /v1/events  ：前台送來的打卡、尾隨、經過未打卡事件（證據照片用 base64 的 JPEG）
@@ -35,7 +36,7 @@ from flask import Flask, jsonify, request
 from access import pass_through
 from shared import database_mgr as db
 from admin import front_status, link_cert
-from shared import digest_store, lan_discovery, link_protocol as lp, link_tls, paths, role_config
+from shared import digest_store, lan_discovery, link_protocol as lp, link_tls, network_policy, paths, role_config
 
 _EVIDENCE_PREFIX = {"tailgate": "tailgate", pass_through.EVENT_TYPE: pass_through.EVENT_TYPE}
 
@@ -85,11 +86,12 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
 
     @app.get(lp.API_PREFIX + "/morning")
     def morning():
+        local = network_policy.local_only() is True          # 後台的全本地開關，前台同步時一起取得（只有布林）
         brief = digest_store.load_brief()
         if not brief:
-            return reply({"ok": True, "brief": None})
+            return reply({"ok": True, "brief": None, "local_only": local})
         keep = ("date", "generated_at", "news", "news_problem")
-        return reply({"ok": True, "brief": {k: brief.get(k) for k in keep}})
+        return reply({"ok": True, "brief": {k: brief.get(k) for k in keep}, "local_only": local})
 
     @app.post(lp.API_PREFIX + "/heartbeat")
     def heartbeat():

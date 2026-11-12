@@ -267,3 +267,36 @@ def test_a_failing_screen_write_never_breaks_punching_or_recognition(store, caps
 
 def test_the_standalone_backend_ignores_alerts():
     tb.LocalBackend().alert("spoof", "x")                                        # 單機沒有第二個螢幕，不會出錯
+
+
+# --- 前台不提供管理員功能；登入與底層不碰 YOLO ---
+
+def test_login_paths_never_import_the_yolo_module():
+    """後台登入（face_login、login_worker）與人臉比對底層（vision_core、pose）都不能碰 YOLO（security）。"""
+    import ast
+    import os
+    from shared import paths
+    for rel in (("admin", "face_login.py"), ("admin", "login_worker.py"), ("access", "vision_core.py"),
+                ("access", "pose.py")):
+        with open(os.path.join(paths.PROJECT_ROOT, *rel), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(a.name for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                names.add(node.module or "")
+                names.update(f"{node.module}.{a.name}" for a in node.names)
+        assert not [n for n in names if n.endswith("security") or n.startswith("ultralytics")], (rel, names)
+
+
+def test_the_terminal_has_no_admin_unlock_or_maintenance_hooks():
+    """打卡機只做打卡：辨識程式與後端不能有「認出管理員就解鎖維護」的程式。"""
+    import os
+    from shared import paths
+    for rel in (("access", "terminal_app.py"), ("access", "terminal_backend.py"), ("access", "front_store.py"),
+                ("access", "front_dashboard.py")):
+        with open(os.path.join(paths.PROJECT_ROOT, *rel), encoding="utf-8") as f:
+            source = f.read()
+        for word in ("note_recognized", "admin_unlocked", "admin_unlock", "note_admin_seen", "front_maintenance"):
+            assert word not in source, (rel, word)

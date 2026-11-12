@@ -51,3 +51,16 @@ def test_gpu_tool_failure_gives_none(monkeypatch):
 
     monkeypatch.setattr(fr.subprocess, "run", boom)
     assert fr.ResourceMonitor().read()["gpu"] is None
+
+
+def test_gpu_query_runs_without_a_console_window(monkeypatch):
+    """回歸：用 pythonw（沒有主控台）啟動時，nvidia-smi 若沒指定 CREATE_NO_WINDOW 會每 5 秒閃一個黑視窗。"""
+    monkeypatch.setattr(fr.shutil, "which", lambda _n: "nvidia-smi")
+    seen = {}
+
+    class Out:
+        stdout = "37"
+
+    monkeypatch.setattr(fr.subprocess, "run", lambda *a, **k: seen.update(k) or Out())
+    assert fr.ResourceMonitor().read()["gpu"] == 37.0
+    assert seen["creationflags"] == getattr(fr.subprocess, "CREATE_NO_WINDOW", 0)

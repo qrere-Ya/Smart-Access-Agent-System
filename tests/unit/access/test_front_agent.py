@@ -25,6 +25,7 @@ class FakeClient:
     def __init__(self):
         self.sent, self.script, self.server_time, self.fail_ping = [], [], NOW, None
         self.heartbeats, self.heartbeat_error = [], None
+        self.morning_body = None
 
     def ping(self):
         if self.fail_ping:
@@ -35,7 +36,7 @@ class FakeClient:
         return {"ok": True, "unchanged": True}
 
     def morning(self):
-        return {"ok": True, "brief": None}
+        return self.morning_body or {"ok": True, "brief": None}
 
     def heartbeat(self, status):
         if self.heartbeat_error:
@@ -145,6 +146,42 @@ def test_the_client_only_accepts_private_addresses_and_never_follows_redirects()
         fa.BackClient("192.168.50.1", 8770, TOKEN, session=Session()).ping()
 
 
+# --- 後台的全本地開關 ---
+
+def test_the_backs_local_only_switch_is_stored_and_defaults_to_off(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    agent.sync_once()
+    assert store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is None                         # 沒收過：沒有值（儀表板當作關）
+    client.morning_body = {"ok": True, "brief": None, "local_only": True}
+    agent.sync_once()
+    assert store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is True
+    client.morning_body = {"ok": True, "brief": None, "local_only": False}
+    agent.sync_once()
+    assert store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is False
+
+
+@pytest.mark.parametrize("junk", ["true", 1, 0, None, [], {"x": 1}])
+def test_a_non_boolean_or_missing_switch_is_ignored_and_keeps_the_last_value(store, tmp_path, junk):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    client.morning_body = {"ok": True, "brief": None, "local_only": True}
+    agent.sync_once()
+    client.morning_body = {"ok": True, "brief": None, "local_only": junk}
+    assert agent.sync_once() is True and store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is True
+    client.morning_body = {"ok": True, "brief": None}                                    # 缺欄位
+    assert agent.sync_once() is True and store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is True
+
+
+def test_the_last_switch_value_is_kept_while_the_back_is_offline(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    client.morning_body = {"ok": True, "brief": None, "local_only": True}
+    agent.sync_once()
+    client.fail_ping = fa.BackOffline("連不上")
+    assert agent.sync_once() is False and store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is True
+
+
 # --- 真的後台服務（本機 socket）---
 
 @pytest.fixture
@@ -183,12 +220,32 @@ def real_agent(backend, tmp_path, token=TOKEN):
     return make_agent(FrontStore(str(tmp_path / "front.db")), client, tmp_path)
 
 
+def test_flipping_the_backs_switch_reaches_the_front_on_the_next_sync(backend, tmp_path, monkeypatch):
+    """真 link_server（TLS、本機 socket）＋真前台代理：後台切換全本地，前台下一輪同步就拿到。"""
+    from shared import network_policy
+    monkeypatch.setattr(paths, "NETWORK_POLICY_PATH", str(tmp_path / "policy.json"))
+    monkeypatch.delenv(network_policy.ENV_NAME, raising=False)
+    agent = real_agent(backend, tmp_path)
+    agent.sync_once()
+    assert agent.store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is False
+    network_policy.set_local_only(True)
+    agent.sync_once()
+    assert agent.store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is True
+    network_policy.set_local_only(False)
+    agent.sync_once()
+    assert agent.store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is False
+    backend.stop()
+    assert agent.sync_once() is False
+    assert agent.store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is False                   # 離線沿用
+
+
 def test_end_to_end_sync_offline_recognition_and_catch_up(backend, db, tmp_path):
     import sqlite3
 
     agent = real_agent(backend, tmp_path)
     assert agent.sync_once() is True
     assert len(agent.index) == 2 and agent.store.get_meta("morning")["news"] == [{"title": "新聞一"}]
+    assert agent.store.get_meta(fa.BACK_LOCAL_ONLY_KEY) is False
     name, dist, user_id = agent.index.recognize(EMB)                             # 後台在線時用快取辨識
     assert (name, dist) == ("甲", 0.0)
 

@@ -47,8 +47,10 @@ class ResourceMonitor:
         if when is not None and now - when < GPU_INTERVAL:
             return value
         try:
-            out = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],  # noqa: S603, S607  # nosec B603 B607
-                                 capture_output=True, text=True, timeout=4, check=False).stdout
+            out = subprocess.run(  # noqa: S603  # nosec B603 B607
+                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],  # noqa: S607  # nosec B607
+                capture_output=True, text=True, timeout=4, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout     # pythonw 下不閃黑視窗
             value = parse_gpu(out)
         except (OSError, subprocess.SubprocessError):
             value = None

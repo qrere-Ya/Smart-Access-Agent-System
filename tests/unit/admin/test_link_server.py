@@ -97,6 +97,21 @@ def test_morning_brief_is_served_without_attendance(client):
     assert brief["news"] == [{"title": "t"}] and "secret_field" not in brief and "news_tries" not in brief
 
 
+def test_morning_carries_the_backs_local_only_switch_as_a_plain_boolean(client, monkeypatch, tmp_path):
+    from shared import network_policy
+    monkeypatch.setattr(paths, "NETWORK_POLICY_PATH", str(tmp_path / "policy.json"))
+    monkeypatch.delenv(network_policy.ENV_NAME, raising=False)
+    body = client.get("/v1/morning", headers=AUTH).get_json()
+    assert body["local_only"] is False and set(body) == {"ok", "brief", "local_only", "server_time"}
+    network_policy.set_local_only(True)
+    assert client.get("/v1/morning", headers=AUTH).get_json()["local_only"] is True
+    digest_store.save_brief({"date": "2026-11-10", "generated_at": "x", "news": [], "news_problem": ""})
+    body = client.get("/v1/morning", headers=AUTH).get_json()
+    assert body["local_only"] is True and body["brief"] is not None                    # 有晨報時也帶
+    monkeypatch.setenv(network_policy.ENV_NAME, "0")                                    # 環境變數優先
+    assert client.get("/v1/morning", headers=AUTH).get_json()["local_only"] is False
+
+
 # --- 打卡 ---
 
 def test_a_punch_is_written_with_the_event_time_and_the_server_looked_up_name(client, db, add_user):

@@ -23,7 +23,7 @@ from access import pose as pose_mod
 
 REQUIRED_FRAMES = 5
 FAIL_FRAMES = 8
-LIVENESS_MIN = 0.90
+LIVENESS_MIN = 0.85         # 學校的光線下 0.90 常常過不了，放寬到 0.85
 DISTANCE_MAX = 0.9          # 連續幾幀的平均距離上限
 FRAME_DISTANCE_MAX = 1.0    # 單幀距離上限（與門禁相同），超過的幀直接算沒比對到
 READY_FRAMES = 3          # 連續幾幀都是正面，才開始比對
@@ -93,10 +93,7 @@ class FaceLoginVerifier:
         if len(detections) == 0:
             self.reset()
             return LoginStep(NO_FACE, "請站到鏡頭前")
-        if len(detections) > 1:
-            self.reset()
-            return LoginStep(MULTIPLE, "畫面中只能有一個人")
-        face = detections[0]
+        face = pose_mod.nearest_face(detections)          # 畫面有好幾個人：只驗證離鏡頭最近的那一位
         frontal, hint, pose = frontal_check(face)
         if not frontal:
             self.reset()

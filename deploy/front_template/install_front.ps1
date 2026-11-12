@@ -166,6 +166,8 @@ $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "啟動前台門禁.lnk"))
 $link.TargetPath = Join-Path $Root "啟動前台.bat"; $link.WorkingDirectory = $Root; $link.Save()
 Write-Host "已在桌面建立「啟動前台門禁」（不做開機自動啟動，要用時自己雙擊）。"
+$oldStartup = Join-Path ([Environment]::GetFolderPath("Startup")) "啟動前台門禁.lnk"
+if (Test-Path $oldStartup) { Remove-Item $oldStartup -Force; Write-Host "已移除之前設定的開機自動啟動。" }
 
 # --- 9. 自我檢查 ---
 Step 9 "自我檢查"

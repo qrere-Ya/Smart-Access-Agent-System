@@ -16,6 +16,7 @@ terminal_app.py：門禁現場即時人臉辨識主程式。
   - security：YOLO 人數統計與尾隨證據圖
   - audio_player：TTS 語音播報
   - utils：畫面中文字繪製
+  - front_screens：前台角色時辨識視窗放在主螢幕，F11／f 切全螢幕、Esc 離開（其他角色維持原本視窗）
   - 由 service_manager（backend_main 管理後台）啟動
 """
 import sys
@@ -31,6 +32,8 @@ from access import pass_through
 from access import pose
 from access import punch_state
 from access import terminal_backend
+from access import front_screens
+from shared import role_config
 from access.audio_player import SmartAudioPlayer
 import traceback
 
@@ -143,13 +146,19 @@ def analyze_in_background(frame_copy, detector):
     person_boxes, tailgate_logged = [], False  # 供 finally 的經過未打卡判斷使用
 
     try:
-        _, person_boxes = sec.count_persons(frame_copy)
+        # YOLO 人數偵測只服務打卡系統（尾隨、經過未打卡）；它出錯不能中斷人臉辨識與打卡
+        try:
+            _, person_boxes = sec.count_persons(frame_copy)
+            person_boxes = pose.near_person_boxes(person_boxes)        # 只看離鏡頭最近與差不多近的人，背景路人不算
+        except Exception as e:  # noqa: BLE001
+            person_boxes = []
+            print(f"[terminal_app][WARN] 人數偵測失敗，這一幀略過尾隨判斷：{type(e).__name__}")
         # 1. 臉部偵測
         rgb_img, detections = vc.face_detect_bgr(frame_copy, detector)
         result_packet = None
 
-        if len(detections) == 1:
-            face_info = detections[0]
+        if len(detections) >= 1:                            # 多人入鏡：只處理離鏡頭最近的那一張臉
+            face_info = pose.nearest_face(detections)
             x1, y1, x2, y2 = (int(face_info['x1']), int(face_info['y1']), int(face_info['x2']), int(face_info['y2']))
 
             # 2. 活體偵測
@@ -274,9 +283,6 @@ def analyze_in_background(frame_copy, detector):
 
             _publish_face_data(result_packet)
 
-        elif len(detections) > 1:
-            # 多人同框：只顯示提示，不辨識
-            _publish_face_data({'status': 'multiple', 'text': "偵測到多人，請依序辨識", 'color': (0, 0, 255)})
         else:
             # 畫面無人：計數器歸零
             attack_counter = 0
@@ -290,12 +296,53 @@ def analyze_in_background(frame_copy, detector):
         _check_pass_through(frame_copy, person_boxes, tailgate_logged)
         is_analyzing = False
 
+WINDOW_NAME = "Smart Access Terminal"
+
+
+class _TerminalWindow:
+    """前台角色的辨識視窗：放在主螢幕（筆電），F11／f 切全螢幕、Esc 離開；其他角色維持原本的視窗。"""
+
+    def __init__(self, enabled):
+        self.enabled, self.fullscreen, self.box = enabled, False, None
+        if not enabled:
+            return
+        front_screens.enable_dpi_awareness()
+        monitor = front_screens.pick_monitor(front_screens.list_monitors(), "recognition")
+        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+        if monitor is not None:
+            x, y, width, height = front_screens.windowed_box(monitor)
+            self.box = (x, y, min(1280, width), min(720, height))
+            cv2.resizeWindow(WINDOW_NAME, self.box[2], self.box[3])
+            cv2.moveWindow(WINDOW_NAME, x, y)
+        if front_screens.load_pref("recognition_fullscreen"):
+            self.set_fullscreen(True, remember=False)
+
+    def set_fullscreen(self, on, remember=True):
+        if not self.enabled or on == self.fullscreen:
+            return
+        self.fullscreen = on
+        cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN if on else cv2.WINDOW_NORMAL)
+        if not on and self.box is not None:
+            cv2.resizeWindow(WINDOW_NAME, self.box[2], self.box[3])
+            cv2.moveWindow(WINDOW_NAME, self.box[0], self.box[1])
+        if remember:
+            front_screens.save_pref("recognition_fullscreen", on)
+
+    def handle_key(self, key):
+        action = front_screens.fullscreen_key(key) if self.enabled else None
+        if action == "toggle":
+            self.set_fullscreen(not self.fullscreen)
+        elif action == "leave":
+            self.set_fullscreen(False)
+
+
 def main():
     """開啟攝影機與視窗，主迴圈負責取畫面、送分析、繪製介面，按 q 結束並釋放資源。"""
     global is_analyzing, shared_face_data, backend
     backend = terminal_backend.create_backend()
     backend.start()
     vc.open_vision()  # 迴圈期間持有視覺模型
+    window = _TerminalWindow(enabled=role_config.role() == "front")
     detector = vc.detector
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -401,8 +448,10 @@ def main():
         now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         canvas = utils.put_chinese_text(canvas, now_str, (100, 600), (150, 150, 150), 24)
 
-        cv2.imshow("Smart Access Terminal", canvas)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        cv2.imshow(WINDOW_NAME, canvas)
+        key = cv2.waitKeyEx(1)
+        window.handle_key(key)
+        if key == ord('q'):
             break
 
     # 結束：釋放攝影機、視窗、執行緒與模型

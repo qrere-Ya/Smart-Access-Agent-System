@@ -7,12 +7,17 @@ front_dashboard.py：前台儀表板——門口那台電腦「第二個螢幕�
   - 點功能模組進入全版畫面、按「← 返回」回主畫面（沒人操作 90 秒自動回主畫面）：
       今日科技早報（晨報來自後台，前台離線也顯示最後同步到的；每頁 3 則、每 20 秒自動換頁）、
       剛剛打卡（姓名與早安／午安／晚安，10 分鐘後消失）、系統狀態
-  - 早報每則右側有原文的 QR Code 讓人用手機掃（前台不上網、不開瀏覽器）；前台開了全本地模式（shared.network_policy，
-    前台自己的 runtime 設定，之後放在維護選單）就不顯示 QR
+  - 早報每則右側有原文的 QR Code 讓人用手機掃（前台不上網、不開瀏覽器）；前台本機（shared.network_policy）
+    或後台（同步時取得）開了全本地模式就不顯示 QR
   - 尾隨、經過未打卡、非活體時，任何畫面上方都會出現紅色警示橫幅（60 秒後消失）
   - 兩種主題可切換並記住：深色藍（預設）與半透明白（淺色底加視窗半透明）；沒有帳號，也不連網路
   - 資料來自前台本機（FrontStore、辨識程式寫的心跳、front_resources 的系統資源）；這支只讀、不寫（主題設定除外）
-  人臉辨識畫面在另一個螢幕（筆電）由 terminal_app 顯示；雙螢幕擺放、全螢幕與維護選單是後續項目。
+  - 右上角「啟動人臉辨識」按鈕：辨識程式不會跟著前台開，按了才啟動（隱藏黑色視窗）；執行中按鈕停用，前台不能停止
+    （停止由後台或前台電腦的 Windows 操作）；儀表板關閉時辨識與連線代理一起收掉
+  - 前台不提供任何設定或管理員功能（連線設定在安裝與網路設定時處理，全本地由後台控制）
+  - 雙螢幕：自動放在第一個非主螢幕（外接顯示器），只有一個螢幕就放那一個；F11 或右上角按鈕切全螢幕（Esc 離開），
+    下次開啟沿用上次的選擇（front_screens 記在 runtime/screen_prefs.json）
+  人臉辨識畫面在主螢幕（筆電）由 terminal_app 顯示。
 
 串接模組：
   - front_view：畫面內容整理（純邏輯）；front_resources：資源監控；front_store：本機資料
@@ -27,7 +32,7 @@ from tkinter import ttk
 
 import customtkinter as ctk
 
-from access import front_agent, front_resources, front_view
+from access import front_agent, front_launcher, front_resources, front_screens, front_view
 from access.front_store import FrontStore, ScreenState
 from PIL import ImageTk
 
@@ -67,7 +72,8 @@ def window_scale(width, height, dpi=1.0):
 
 class FrontDashboard:
     def __init__(self, root, store, now=datetime.datetime.now, clock=time.time, read_heartbeat=None,
-                 read_resources=None):
+                 read_resources=None, recognition=None, monitors=None):
+        self.recognition = recognition                       # front_launcher.ManagedProcess；None 就不顯示辨識開關
         self.root, self.store, self._now, self._clock = root, store, now, clock
         self.screen = ScreenState(store)
         self._read_heartbeat = read_heartbeat or front_agent.read_terminal_heartbeat
@@ -83,9 +89,17 @@ class FrontDashboard:
         if self.theme not in THEME_LABELS:
             self.theme = "dark"
         root.title("智慧門禁 前台")
-        width = min(DESIGN_WIDTH, root.winfo_screenwidth())
-        height = min(DESIGN_HEIGHT, root.winfo_screenheight() - TASKBAR_ALLOWANCE)   # 留出工作列，畫面不超出
-        root.geometry(f"{width}x{height}+0+0")
+        self.monitor = front_screens.pick_monitor(front_screens.list_monitors() if monitors is None else monitors,
+                                                  "dashboard")      # 有第二個螢幕就放在第二個螢幕
+        if self.monitor is not None:
+            x, y, width, height = front_screens.windowed_box(self.monitor)
+        else:                                                       # 取不到螢幕資訊：用目前螢幕，留出工作列
+            x, y = 0, 0
+            width = min(DESIGN_WIDTH, root.winfo_screenwidth())
+            height = min(DESIGN_HEIGHT, root.winfo_screenheight() - TASKBAR_ALLOWANCE)
+        self._window_geometry = f"{width}x{height}+{x}+{y}"
+        root.geometry(self._window_geometry)
+        self.fullscreen = False
         root.minsize(800, 450)
         self._scale = 1.0
         self._resize_job = None
@@ -93,6 +107,33 @@ class FrontDashboard:
         self._apply_theme()
         self.refresh()
         root.bind("<Configure>", self._on_configure, add="+")
+        root.bind("<F11>", lambda _e: self.toggle_fullscreen(), add="+")
+        root.bind("<Escape>", lambda _e: self.set_fullscreen(False), add="+")
+        if front_screens.load_pref("dashboard_fullscreen"):         # 上次是全螢幕，這次沿用
+            root.after(300, lambda: self.set_fullscreen(True, remember=False))
+
+    # --- 全螢幕 ---
+    def set_fullscreen(self, on, remember=True):
+        """全螢幕開關：先確認視窗在目標螢幕上再全螢幕，離開時還原成一般視窗的位置與大小。"""
+        if on == self.fullscreen:
+            return
+        if on:
+            self._window_geometry = self.root.geometry()
+            if self.monitor is not None:                            # 全螢幕之前，視窗要先在目標螢幕上
+                self.root.geometry(f"+{self.monitor.x}+{self.monitor.y}")
+                self.root.update_idletasks()
+        if on:        # 視窗縮小過時 CustomTkinter 會把最大尺寸也縮到現在的大小，全螢幕會被拒絕：先放寬最大尺寸
+            tk.Wm.wm_maxsize(self.root, self.root.winfo_screenwidth() * 2, self.root.winfo_screenheight() * 2)
+        self.fullscreen = on
+        self.root.attributes("-fullscreen", on)
+        if not on:
+            self.root.geometry(self._window_geometry)
+        self.fullscreen_button.configure(text="⛶ 離開全螢幕" if on else "⛶ 全螢幕 (F11)")
+        if remember:
+            front_screens.save_pref("dashboard_fullscreen", on)
+
+    def toggle_fullscreen(self):
+        self.set_fullscreen(not self.fullscreen)
 
     # --- 建立畫面 ---
     def _build(self):
@@ -111,7 +152,15 @@ class FrontDashboard:
         self.link_badge.grid(row=0, column=1, sticky="w", padx=24, ipadx=8, ipady=3)
         self.theme_button = ui_theme.secondary_button(top, "", self.toggle_theme, width=170, height=40)
         self.theme_button.configure(font=_font(17))
-        self.theme_button.grid(row=0, column=2, sticky="e")
+        self.theme_button.grid(row=0, column=3, sticky="e", padx=(0, 14))
+        self.fullscreen_button = ui_theme.secondary_button(top, "⛶ 全螢幕 (F11)", self.toggle_fullscreen,
+                                                           width=170, height=40)
+        self.fullscreen_button.configure(font=_font(17))
+        self.fullscreen_button.grid(row=0, column=4, sticky="e")
+        self.face_button = ui_theme.primary_button(top, "", self.start_recognition, width=220, height=40)
+        self.face_button.configure(font=_font(17, bold=True))
+        if self.recognition is not None:
+            self.face_button.grid(row=0, column=2, sticky="e", padx=(0, 14))
 
         self.alert_frame = ctk.CTkFrame(root, fg_color=ui_theme.pair("danger"), corner_radius=ui_theme.RADIUS_CARD)
         self.alert_frame.grid(row=1, column=0, sticky="ew", padx=48, pady=(4, 6))
@@ -400,6 +449,30 @@ class FrontDashboard:
         self._style_tables()
         self._signatures.clear()                                     # 配色變了，內容區重畫
 
+    def start_recognition(self):
+        """啟動人臉辨識（會在筆電螢幕開攝影機畫面）；前台只能啟動、不能停止，要停止由後台或前台電腦的 Windows 操作。"""
+        if self.recognition is None or self.recognition.running():
+            return
+        ok, message = self.recognition.start()
+        if not ok:
+            print(f"[front_dashboard][WARN] 人臉辨識{message}")
+        self._render_recognition()
+
+    def _render_recognition(self):
+        """依辨識程式是否還活著更新按鈕：執行中停用（不能停止）；辨識程式自己結束（按 q）就回到可啟動。"""
+        if self.recognition is None:
+            return
+        on = self.recognition.running()
+        if self._changed("recognition_switch", on):
+            if on:
+                self.face_button.configure(text="✔ 人臉辨識執行中", state="disabled", fg_color="transparent",
+                                           border_width=1, border_color=ui_theme.pair("success"),
+                                           text_color_disabled=ui_theme.pair("success"))
+            else:
+                self.face_button.configure(text="▶ 啟動人臉辨識", state="normal", fg_color=ui_theme.pair("primary"),
+                                           border_width=0, hover_color=ui_theme.pair("primary_hover"),
+                                           text_color=ui_theme.pair("on_primary"))
+
     def toggle_theme(self):
         self.theme = "dark" if self.theme == "frosted" else "frosted"
         try:
@@ -410,15 +483,20 @@ class FrontDashboard:
         self.refresh()
 
     # --- 更新 ---
+    def local_only(self):
+        """全本地模式：前台本機的設定（環境變數或設定檔）或後台同步來的開關，任一個開就算；後台值壞掉當作關。"""
+        return network_policy.local_only() or self.store.get_meta(front_agent.BACK_LOCAL_ONLY_KEY) is True
+
     def refresh(self):
         """讀一次本機資料並更新畫面；內容沒變的區塊不重畫。"""
         view = front_view.snapshot(self.store, self.screen, self._read_heartbeat, self._now(), self._clock(),
-                                   local_only=network_policy.local_only())
+                                   local_only=self.local_only())
         self._last_view = view
         self.time_label.configure(text=view["time"])
         self.date_label.configure(text=view["date"])
         tone, text = view["link"]
         ui_theme.set_badge(self.link_badge, text, tone)
+        self._render_recognition()
         self._render_alert(view["alert"])
         self._render_tiles(view["tiles"])
         self._render_news(view["news"])
@@ -594,12 +672,22 @@ class FrontDashboard:
 
 
 def main():
+    front_launcher.redirect_output_if_windowless("front_dashboard")      # pythonw 沒有黑色視窗，print 改寫記錄檔
     store = FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db"))
+    agent = front_launcher.ManagedProcess("access.front_agent", "front_agent")
+    recognition = front_launcher.ManagedProcess("access.terminal_app", "terminal_app")
+    ok, message = agent.start()                                          # 連線代理跟著儀表板一起開，人臉辨識由開關啟動
+    if not ok:
+        print(f"[front_dashboard][WARN] 連線代理{message}")
     ui_theme.apply_theme("dark")
     root = ctk.CTk()
-    app = FrontDashboard(root, store)
+    app = FrontDashboard(root, store, recognition=recognition)
     root.after(REFRESH_MS, app.tick)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        recognition.stop()                                               # 關閉儀表板就一起收掉辨識與代理
+        agent.stop()
     return 0
 
 
