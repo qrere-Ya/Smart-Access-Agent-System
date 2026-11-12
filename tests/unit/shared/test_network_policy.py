@@ -101,4 +101,3 @@ def test_a_local_mode_brief_is_not_retried_and_says_why(policy):
     assert mb.wants_news_retry(brief) is True       # 關閉時：連不上就重試
     np_.set_local_only(True)
     assert mb.wants_news_retry(brief) is False and mb.retry_wait(brief) is None
-    assert "全本地模式" in mb.brief_text(brief) and "已試" not in mb.brief_text(brief)

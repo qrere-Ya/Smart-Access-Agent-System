@@ -12,7 +12,8 @@ remote_server.py：專題RAG測試的遠端入口（企業知識庫與出勤查�
     runtime/remote_questions.jsonl（--no-log-answers 只記提問、--no-log 都不記）
   - 只有提問與回答：沒有設定頁、不能改語言模型、不能上傳文件；內部錯誤只在伺服器端印出，不回給使用者
   - 命令列管理金鑰：--add-key、--list-keys、--revoke-key
-  這是測試用入口，不是完整的帳號系統：金鑰外洩就等於能查詢；用 Flask 內建伺服器，只適合少數人。
+  這是測試用入口，不是完整的帳號系統：金鑰外洩就等於能查詢；用 waitress（正式的 WSGI 伺服器，不是 Flask 內建
+  開發伺服器），但問答共用同一份模型、同時只處理 1 題，只適合少數人。
 
 串接模組：
   - remote_access：金鑰庫、流量閘門、提問紀錄、GatedAssistant
@@ -55,6 +56,14 @@ QUESTION_COOLDOWN_SECONDS = 3.0
 MAX_TURNS_KEPT = 30
 MAX_BODY_BYTES = 4096
 DEFAULT_PORT = 8765
+# waitress 設定。HTTP 請求都很短（提問只是丟進背景執行緒，網頁每 0.8 秒輪詢狀態；排隊與等模型都在 ChatController 的
+# 背景執行緒裡，不佔 HTTP 工作執行緒），所以 8 個工作執行緒足夠服務 MAX_SESSIONS=20 人的輪詢，閘門才是真正的排隊處。
+SERVER_THREADS = 8
+SERVER_CONNECTION_LIMIT = 100               # 同時連線上限（Funnel 代理會維持少量連線）
+SERVER_CHANNEL_TIMEOUT = 60                 # 連線閒置這麼久就關閉（預設 120 秒；請求都很短，不需要久）
+SERVER_MAX_BODY_BYTES = MAX_BODY_BYTES * 2  # waitress 先擋過大的請求體；應用程式自己仍用 MAX_BODY_BYTES 回 413
+SERVER_MAX_HEADER_BYTES = 16384
+SERVER_IDENT = "server"                     # Server 標頭不透露套件名稱與版本
 WILDCARD_HOSTS = ("", "0.0.0.0", "::")  # noqa: S104  # nosec B104  拒絕綁定的位址清單，不是綁定
 ERROR_TEXT = "處理時發生錯誤，請稍後再試。"
 
@@ -166,6 +175,10 @@ def create_app(keystore: remote_access.KeyStore, assistant_factory: Callable[[st
         """登入失敗計次用的來源位址。代理模式下只在連線來自本機代理時，才採用 X-Forwarded-For 最右邊（代理加上的）一筆，
         而且必須是合法位址；其他情況一律用實際連線位址。這個值可能被偽造，所以另有不看來源的全站失敗預算兜底。"""
         peer = request.remote_addr or "?"
+        try:
+            peer = str(ipaddress.ip_address(peer.strip("[]")))   # waitress 會把代理給的位址填進連線位址：要是合法 IP
+        except ValueError:
+            peer = "invalid"
         if behind_proxy and peer in LOOPBACK:
             parts = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
             if parts:
@@ -375,6 +388,27 @@ def check_proxy_args(args):
         raise SystemExit("--behind-proxy 需要用 --allowed-host 指定對外的網域名稱（例如 Funnel 顯示的網址主機名稱）。")
 
 
+def serve_options(host: str, port: int, behind_proxy: bool = False) -> dict:
+    """waitress.serve 的參數。waitress 預設會清掉 X-Forwarded-* 標頭，經代理對外時所有人的來源位址都會變成 127.0.0.1，
+    所以 --behind-proxy 時只信任來自 127.0.0.1（本機代理）的連線，取 X-Forwarded-For 最右邊一筆（代理自己加上的，
+    與 create_app 的 client_ip 同一個原則）當作連線位址；其他連線的 X-Forwarded-* 一律清掉，客戶端自帶的不會被採信。
+    直接連線模式不信任任何代理標頭。"""
+    options = {"host": host, "port": port, "threads": SERVER_THREADS, "connection_limit": SERVER_CONNECTION_LIMIT,
+               "channel_timeout": SERVER_CHANNEL_TIMEOUT, "max_request_body_size": SERVER_MAX_BODY_BYTES,
+               "max_request_header_size": SERVER_MAX_HEADER_BYTES, "ident": SERVER_IDENT}
+    if behind_proxy:
+        options.update(trusted_proxy="127.0.0.1", trusted_proxy_count=1, trusted_proxy_headers={"x-forwarded-for"},
+                       clear_untrusted_proxy_headers=True)
+    return options
+
+
+def serve(app, host: str, port: int, behind_proxy: bool = False):
+    """用 waitress 提供服務，Ctrl+C 結束時乾淨關閉。"""
+    from waitress import serve as waitress_serve
+
+    waitress_serve(app, **serve_options(host, port, behind_proxy))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="專題RAG測試的遠端入口")
     parser.add_argument("--host", default="127.0.0.1",
@@ -425,13 +459,7 @@ def main(argv=None):
     print(f"[remote] 紀錄：{log_mode}；本機網址 http://{args.host}:{args.port}/"
           f"；{'經代理對外模式' if args.behind_proxy else '直接連線模式'}")
     try:
-        from werkzeug.serving import WSGIRequestHandler, run_simple
-
-        class QuietHandler(WSGIRequestHandler):
-            def version_string(self):
-                return "server"   # 不在回應標頭透露 Werkzeug 與 Python 版本
-
-        run_simple(args.host, args.port, app, threaded=True, request_handler=QuietHandler)
+        serve(app, args.host, args.port, args.behind_proxy)
     finally:
         runtime.close()
 

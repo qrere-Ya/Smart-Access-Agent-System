@@ -588,7 +588,7 @@ class FakeRuntime:
 
 
 def start_with(monkeypatch, env, llm, *args):
-    """用假的零件啟動 main；回傳 (收到的設定, 假 runtime, run_simple 有沒有被呼叫)。"""
+    """用假的零件啟動 main；回傳 (收到的設定, 假 runtime, serve 有沒有被呼叫)。"""
     from rag import bootstrap
 
     monkeypatch.setattr(remote_access.paths, "REMOTE_KEYS_PATH", env.keystore.path)
@@ -600,9 +600,7 @@ def start_with(monkeypatch, env, llm, *args):
         return runtime
 
     monkeypatch.setattr(bootstrap, "create_runtime", fake_create)
-    import werkzeug.serving as serving
-
-    monkeypatch.setattr(serving, "run_simple", lambda *a, **k: served.append(a))
+    monkeypatch.setattr(remote_server, "serve", lambda *a, **k: served.append(a))   # 不要真的開伺服器
     remote_server.main(list(args))
     return seen, runtime, served
 
@@ -611,15 +609,13 @@ def test_llm_api_flag_overrides_only_this_process_and_starts_when_the_cloud_work
     from rag import llm_settings
 
     seen, _, served = start_with(monkeypatch, env, llm_settings.FailoverLLM(object(), None), "--llm", "api")
-    assert seen["settings"]["mode"] == "api" and served       # 有進到 run_simple，代表沒有被拒絕啟動
+    assert seen["settings"]["mode"] == "api" and served       # 有進到 serve，代表沒有被拒絕啟動
     assert not os.path.exists(llm_settings.SETTINGS_PATH)       # 沒有寫回設定檔
 
 
 def test_llm_api_flag_refuses_to_start_when_the_cloud_is_down_and_a_local_model_took_over(env, monkeypatch):
     served = []
-    import werkzeug.serving as serving
-
-    monkeypatch.setattr(serving, "run_simple", lambda *a, **k: served.append(a))
+    monkeypatch.setattr(remote_server, "serve", lambda *a, **k: served.append(a))
     with pytest.raises(SystemExit, match="--llm api"):
         start_with(monkeypatch, env, object(), "--llm", "api")
     assert served == []                                       # 沒有啟動伺服器
@@ -630,3 +626,53 @@ def test_without_the_flag_the_settings_file_decides(env, monkeypatch):
 
     seen, _, served = start_with(monkeypatch, env, object())
     assert seen["settings"] == llm_settings.load_settings() and served
+
+
+# --- waitress 伺服器 ---
+
+def test_waitress_options_for_direct_mode_trust_no_proxy_headers():
+    opts = remote_server.serve_options("127.0.0.1", 8765)
+    assert opts["host"] == "127.0.0.1" and opts["port"] == 8765
+    assert "trusted_proxy" not in opts                                   # 直連：不信任任何代理標頭
+    assert opts["ident"] == "server"                                     # Server 標頭不透露套件名稱
+    assert opts["max_request_body_size"] >= remote_server.MAX_BODY_BYTES    # 不能比應用程式自己的上限還小
+    assert opts["max_request_body_size"] <= 4 * remote_server.MAX_BODY_BYTES    # 過大的請求體由 waitress 先擋
+    assert opts["threads"] >= 4 and opts["channel_timeout"] <= 120 and opts["connection_limit"] >= 20
+
+
+def test_waitress_options_behind_the_proxy_trust_only_the_local_proxys_rightmost_forwarded_for():
+    opts = remote_server.serve_options("127.0.0.1", 8765, behind_proxy=True)
+    assert opts["trusted_proxy"] == "127.0.0.1" and opts["trusted_proxy_count"] == 1     # 只信本機代理，取最右一筆
+    assert opts["trusted_proxy_headers"] == {"x-forwarded-for"}
+    assert opts["clear_untrusted_proxy_headers"] is True                                 # 其他連線自帶的標頭一律清掉
+
+
+def test_the_real_waitress_accepts_these_options():
+    """參數名稱要是 waitress 認得的（拼錯會在啟動時才炸）：用真的 Adjustments 驗證，不開埠。"""
+    from waitress.adjustments import Adjustments
+
+    for behind in (False, True):
+        Adjustments(**remote_server.serve_options("127.0.0.1", 8765, behind))
+
+
+@pytest.mark.parametrize("flags, proxy", [(("--behind-proxy", "--allowed-host", "x.ts.net"), True), ((), False)])
+def test_main_hands_the_proxy_mode_to_the_server(env, monkeypatch, flags, proxy):
+    _seen, _runtime, served = start_with(monkeypatch, env, object(), *flags)
+    assert served[0][1:] == ("127.0.0.1", remote_server.DEFAULT_PORT, proxy)
+
+
+def test_the_flask_development_server_is_no_longer_used():
+    import inspect
+
+    source = inspect.getsource(remote_server)
+    assert "run_simple" not in source and "werkzeug.serving" not in source
+
+
+def test_a_malformed_connection_address_is_bucketed_instead_of_trusted(env):
+    """waitress 會把代理給的位址填進連線位址；不是合法 IP 的字串（偽造的標頭）不能當成計次的鍵。"""
+    app = env.app(behind_proxy=True, allowed_hosts=None)
+    client = app.test_client()
+    for fake in ("not-an-ip", "1.2.3.4:5555", "<script>"):
+        client.post("/api/login", json={"key": "錯"}, environ_overrides={"REMOTE_ADDR": fake})
+    lines = [json.loads(x) for x in open(env.events.path, encoding="utf-8") if x.strip()]
+    assert {e["ip"] for e in lines if e["event"] == "login_fail"} == {"invalid"}

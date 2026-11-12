@@ -14,7 +14,7 @@ news_feed.py：晨報的科技新聞來源（繁中與國際科技媒體、AI �
     解析 XML 前先拒收 DOCTYPE／ENTITY 與非 UTF-8；所有文字都當作不可信的純文字，不交給語言模型、不變成可點的連結
 
 串接模組：
-  - morning_brief：晨報呼叫 fetch_ai_news 並用 format_news 排版
+  - morning_brief：晨報呼叫 fetch_ai_news；前台儀表板自己排版顯示（front_view）
 """
 import datetime
 import email.utils
@@ -261,13 +261,3 @@ def fetch_ai_news(now=None, get=requests.get, limit=DEFAULT_LIMIT, sleep=time.sl
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
         loaded = list(pool.map(lambda src: _load_source(src, get, sleep), sources))
     return pick(loaded, now, limit), "；".join(p for *_rest, p in loaded if p)
-
-
-def format_news(cards, day=None):
-    """排成早報文字：標題行加每則的 類別、發生什麼事、為什麼重要、可以怎麼用、來源與原文；day 是早報日期。"""
-    day = day or datetime.date.today()
-    lines = [f"科技早報｜{day.strftime('%Y/%m/%d')}"]
-    for c in cards:
-        lines += ["", f"[{c['category']}] {c['title']}", f"發生什麼事：{c['what']}", f"為什麼重要：{c['why']}",
-                  f"可以怎麼用：{c['how']}", f"來源與原文：{c['link'] or '（沒有可用的原文連結）'}"]
-    return "\n".join(lines)

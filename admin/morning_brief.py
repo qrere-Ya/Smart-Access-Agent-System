@@ -82,30 +82,3 @@ def pending_morning(now, hhmm, latest, is_workday=None):
     if latest_date != today:
         return today
     return today if wants_news_retry(latest) else None
-
-
-def brief_text(brief) -> str:
-    """視窗顯示的晨報文字。"""
-    if brief is None:
-        return "還沒有晨報。到了設定的時間會自動產生，也可以按「立即產生晨報」。"
-    parts = [f"🌅 晨報 {brief['date']}（產生於 {brief['generated_at']}）", ""]
-    if brief.get("news"):
-        parts.append(news_feed.format_news(brief["news"], datetime.date.fromisoformat(brief["date"])))
-        parts.append("\n（類別與說明句由固定規則產生，內容是來源原文，未經 AI 改寫）")
-        return "\n".join(parts)
-    problem = brief.get("news_problem")
-    if network_policy.local_only():
-        parts.append("全本地模式已開啟，晨報不連網抓新聞。要看新聞，先在「日報與晨報」視窗關閉全本地模式，"
-                     "再按「立即產生晨報」。")
-    elif problem and wants_news_retry(brief):
-        wait = retry_wait(brief)
-        parts.append(f"目前沒有取得新聞（可能沒有網路或來源暫時連不上），已試 {brief.get('news_tries', 1)} 次，"
-                     f"約 {int(wait.total_seconds() // 60)} 分鐘後會自動重試。")
-        parts.append(f"原因：{problem}")
-    elif problem:
-        parts.append(f"今天沒有取得新聞，已試 {brief.get('news_tries', 1)} 次，不再自動重試；"
-                     "可以按「立即產生晨報」再抓。")
-        parts.append(f"原因：{problem}")
-    else:
-        parts.append("今天沒有找到新的科技新聞。")
-    return "\n".join(parts)
