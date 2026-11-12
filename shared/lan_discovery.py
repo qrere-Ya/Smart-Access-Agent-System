@@ -153,7 +153,9 @@ class DiscoveryResponder:
     """在後台位址上聽探測並回覆；背景執行緒，stop() 結束。"""
 
     def __init__(self, ip, service_port, fingerprint, discovery_port=DISCOVERY_PORT):
-        self.ip, self.service_port = role_config.private_ipv4(ip, "後台位址"), service_port
+        # 驗證過的內網位址（不可能是空字串或 0.0.0.0），再轉成標準格式
+        self.ip = str(ipaddress.IPv4Address(role_config.private_ipv4(ip, "後台位址")))
+        self.service_port = service_port
         self.fingerprint = link_tls.normalize(fingerprint)
         if not self.fingerprint:
             raise ValueError("憑證指紋格式不對")

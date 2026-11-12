@@ -38,7 +38,7 @@ def test_the_main_window_is_visible_after_a_hidden_start_and_deiconify():
     env = dict(os.environ, SMART_ACCESS_RUNTIME_DIR=tempfile.mkdtemp(prefix="startup_"), PYTHONUTF8="1")
     try:
         out = subprocess.run([sys.executable, "-c", SCRIPT], cwd=paths.PROJECT_ROOT, env=env,  # noqa: S603
-                             capture_output=True, text=True, timeout=120)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     except subprocess.TimeoutExpired:
         pytest.fail("後台啟動腳本逾時")
     if "TclError" in out.stderr and "display" in out.stderr.lower():

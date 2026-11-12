@@ -1,5 +1,6 @@
 """前台儀表板（第二個螢幕）：真的 Tk 視窗——晨報分頁與換頁、打卡問候、警示橫幅出現與消失、狀態、主題切換並記住，
 並在深色藍與半透明白兩種主題下截圖。"""
+import sys
 import time
 
 import pytest
@@ -48,6 +49,11 @@ def build(root, store, heartbeat=None, resources=None, recognition=None, monitor
                             read_resources=resources or (lambda: RES), recognition=recognition, monitors=monitors)
     root.update()
     return app
+
+
+def fullscreen_applied(root):
+    """視窗管理員有套用全螢幕嗎：Windows 才檢查；CI 的虛擬螢幕（xvfb）沒有視窗管理員，屬性不會生效，只驗程式狀態。"""
+    return bool(root.attributes("-fullscreen")) if sys.platform == "win32" else True
 
 
 def texts(widget):
@@ -371,12 +377,12 @@ def test_dashboard_opens_on_the_second_screen_and_f11_toggles_fullscreen(root, s
     assert app.fullscreen is False
     root.event_generate("<F11>")
     root.update()
-    assert app.fullscreen is True and bool(root.attributes("-fullscreen"))
+    assert app.fullscreen is True and fullscreen_applied(root)
     assert "離開全螢幕" in app.fullscreen_button.cget("text")
     assert front_screens.load_pref("dashboard_fullscreen") is True                    # 記住了
     root.event_generate("<Escape>")
     root.update()
-    assert app.fullscreen is False and not root.attributes("-fullscreen")
+    assert app.fullscreen is False and (not root.attributes("-fullscreen") or sys.platform != "win32")
     assert root.geometry().endswith("+1920+0") or root.geometry().startswith("1600x")   # 回到第二螢幕上的一般視窗
     app.toggle_fullscreen()
     app.toggle_fullscreen()
@@ -410,7 +416,7 @@ def test_f11_still_works_after_the_window_was_shrunk(root, seeded, tmp_path, mon
         root.update()
         time.sleep(0.02)
     app.set_fullscreen(True)
-    assert app.fullscreen is True and bool(root.attributes("-fullscreen"))
+    assert app.fullscreen is True and fullscreen_applied(root)
     app.set_fullscreen(False)
     root.geometry("1920x1000+0+0")
     root.update()

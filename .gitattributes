@@ -1,0 +1,2 @@
+# 批次檔一律 CRLF（Linux 的 CI 也一樣），cmd 遇到 LF 結尾的 .bat 會出錯
+*.bat text eol=crlf
