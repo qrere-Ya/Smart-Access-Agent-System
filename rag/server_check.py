@@ -122,6 +122,15 @@ def check_keys(keys_path: str = paths.REMOTE_KEYS_PATH) -> List[Result]:
     return [(OK, "存取金鑰", f"{live} 組有效／共 {len(rows)} 組" + (f"，{expired} 組已過期" if expired else ""))]
 
 
+API_FAILURE_KINDS = ("auth", "rate_limit", "timeout", "network", "server", "bad_response", "not_found")
+
+
+def _api_failure_kind(err) -> str:
+    """錯誤類型只回固定清單裡的字串（不把例外內容或任何回應文字帶進輸出，呼叫時用到金鑰）。"""
+    kind = str(getattr(err, "kind", ""))
+    return next((k for k in API_FAILURE_KINDS if k == kind), "unknown")
+
+
 def check_api_key(call_api: bool = False) -> List[Result]:
     from rag import llm_settings
     settings = llm_settings.load_settings()
@@ -131,7 +140,7 @@ def check_api_key(call_api: bool = False) -> List[Result]:
     if call_api:
         ok, err, _text, secs = llm_settings.check_api(settings)
         out.append((OK, "雲端 API 連線", f"可用，{secs:.1f} 秒") if ok
-                   else (FAIL, "雲端 API 連線", f"失敗：{getattr(err, 'kind', type(err).__name__)}"))
+                   else (FAIL, "雲端 API 連線", "失敗：" + _api_failure_kind(err)))
     else:
         out.append((WARN, "雲端 API 連線", "沒有實際呼叫；加 --api 才會測一次"))
     return out

@@ -87,3 +87,15 @@ def test_main_exit_code_follows_failures(monkeypatch, capsys):
                         lambda port, api: [(server_check.FAIL, "乙", "壞"), (server_check.WARN, "丙", "提醒")])
     assert server_check.main([]) == 1
     assert "失敗 1 項、注意 1 項" in capsys.readouterr().out
+
+
+def test_api_failure_kind_is_limited_to_a_fixed_list_and_never_echoes_error_text():
+    class Err(Exception):
+        kind = "timeout"
+
+    class Weird(Exception):
+        kind = "sk-secret-token-in-the-message"
+
+    assert server_check._api_failure_kind(Err()) == "timeout"
+    assert server_check._api_failure_kind(Weird("boom")) == "unknown"
+    assert server_check._api_failure_kind(ValueError("sk-abc")) == "unknown"
