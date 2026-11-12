@@ -71,7 +71,7 @@ pass_monitor = pass_through.PassThroughMonitor()
 attack_counter = 0  # 連續假臉幀數
 real_counter = 0    # 連續真臉幀數
 
-audio_player = SmartAudioPlayer(speed=1.0)
+audio_player = SmartAudioPlayer()
 alert_sound = AlertSound()      # 警示提示音（尾隨、非活體、經過未打卡），各自冷卻 20 秒、背景播放
 
 # 資料後端：單機讀寫本機資料庫，前台用本機快取與佇列（main 依角色建立）
