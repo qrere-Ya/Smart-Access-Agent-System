@@ -115,11 +115,11 @@ def check_keys(keys_path: str = paths.REMOTE_KEYS_PATH) -> List[Result]:
     if not rows:
         return [(FAIL, "存取金鑰", "還沒有任何金鑰：python -m rag.remote_server --add-key 組員名稱")]
     now = time.time()
-    live = [label for label, exp in rows if exp is None or exp > now]
-    detail = "、".join(label + ("" if exp is None or exp > now else "（已過期）") for label, exp in rows)
-    if not live:
-        return [(FAIL, "存取金鑰", "全部都已過期：" + detail)]
-    return [(OK, "存取金鑰", f"{len(live)} 組有效／共 {len(rows)} 組：{detail}")]
+    live = sum(1 for _label, exp in rows if exp is None or exp > now)
+    expired = len(rows) - live
+    if not live:                                  # 只報數量，不印組員名稱或任何金鑰庫內容
+        return [(FAIL, "存取金鑰", f"全部 {len(rows)} 組都已過期")]
+    return [(OK, "存取金鑰", f"{live} 組有效／共 {len(rows)} 組" + (f"，{expired} 組已過期" if expired else ""))]
 
 
 def check_api_key(call_api: bool = False) -> List[Result]:

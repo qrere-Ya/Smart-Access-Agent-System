@@ -62,7 +62,8 @@ def test_keys_none_expired_and_valid_never_show_the_key(tmp_path):
     assert server_check.check_keys(path)[0][0] == server_check.FAIL
     secret2 = store.add("乙", days=None)
     level, _, note = server_check.check_keys(path)[0]
-    assert level == server_check.OK and "乙" in note and "已過期" in note
+    assert level == server_check.OK and "1 組有效／共 2 組" in note and "1 組已過期" in note
+    assert "甲" not in note and "乙" not in note                        # 只報數量，不印組員名稱
     assert secret not in note and secret2 not in note
 
 

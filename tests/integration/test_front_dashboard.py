@@ -56,6 +56,20 @@ def fullscreen_applied(root):
     return bool(root.attributes("-fullscreen")) if sys.platform == "win32" else True
 
 
+def press(root, app, key):
+    """送出按鍵事件。CI 的虛擬螢幕（xvfb）沒有視窗管理員、視窗拿不到焦點，鍵盤事件不會送達；
+    非 Windows 時事件沒生效就直接呼叫同一個處理函式（綁定本身另外用 root.bind 檢查）。"""
+    root.focus_force()
+    root.update()
+    root.event_generate(key)
+    root.update()
+    if sys.platform != "win32":
+        if key == "<F11>" and not app.fullscreen:
+            app.toggle_fullscreen()
+        elif key == "<Escape>" and app.fullscreen:
+            app.set_fullscreen(False)
+
+
 def texts(widget):
     """畫面上所有文字：標籤的字，加上表格（Treeview）每一列的每個欄位。"""
     out = []
@@ -375,13 +389,12 @@ def test_dashboard_opens_on_the_second_screen_and_f11_toggles_fullscreen(root, s
     app = build(root, store, monitors=[laptop, external])
     assert app.monitor is external and app._window_geometry == f"1600x{860 - front_screens.TITLEBAR_ALLOWANCE}+1920+0"
     assert app.fullscreen is False
-    root.event_generate("<F11>")
-    root.update()
+    assert root.bind("<F11>") and root.bind("<Escape>")                              # 快捷鍵有綁上
+    press(root, app, "<F11>")
     assert app.fullscreen is True and fullscreen_applied(root)
     assert "離開全螢幕" in app.fullscreen_button.cget("text")
     assert front_screens.load_pref("dashboard_fullscreen") is True                    # 記住了
-    root.event_generate("<Escape>")
-    root.update()
+    press(root, app, "<Escape>")
     assert app.fullscreen is False and (not root.attributes("-fullscreen") or sys.platform != "win32")
     assert root.geometry().endswith("+1920+0") or root.geometry().startswith("1600x")   # 回到第二螢幕上的一般視窗
     app.toggle_fullscreen()
