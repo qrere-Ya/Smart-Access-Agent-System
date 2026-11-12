@@ -7,7 +7,10 @@ audio_player.py：門禁語音播報（TTS）。
   - 同一類別的語音有冷卻時間，避免重複堆疊
   - 打卡問候（「葉君緯，早安」）：以逗號切成「名字」與「問候」兩段分別合成，中間插入約 0.5 秒停頓；
     語速預設 0.8（這個中文模型原速偏快，聽不清楚），開頭補 0.2 秒靜音避免喇叭剛啟動時吃掉第一個字；
-    環境變數 SMART_ACCESS_TTS_SPEED 可現場調整；試聽：python -m access.audio_player "葉君緯，早安" --speed 0.8
+    環境變數 SMART_ACCESS_TTS_SPEED 可現場調整；
+  - 音量：模型原始音量偏小（峰值約 0.5），預設放大 2.0 倍，超過上限的部分用柔和壓縮避免爆音；
+    環境變數 SMART_ACCESS_TTS_VOLUME（0.5 到 3.0）可調；Windows 系統音量另外也要夠大；
+    試聽：python -m access.audio_player "葉君緯，早安" --speed 0.8 --volume 2.0
   - TTS 模型第一次播報才載入，閒置逾時或被驅逐時釋放
 
 串接模組：
@@ -28,6 +31,8 @@ DEFAULT_SPEED = 0.8          # 1.0 是模型原速，聽起來太快；數字越
 SEGMENT_PAUSE = 0.5          # 名字與問候之間的停頓（秒）
 LEAD_SILENCE = 0.2           # 開頭靜音，喇叭剛啟動時才不會吃掉第一個字
 TAIL_SILENCE = 0.4           # 結尾靜音，避免最後的音被截掉
+DEFAULT_VOLUME = 2.0         # 放大倍數；原始峰值約 0.5，使用者在前台試聽後選 2.0；超過 0.8 的部分柔和壓縮不爆音
+SOFT_KNEE = 0.8              # 放大後超過這個振幅的部分用柔和壓縮，最大不超過 1.0
 SPLIT_MARKS = "，,、；;"       # 這些符號切成不同段，每段分別合成並在中間停頓
 
 
@@ -39,6 +44,27 @@ def speech_speed(default=DEFAULT_SPEED, environ=None):
     except (TypeError, ValueError):
         return default
     return speed if 0.5 <= speed <= 1.5 else default
+
+
+def volume_setting(default=DEFAULT_VOLUME, environ=None):
+    """音量倍數：環境變數 SMART_ACCESS_TTS_VOLUME（0.5 到 3.0）優先，壞值或超出範圍用預設。"""
+    value = (os.environ if environ is None else environ).get("SMART_ACCESS_TTS_VOLUME")
+    try:
+        gain = float(value)
+    except (TypeError, ValueError):
+        return default
+    return gain if 0.5 <= gain <= 3.0 else default
+
+
+def apply_volume(samples, gain):
+    """放大音量：先乘倍數，超過 SOFT_KNEE 的部分用 tanh 柔和壓縮（最大 1.0），比直接削平的聲音乾淨。"""
+    audio = np.asarray(samples, dtype=np.float32) * np.float32(gain)
+    magnitude = np.abs(audio)
+    over = magnitude > SOFT_KNEE
+    if over.any():
+        squeezed = SOFT_KNEE + (1.0 - SOFT_KNEE) * np.tanh((magnitude[over] - SOFT_KNEE) / (1.0 - SOFT_KNEE))
+        audio[over] = np.sign(audio[over]) * squeezed.astype(np.float32)
+    return audio
 
 
 def plan_segments(text):
@@ -94,13 +120,14 @@ class _TtsResource(ManagedResource):
 
 
 class SmartAudioPlayer:
-    def __init__(self, speed=None):
+    def __init__(self, speed=None, volume=None):
         """建立播放器：啟動背景播放執行緒並播報開機語音"""
         self.audio_queue = queue.Queue()
         self.is_running = True
         self.cooldown = 4.0
         self.last_spoken = {}
         self.speed = speech_speed() if speed is None else speed
+        self.volume = volume_setting() if volume is None else volume
         self._tts_res = _TtsResource()
         self.sample_rate = 22050  # 模型載入後會改成模型實際取樣率
 
@@ -124,7 +151,7 @@ class SmartAudioPlayer:
                             chunks.append(audio.samples)
 
                 if chunks:
-                    sd.play(assemble(chunks, self.sample_rate), self.sample_rate)
+                    sd.play(apply_volume(assemble(chunks, self.sample_rate), self.volume), self.sample_rate)
                     sd.wait()
 
                 self.audio_queue.task_done()
@@ -155,13 +182,14 @@ def _demo(argv=None):
     parser.add_argument("text", nargs="?", default="葉君緯，早安")
     parser.add_argument("--speed", type=float, default=speech_speed())
     parser.add_argument("--pause", type=float, default=SEGMENT_PAUSE)
+    parser.add_argument("--volume", type=float, default=volume_setting())
     args = parser.parse_args(argv)
     resource = _TtsResource()
     with resource.use() as tts:
         chunks = [tts.generate(f"{s}。", sid=0, speed=args.speed).samples for s in plan_segments(args.text)]
         rate = tts.sample_rate
-    print(f"語速 {args.speed}、停頓 {args.pause} 秒、分成 {len(chunks)} 段")
-    sd.play(assemble(chunks, rate, pause=args.pause), rate)
+    print(f"語速 {args.speed}、停頓 {args.pause} 秒、音量 {args.volume} 倍、分成 {len(chunks)} 段")
+    sd.play(apply_volume(assemble(chunks, rate, pause=args.pause), args.volume), rate)
     sd.wait()
     resource.release("demo")
 
