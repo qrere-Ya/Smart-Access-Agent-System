@@ -5,6 +5,7 @@ service_manager.py：背景服務管理層。
   - 啟動、停止、監控子服務：人臉辨識（terminal_app.py）、QR 註冊（web_server.py）、企業知識庫視窗與它用到的 Ollama
   - 以 port 判斷服務是否已在執行，避免重複啟動；只停止自己啟動的行程，外部啟動的改用 port 找 PID
   - 在背景執行緒讀取子行程輸出，以 callback 交給呼叫端
+  - 雙機的後台角色：開啟後台時自動啟動連線服務（admin.link_server），沒在執行就重啟；單機與前台角色不碰
   - 偵測本機區網 IP，供 QR Code 網址使用
   不依賴 Tkinter，可獨立測試。
 
@@ -21,7 +22,7 @@ import subprocess
 import threading
 import time
 
-from shared import auth, paths
+from shared import auth, lan_discovery, paths, role_config
 
 _PROJECT_ROOT = paths.PROJECT_ROOT
 
@@ -311,6 +312,55 @@ def stop_reg_service():
     return stop_service("web_server", PORT_WEB_SERVER)
 
 
+# --- 雙機後台的連線服務：link_server.py ---
+def link_service_wanted(settings=None):
+    """目前的角色是後台才需要連線服務。"""
+    return (settings or role_config.load()).role == role_config.BACK
+
+
+def link_service_running(settings=None):
+    """連線服務是否在執行：自己啟動的行程還活著，或它的位址與埠已經有人在聽（手動啟動的也算）。"""
+    proc = _service_procs.get("link_server")
+    if proc is not None and proc.poll() is None:
+        return True
+    _service_procs.pop("link_server", None)
+    settings = settings or role_config.load()
+    try:
+        host = lan_discovery.resolve(settings.bind_host)
+    except role_config.ConfigError:
+        return False
+    return is_port_open(host, settings.back_port)
+
+
+def start_link_service(on_output_line, settings=None):
+    """啟動後台連線服務；回傳 (成功與否, 訊息)。已經在執行、角色不是後台、通行碼不合格都不會啟動。"""
+    settings = settings or role_config.load()
+    if not link_service_wanted(settings):
+        return False, "目前不是後台角色，不需要連線服務"
+    if link_service_running(settings):
+        return True, "後台連線服務已在執行"
+    try:
+        role_config.require_token()
+    except role_config.ConfigError as e:
+        return False, str(e)
+    python_exe = _project_python_exe()
+    try:
+        proc = subprocess.Popen(  # noqa: S603
+            [python_exe, "-u", "-m", "admin.link_server"], cwd=_PROJECT_ROOT, env=_python_child_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            encoding="utf-8", errors="replace", **_hidden_console_popen_kwargs())
+    except OSError as e:
+        return False, f"後台連線服務啟動失敗：{type(e).__name__}"
+    _service_procs["link_server"] = proc
+    _start_output_reader_thread(proc, on_output_line, prefix="[連線服務] ")
+    return True, "後台連線服務已啟動"
+
+
+def stop_link_service():
+    """只停止自己啟動的連線服務（手動啟動的不動它）。"""
+    return stop_service("link_server")
+
+
 # --- 關閉主視窗時停止所有服務 ---
 def any_service_running():
     return bool(_service_procs) or is_port_open("127.0.0.1", PORT_WEB_SERVER)
@@ -321,6 +371,7 @@ def stop_all_services():
     stop_service("terminal")
     stop_service("web_server", PORT_WEB_SERVER)
     stop_service("assistant")
+    stop_service("link_server")
 
 
 # --- 本機 IP 偵測：QR Code 網址使用 ---

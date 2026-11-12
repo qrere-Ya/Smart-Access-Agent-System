@@ -4,6 +4,8 @@ utils.py：畫面繪製小工具。
 主要功能：
   - put_chinese_text：在 OpenCV 影像上繪製中文字（OpenCV 本身不支援中文，改用 PIL 繪製）
   - 字型載入後快取，避免每幀重複讀取字型檔
+  - printable：先拿掉字型沒有的符號（如 ⚠ 表情符號），否則會畫成方框
+  - draw_message_box：畫面中間的半透明黑框與置中文字（打卡成功的提示）
 
 串接模組：
   - terminal_app：繪製辨識介面文字
@@ -31,6 +33,16 @@ def _get_font(font_size):
     _FONT_CACHE[font_size] = font
     return font
 
+def printable(text):
+    """拿掉字型畫不出來的符號（表情符號、變體選擇符、零寬連接符），避免畫面出現方框（□）。"""
+    return "".join(c for c in str(text) if not _is_pictograph(ord(c)))
+
+
+def _is_pictograph(code):
+    return (0x2600 <= code <= 0x27BF or 0x2B00 <= code <= 0x2BFF or 0x1F000 <= code <= 0x1FAFF
+            or 0xFE00 <= code <= 0xFE0F or code == 0x200D)
+
+
 def put_chinese_text(img, text, position, text_color=(0, 255, 0), font_size=30):
     """在 BGR 影像上繪製中文字，回傳繪製後的新影像。"""
     # OpenCV 是 BGR、PIL 是 RGB，先轉換
@@ -45,8 +57,29 @@ def put_chinese_text(img, text, position, text_color=(0, 255, 0), font_size=30):
     b, g, r = text_color
     pil_color = (r, g, b)
 
-    draw.text(position, text, font=font, fill=pil_color)
+    draw.text(position, printable(text), font=font, fill=pil_color)
 
     cv2_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     return cv2_img
+
+
+def draw_message_box(img, lines, center=None, alpha=0.65, padding=34, gap=16):
+    """在畫面中間畫一個半透明黑框，框內每行文字置中；lines 是 [(文字, BGR 顏色, 字體大小)]，回傳新影像。"""
+    fonts = [_get_font(size) for _text, _color, size in lines]
+    boxes = [font.getbbox(printable(text)) for font, (text, _c, _s) in zip(fonts, lines, strict=True)]
+    widths = [b[2] - b[0] for b in boxes]
+    heights = [b[3] - b[1] for b in boxes]
+    height_img, width_img = img.shape[:2]
+    cx, cy = center or (width_img // 2, height_img // 2)
+    box_w, box_h = max(widths) + 2 * padding, sum(heights) + gap * (len(lines) - 1) + 2 * padding
+    x1, y1 = max(0, cx - box_w // 2), max(0, cy - box_h // 2)
+    x2, y2 = min(width_img, x1 + box_w), min(height_img, y1 + box_h)
+    shade = img.copy()
+    cv2.rectangle(shade, (x1, y1), (x2, y2), (0, 0, 0), -1)
+    out = cv2.addWeighted(shade, alpha, img, 1 - alpha, 0)
+    top = y1 + padding
+    for (text, color, size), box, w, h in zip(lines, boxes, widths, heights, strict=True):
+        out = put_chinese_text(out, text, (cx - w // 2 - box[0], top - box[1]), color, size)
+        top += h + gap
+    return out

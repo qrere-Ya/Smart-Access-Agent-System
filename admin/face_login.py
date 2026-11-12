@@ -16,13 +16,14 @@ face_login.py：管理者人臉登入的判斷邏輯（逐幀判斷，不含畫�
   - database_mgr.recognize_admin：只和啟用中的管理者比對
   - login_window：每個影格呼叫 step，並依結果更新畫面與失敗計數
 """
-import math
 from dataclasses import dataclass
 from typing import Optional
 
+from access import pose as pose_mod
+
 REQUIRED_FRAMES = 5
 FAIL_FRAMES = 8
-LIVENESS_MIN = 0.90
+LIVENESS_MIN = 0.85         # 學校的光線下 0.90 常常過不了，放寬到 0.85
 DISTANCE_MAX = 0.9          # 連續幾幀的平均距離上限
 FRAME_DISTANCE_MAX = 1.0    # 單幀距離上限（與門禁相同），超過的幀直接算沒比對到
 READY_FRAMES = 3          # 連續幾幀都是正面，才開始比對
@@ -48,32 +49,8 @@ class LoginStep:
 
 def frontal_check(face):
     """依臉框與 5 個關鍵點判斷是不是正面；回傳 (是否正面, 提示文字, 量測值)。"""
-    width = float(face["x2"]) - float(face["x1"])
-    pose = {"width": round(width)}
-    try:
-        (lx, ly), (rx, ry) = face["left_eye"], face["right_eye"]
-        nx, ny = face["nose"]
-        (_, lly), (_, rly) = face["left_lip"], face["right_lip"]
-    except (KeyError, TypeError, ValueError):
-        return False, "請正對鏡頭", pose
-    eye_dist = math.hypot(rx - lx, ry - ly)
-    mouth_y, eye_y = (lly + rly) / 2, (ly + ry) / 2
-    if eye_dist <= 0 or mouth_y <= eye_y:
-        return False, "請正對鏡頭", pose
-    roll = abs(math.degrees(math.atan2(ry - ly, rx - lx)))
-    roll = 180 - roll if roll > 90 else roll
-    yaw = abs(nx - (lx + rx) / 2) / eye_dist
-    pitch = (ny - eye_y) / (mouth_y - eye_y)
-    pose.update(yaw=round(float(yaw), 2), roll=round(float(roll), 1), pitch=round(float(pitch), 2))
-    if width < MIN_FACE_WIDTH:
-        return False, "請再靠近鏡頭一點", pose
-    if roll > MAX_ROLL_DEGREES:
-        return False, "請把頭擺正，不要歪頭", pose
-    if yaw > MAX_YAW:
-        return False, "請正面看向鏡頭，不要轉頭", pose
-    if not PITCH_RANGE[0] <= pitch <= PITCH_RANGE[1]:
-        return False, "請平視鏡頭，不要仰頭或低頭", pose
-    return True, "", pose
+    return pose_mod.frontal_check(face, min_width=MIN_FACE_WIDTH, max_yaw=MAX_YAW, max_roll=MAX_ROLL_DEGREES,
+                                  pitch_range=PITCH_RANGE)
 
 
 class FaceLoginVerifier:
@@ -116,10 +93,7 @@ class FaceLoginVerifier:
         if len(detections) == 0:
             self.reset()
             return LoginStep(NO_FACE, "請站到鏡頭前")
-        if len(detections) > 1:
-            self.reset()
-            return LoginStep(MULTIPLE, "畫面中只能有一個人")
-        face = detections[0]
+        face = pose_mod.nearest_face(detections)          # 畫面有好幾個人：只驗證離鏡頭最近的那一位
         frontal, hint, pose = frontal_check(face)
         if not frontal:
             self.reset()

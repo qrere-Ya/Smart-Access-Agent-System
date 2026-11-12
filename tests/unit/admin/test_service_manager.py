@@ -97,12 +97,12 @@ def test_start_failures_are_reported_not_raised(monkeypatch):
     assert not ok and "找不到檔案" in message
 
 
-def test_stopping_everything_stops_ollama_terminal_web_server_and_the_assistant(monkeypatch):
+def test_stopping_everything_stops_ollama_terminal_web_server_the_assistant_and_the_link_service(monkeypatch):
     calls = []
     monkeypatch.setattr(sm, "stop_service", lambda key, port=None: calls.append((key, port)) or True)
     assert not hasattr(sm, "PORT_LITELLM") and not hasattr(sm, "PORT_RAG_APP")
     sm.stop_all_services()
-    assert [key for key, _ in calls] == ["ollama", "terminal", "web_server", "assistant"]
+    assert [key for key, _ in calls] == ["ollama", "terminal", "web_server", "assistant", "link_server"]
 
 
 # ---------- 本機 LLM 與企業知識庫視窗 ----------
@@ -336,3 +336,77 @@ def test_the_assistant_window_is_started_with_the_token(monkeypatch, fake_popen)
 
     sm.start_assistant_window(lambda line: None, "my-token")
     assert fake_popen.instances[-1].kwargs["env"][auth.TOKEN_ENV] == "my-token"
+
+
+# --- 雙機後台的連線服務 ---
+
+TOKEN = "oGo0iq6_xu9Jp7cwTM0ttP-BTbTQ9Zefin8GaJMQpyc"
+
+
+@pytest.fixture
+def back_settings():
+    from shared import role_config as rc
+    return rc.LinkSettings(rc.BACK, bind_host="127.0.0.1", back_port=59870)
+
+
+def test_the_link_service_is_only_wanted_for_the_back_role(back_settings):
+    from shared import role_config as rc
+    assert sm.link_service_wanted(back_settings) is True
+    assert sm.link_service_wanted(rc.LinkSettings(rc.STANDALONE)) is False
+    assert sm.link_service_wanted(rc.LinkSettings(rc.FRONT, back_host="auto")) is False
+
+
+def test_standalone_and_front_never_start_the_link_service(fake_popen):
+    from shared import role_config as rc
+    for settings in (rc.LinkSettings(rc.STANDALONE), rc.LinkSettings(rc.FRONT, back_host="auto")):
+        ok, message = sm.start_link_service(lambda line: None, settings)
+        assert ok is False and "不是後台" in message
+    assert fake_popen.instances == []
+
+
+def test_the_link_service_starts_as_a_module_with_the_token_and_without_the_session_token(
+        fake_popen, back_settings, monkeypatch):
+    from shared import auth
+    monkeypatch.setenv("SMART_ACCESS_LINK_TOKEN", TOKEN)
+    monkeypatch.setenv(auth.TOKEN_ENV, "inherited-by-mistake")
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: False)
+    ok, _message = sm.start_link_service(lambda line: None, back_settings)
+    assert ok is True
+    popen = fake_popen.instances[0]
+    assert popen.args[-2:] == ["-m", "admin.link_server"]
+    assert popen.kwargs["env"]["SMART_ACCESS_LINK_TOKEN"] == TOKEN
+    assert auth.TOKEN_ENV not in popen.kwargs["env"]                       # 登入代碼不給連線服務
+
+
+def test_a_weak_or_missing_token_stops_the_link_service_from_starting(fake_popen, back_settings, monkeypatch):
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: False)
+    for token in ("", "short", "a" * 60):
+        monkeypatch.setenv("SMART_ACCESS_LINK_TOKEN", token)
+        ok, message = sm.start_link_service(lambda line: None, back_settings)
+        assert ok is False and "通行碼" in message
+    assert fake_popen.instances == []
+
+
+def test_an_already_running_link_service_is_not_started_twice(fake_popen, back_settings, monkeypatch):
+    monkeypatch.setenv("SMART_ACCESS_LINK_TOKEN", TOKEN)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    ok, message = sm.start_link_service(lambda line: None, back_settings)
+    assert ok is True and "已在執行" in message and fake_popen.instances == []
+
+
+def test_a_listening_port_counts_as_running_even_when_started_by_hand(back_settings, monkeypatch):
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    back_settings.back_port = sock.getsockname()[1]
+    try:
+        assert sm.link_service_running(back_settings) is True
+    finally:
+        sock.close()
+    assert sm.link_service_running(back_settings) is False
+
+
+def test_running_check_is_false_instead_of_an_error_when_the_cable_has_no_address(monkeypatch):
+    from shared import role_config as rc
+    monkeypatch.setattr(sm.lan_discovery, "link_local_addresses", lambda interfaces=None: [])
+    assert sm.link_service_running(rc.LinkSettings(rc.BACK, bind_host="auto")) is False

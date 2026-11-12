@@ -112,3 +112,17 @@ def test_full_date_is_not_split_into_month_and_day():
 def test_defaults_to_the_real_today():
     found = dates.find_range("今天")
     assert found.start == found.end == datetime.date.today().isoformat()
+
+
+@pytest.mark.parametrize("simplified, traditional", [
+    ("这个月", "這個月"), ("上个月", "上個月"), ("这周", "這週"), ("本周", "本週"), ("上周", "上週"),
+    ("最近两个月", "最近兩個月"), ("过去两周", "過去兩週"), ("最近3个月", "最近3個月"), ("这个星期", "這個星期"),
+    ("10月13号", "10月13號"), ("这个礼拜", "這個禮拜"),
+])
+def test_simplified_time_phrases_resolve_like_the_traditional_ones(simplified, traditional):
+    got, want = dates.find_range(f"谁{simplified}迟到", TODAY), dates.find_range(f"誰{traditional}遲到", TODAY)
+    assert got is not None and (got.start, got.end) == (want.start, want.end)
+
+
+def test_simplified_phrase_text_is_reported_in_traditional_form():
+    assert dates.find_range("这个月谁迟到", TODAY).phrase == "這個月"

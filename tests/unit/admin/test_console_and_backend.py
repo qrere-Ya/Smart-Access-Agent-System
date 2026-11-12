@@ -71,3 +71,31 @@ def test_append_line_makes_a_readonly_box_writable_only_while_inserting():
     box = Box()
     console_panel.append_line(box, "x")
     assert box.states == ["normal", "disabled"]
+
+
+def test_recent_events_merge_punches_and_front_anomalies_newest_first(db, add_user):
+    import sqlite3
+    from admin import dashboard_stats
+    add_user("甲", "E1")
+    con = sqlite3.connect(db)
+    con.execute("INSERT INTO Attendance (name, timestamp, status, user_id) "
+                "VALUES ('甲', '2026-11-10 08:00:00', '上班', 1)")
+    con.execute("INSERT INTO AnomalyEvents (timestamp, event_type, detail, event_count) "
+                "VALUES ('2026-11-10 08:05:00', 'no_scan_walkby', '', 1)")
+    con.execute("INSERT INTO AnomalyEvents (timestamp, event_type, detail, event_count) "
+                "VALUES ('2026-11-10 08:10:00', 'tailgate', '畫面有 2 人', 1)")
+    con.execute("INSERT INTO AnomalyEvents (timestamp, event_type, detail, event_count) "
+                "VALUES ('2026-11-10 08:20:00', 'login_failed', '管理者人臉登入失敗', 1)")   # 後台自己的事件不列入
+    con.commit()
+    con.close()
+    rows = dashboard_stats.get_recent_events(limit=10)
+    assert [r[0] for r in rows] == ["2026-11-10 08:10:00", "2026-11-10 08:05:00", "2026-11-10 08:00:00"]
+    assert rows[0][1].startswith("尾隨") and "畫面有 2 人" in rows[0][1]
+    assert rows[1][1] == "經過鏡頭未打卡" and rows[2][1] == "打卡　甲　上班"
+    assert len(dashboard_stats.get_recent_events(limit=2)) == 2
+
+
+def test_recent_events_return_none_when_the_database_cannot_be_read(monkeypatch, tmp_path):
+    from admin import dashboard_stats
+    monkeypatch.setattr(dashboard_stats.database_mgr, "DB_PATH", str(tmp_path / "missing" / "no.db"))
+    assert dashboard_stats.get_recent_events() is None

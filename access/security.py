@@ -100,12 +100,8 @@ def count_persons(frame):
     person_boxes = dedupe_person_boxes(candidates)
     return len(person_boxes), person_boxes
 
-def generate_evidence(full_frame, suspicious_box, prefix="tailgate"):
-    """產生證據拼圖（prefix 為檔名前綴，預設尾隨）（上：全圖，左下：可疑者全身，右下：頭部）並存檔，回傳檔案路徑。"""
-    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = os.path.join(paths.ANOMALY_DIR, f"{prefix}_{now_str}.jpg")
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
+def build_evidence_image(full_frame, suspicious_box):
+    """產生證據拼圖（上：全圖，左下：可疑者全身，右下：頭部），回傳影像（不存檔）。"""
     H, W = full_frame.shape[:2]
 
     # 裁切範圍限制在畫面內
@@ -132,7 +128,22 @@ def generate_evidence(full_frame, suspicious_box, prefix="tailgate"):
 
     # 在全圖上以紅框標出可疑者
     cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 255), 3)
+    return canvas
 
-    cv2.imwrite(save_path, canvas)
 
+def encode_evidence_jpeg(full_frame, suspicious_box, quality=80):
+    """證據拼圖編成 JPEG 位元組（前台送給後台用）。"""
+    ok, buffer = cv2.imencode(".jpg", build_evidence_image(full_frame, suspicious_box),
+                              [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        raise ValueError("證據照片編碼失敗")
+    return buffer.tobytes()
+
+
+def generate_evidence(full_frame, suspicious_box, prefix="tailgate"):
+    """產生證據拼圖（prefix 為檔名前綴，預設尾隨）並存檔，回傳檔案路徑。"""
+    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_path = os.path.join(paths.ANOMALY_DIR, f"{prefix}_{now_str}.jpg")
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    cv2.imwrite(save_path, build_evidence_image(full_frame, suspicious_box))
     return save_path

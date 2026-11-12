@@ -6,6 +6,7 @@ dates.py：從問題裡找出時間說法並換算成日期區間（確定性解
   - 絕對說法：2026-10-13、2026/10/13、2026年10月13日、民國 115 年 10 月 13 日、10月13日、10/13、10月
   - 回傳 (開始日, 結束日, 原文說法)，日期格式 YYYY-MM-DD，結束日含當天；找不到時間說法回傳 None
   - 一句話裡有多個說法時取最前面的一個
+  - 簡體寫法（这个月、上周、过去两周…）先逐字換成對應的繁體再解析，所以使用者用簡體問，查詢範圍和繁體一樣
 
 串接模組：
   - answer：先用這裡解析時間，再呼叫 queries 的固定查詢函式
@@ -18,6 +19,7 @@ from typing import Callable, List, Optional, Tuple
 
 _CN = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _N = r"(?:\d+|[零〇一二兩三四五六七八九十]+)"
+_SIMPLIFIED = str.maketrans("这个礼号两过", "這個禮號兩過")   # 時間說法會用到的簡體字；一對一替換，字元位置不變
 
 
 @dataclass
@@ -159,9 +161,10 @@ _PATTERNS: List[Tuple[re.Pattern, Resolver]] = [
 def find_range(text: str, today: Optional[datetime.date] = None) -> Optional[DateRange]:
     """找出問題裡最前面的時間說法並換算；找不到或日期不存在（如 2 月 30 日）回傳 None。"""
     today = today or datetime.date.today()
+    text = (text or "").translate(_SIMPLIFIED)
     best = None
     for pattern, resolve in _PATTERNS:
-        for m in pattern.finditer(text or ""):
+        for m in pattern.finditer(text):
             if best is not None and m.start() >= best[0]:
                 break
             span = resolve(m, today)

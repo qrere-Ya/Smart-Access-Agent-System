@@ -1,0 +1,22 @@
+# 前台（門禁現場電腦）專用依賴：只有辨識、活體、尾隨偵測、語音、與後台連線需要的套件，沒有知識庫與管理後台的部分。
+# 版本與 requirements/lock.txt 一致（安裝時用 -c 限制）。torch、torchvision、onnxruntime 由 install_front.ps1 依有無
+# NVIDIA 顯卡選 GPU 或 CPU 版另外安裝，所以不列在這裡；retinaface 要另外用 --no-deps 安裝（理由見 main.txt 檔頭）。
+
+numpy==2.2.6
+scipy==1.15.3
+opencv-python==4.13.0.92
+scikit-image==0.25.2
+scikit-learn==1.7.2
+Pillow==12.2.0
+tensorflow==2.21.0
+tf_keras==2.21.0
+keras==3.12.2
+ultralytics==8.4.59
+ultralytics-thop==2.0.19
+sherpa-onnx==1.13.2
+sounddevice==0.5.5
+requests==2.34.2
+psutil==7.2.2
+customtkinter==6.0.0
+pyqrcode==1.2.1
+darkdetect==0.8.0

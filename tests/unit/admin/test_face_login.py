@@ -69,8 +69,23 @@ def test_no_face_or_several_faces_reset_the_streak_but_are_not_failures():
     steps = run(v, 9)
     assert steps[3].status == fl.NO_FACE
     assert steps[-1].status == fl.SUCCESS                   # 中斷後重新累計滿 5 幀才通過
-    crowded = verifier([(2, 0.99)])
-    assert crowded.step(None).status == fl.MULTIPLE and crowded._bad_streak == 0
+
+
+def test_with_several_faces_only_the_nearest_one_is_verified():
+    seen = []
+
+    class CrowdVision(FakeVision):
+        def detect(self, frame):
+            far = dict(FACE, x1=FACE["x1"], x2=FACE["x1"] + 40, y1=FACE["y1"], y2=FACE["y1"] + 40)   # 遠處的小臉
+            return "rgb", [far, dict(FACE)]
+
+        def embed(self, rgb, face):
+            seen.append(face)
+            return "embedding"
+
+    v = fl.FaceLoginVerifier(CrowdVision([]), recognize=lambda e, t: ("王小明", 0.4), ready_frames=0)
+    steps = [v.step(None) for _ in range(5)]
+    assert steps[-1].status == fl.SUCCESS and all(f["x2"] - f["x1"] == FACE["x2"] - FACE["x1"] for f in seen)
 
 
 def test_an_incomplete_face_is_neutral():

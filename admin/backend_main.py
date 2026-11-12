@@ -3,7 +3,8 @@ backend_main.py：門禁系統管理後台主程式（CustomTkinter，套用 sha
 
 主要功能：
   - 主選單：五張功能卡片、即時時鐘、底部 CPU/RAM 狀態列與異常通知
-  - 營運狀態與尾隨監控：今日打卡統計、異常件數、人臉辨識終端機開關與即時輸出
+  - 營運狀態與尾隨監控：今日打卡統計、異常件數、人臉辨識終端機開關與即時輸出；
+    雙機的後台角色改顯示「前台連線」（燈號、最後回報時間、鏡頭與辨識狀態）與前台事件串流，並自動啟動連線服務
   - 員工帳號管理（account_panel）、出勤報告與假日請假（calendar_panel，內嵌 report_panel）
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
   - 企業知識庫與出勤查詢：另開聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
@@ -36,14 +37,18 @@ from admin import (
     calendar_panel,
     console_panel,
     dashboard_stats,
+    digest_window,
+    front_status,
     login_window,
     notification_bar,
+    schedule_window,
     service_manager,
 )
-from shared import auth, paths, ui_theme
+from shared import auth, front_control, paths, ui_theme
 from shared import database_mgr as db
 
 ANOMALY_DIR = paths.ANOMALY_DIR
+NEWLINE = chr(10)
 
 
 class BackendManagerApp:
@@ -67,8 +72,15 @@ class BackendManagerApp:
 
         db.init_db()
 
+        # 雙機的後台角色：自動啟動並看守連線服務；單機模式完全不碰
+        self.link_wanted = service_manager.link_service_wanted()
+        self.link_note = ""
+        self._link_lines = []
+
         self._build_main_menu()
         self._start_session_watch()
+        if self.link_wanted:
+            self._tick_link_service()
 
         # 關閉視窗時詢問是否一併停止背景服務
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
@@ -84,6 +96,10 @@ class BackendManagerApp:
                      text_color=ui_theme.pair("text"), anchor="w").pack(anchor="w")
         ui_theme.muted_label(brand_col, "邊緣運算門禁後臺系統").pack(anchor="w", pady=(2, 0))
         ui_theme.status_badge(brand_col, "● 系統運作中", "success").pack(anchor="w", pady=(6, 0))
+        if self.link_wanted:      # 雙機後台：主選單就看得到前台有沒有連上，不用點進營運狀態頁
+            self.front_badge = ui_theme.status_badge(brand_col, "● 前台未連線", "neutral")
+            self.front_badge.pack(anchor="w", pady=(4, 0))
+            self._refresh_front_badge()
 
         clock_col = ctk.CTkFrame(header, fg_color="transparent", height=1)
         clock_col.pack(side="right")
@@ -118,6 +134,8 @@ class BackendManagerApp:
              self.open_assistant_window),
             ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
              lambda: calendar_panel.open_calendar_window(self.root)),
+            ("📰", "日報與晨報", "設定每天自動產生的時間、立即產生、查看每日出勤日報；科技早報送到前台螢幕", "info",
+             self.open_schedule),
         ]
         for idx, (icon, title, desc, accent, cmd) in enumerate(modules):
             row, col = divmod(idx, 2)
@@ -204,6 +222,9 @@ class BackendManagerApp:
         self._alive = False
         if getattr(self, "notification_bar", None) is not None:
             self.notification_bar.stop()
+        for name in ("digest_runner", "morning_runner"):
+            if getattr(self, name, None) is not None:
+                getattr(self, name).stop()
         for event in ("<Key>", "<Button>", "<Motion>"):
             self.root.unbind_all(event)
         for child in self.root.winfo_children():
@@ -230,12 +251,38 @@ class BackendManagerApp:
                      text_color=ui_theme.pair("text_muted")).pack(side="left")
         self.notification_bar = notification_bar.NotificationBar(footer, on_open=self.open_anomalies)  # 紅點與彈窗
         self.notification_bar.frame.pack(side="right")
+        self.digest_runner = digest_window.digest_runner(self.root, on_new=lambda r: self.open_report("digest"))
+        self.morning_runner = digest_window.morning_runner(self.root, on_new=self._morning_ready)   # 晨報只給前台
+        ui_theme.link_button(footer, "📋 日報", lambda: self.open_report("digest"), width=90,
+                             height=24).pack(side="right", padx=(0, 10))
+        self.root.after(5000, self._tick_digest)
         self._tick_system_status()
+
+    def _tick_link_service(self):
+        """每 10 秒確認後台連線服務還在執行，沒有就啟動（網路線剛插好、位址還在分配時會失敗，下一輪再試）。"""
+        if not self._alive or not self.root.winfo_exists():
+            return
+        if not service_manager.link_service_running():
+            def on_output_line(line):
+                self._link_lines = (self._link_lines + [line])[-20:]
+
+            ok, message = service_manager.start_link_service(on_output_line)
+            self.link_note = "" if ok else message
+        else:
+            self.link_note = ""
+        self.root.after(10000, self._tick_link_service)
+
+    def _refresh_front_badge(self):
+        """依後台收到的最新前台心跳更新主選單的前台連線徽章（不連任何機器）。"""
+        kind, text = front_status.badge_view(front_status.load())
+        ui_theme.set_badge(self.front_badge, text, kind)
 
     def _tick_system_status(self):
         """每 3 秒讀取一次 CPU/RAM 顯示在狀態列；讀不到（沒裝 psutil）就顯示提示"""
         if not self._alive or not self.root.winfo_exists():
             return
+        if self.link_wanted and self.front_badge.winfo_exists():
+            self._refresh_front_badge()
         res = dashboard_stats.get_system_resources()
         if res is not None:
             self.sys_status_var.set(
@@ -354,17 +401,24 @@ class BackendManagerApp:
         left_col = ctk.CTkFrame(main_split, fg_color="transparent", height=1)
         left_col.pack(side="left", fill="both", expand=True)
 
-        # 人臉辨識終端機開關
-        face_ctrl_frame = ctk.CTkFrame(left_col, fg_color="transparent", height=1)
-        face_ctrl_frame.pack(fill="x", padx=20, pady=(15, 0))
-        ctk.CTkLabel(face_ctrl_frame, textvariable=self.face_status_var, font=ui_theme.font(ui_theme.FONT_SIZE_INPUT),
-                     text_color=ui_theme.pair("text")).pack(side="left")
-        self.face_btn = ui_theme.secondary_button(face_ctrl_frame, "📷 啟動人臉辨識終端機", self.toggle_face_service)
-        self.face_btn.pack(side="right")
-        self._update_face_status()
+        if self.link_wanted:
+            # 雙機後台：前台在另一台電腦，這裡看前台連線狀態與前台送來的事件（沒有本機的人臉辨識開關）
+            self._build_link_card(left_col)
+            self._build_event_stream(right_col)
+        else:
+            # 人臉辨識終端機開關
+            face_ctrl_frame = ctk.CTkFrame(left_col, fg_color="transparent", height=1)
+            face_ctrl_frame.pack(fill="x", padx=20, pady=(15, 0))
+            ctk.CTkLabel(face_ctrl_frame, textvariable=self.face_status_var,
+                         font=ui_theme.font(ui_theme.FONT_SIZE_INPUT),
+                         text_color=ui_theme.pair("text")).pack(side="left")
+            self.face_btn = ui_theme.secondary_button(face_ctrl_frame, "📷 啟動人臉辨識終端機",
+                                                      self.toggle_face_service)
+            self.face_btn.pack(side="right")
+            self._update_face_status()
 
-        # 右邊即時顯示 terminal_app.py 的輸出
-        self.face_console = console_panel.build_console_panel(right_col, "人臉辨識即時輸出")
+            # 右邊即時顯示 terminal_app.py 的輸出
+            self.face_console = console_panel.build_console_panel(right_col, "人臉辨識即時輸出")
 
         self.count_var = tk.StringVar(master=self.root, value="載入中...")
         self.anomaly_var = tk.StringVar(master=self.root, value="載入中...")
@@ -391,10 +445,94 @@ class BackendManagerApp:
 
         self.refresh_dashboard_data()
 
+    def _build_link_card(self, parent):
+        """雙機後台：前台連線狀態卡片（燈號、最後回報時間、細節）與連線服務狀態。"""
+        box = ui_theme.card(parent, height=1)
+        box.pack(fill="x", padx=20, pady=(15, 0))
+        ui_theme.section_title(box, "🔌 前台連線").pack(anchor="w", padx=15, pady=(12, 0))
+        self.link_headline = ctk.CTkLabel(box, text="", font=ui_theme.font(18, bold=True), anchor="w")
+        self.link_headline.pack(fill="x", padx=15, pady=(4, 0))
+        self.link_detail = ui_theme.muted_label(box, "")
+        self.link_detail.configure(justify="left", anchor="w")
+        self.link_detail.pack(fill="x", padx=15, pady=(2, 0))
+        self.link_service_label = ui_theme.muted_label(box, "")
+        self.link_service_label.configure(anchor="w")
+        self.link_service_label.pack(fill="x", padx=15, pady=(6, 6))
+        # 前台人臉辨識的遠端停止／恢復：前台只有「啟動」按鈕，停止由這裡下指令（前台同步時套用）
+        control = ctk.CTkFrame(box, fg_color="transparent")
+        control.pack(fill="x", padx=15, pady=(0, 12))
+        self.face_control_label = ui_theme.muted_label(control, "")
+        self.face_control_label.configure(anchor="w", justify="left", wraplength=520)
+        self.face_control_label.pack(side="left", fill="x", expand=True)
+        self.face_control_confirming = False
+        self.face_control_cancel = ui_theme.secondary_button(control, "取消", self._cancel_face_control, width=70)
+        self.face_control_btn = ui_theme.secondary_button(control, "", self._press_face_control, width=170)
+        self.face_control_btn.pack(side="right")
+        self._refresh_face_control()
+
+    def _refresh_face_control(self):
+        """依後台目前的設定更新「停止／恢復前台辨識」按鈕與說明（按下去要在卡片內再確認一次）。"""
+        enabled = front_control.recognition_enabled()
+        if self.face_control_confirming:
+            self.face_control_btn.configure(text="確定停止" if enabled else "確定恢復")
+            self.face_control_cancel.pack(side="right", padx=(0, 8))
+            return
+        self.face_control_cancel.pack_forget()
+        if enabled:
+            self.face_control_btn.configure(text="⏸ 停止前台辨識")
+            self.face_control_label.configure(text="前台人臉辨識：允許（前台的使用者自己按「啟動」）")
+        else:
+            self.face_control_btn.configure(text="▶ 恢復前台辨識")
+            self.face_control_label.configure(
+                text="前台人臉辨識：已由後台停止（最慢約 10 秒套用；恢復後前台仍要有人按「啟動」；"
+                     "前台離線時下次連上才套用）")
+
+    def _press_face_control(self):
+        """第一次按進入確認，第二次按才寫入設定。"""
+        if not self.face_control_confirming:
+            self.face_control_confirming = True
+            self.face_control_label.configure(text="確定要停止前台人臉辨識嗎？前台門禁將無法打卡。"
+                                              if front_control.recognition_enabled() else "確定要恢復前台人臉辨識嗎？")
+        else:
+            self.face_control_confirming = False
+            front_control.set_recognition_enabled(not front_control.recognition_enabled())
+        self._refresh_face_control()
+
+    def _cancel_face_control(self):
+        self.face_control_confirming = False
+        self._refresh_face_control()
+
+    def _build_event_stream(self, parent):
+        """雙機後台：右邊顯示前台送來的事件（打卡、尾隨、經過未打卡），新的在前。"""
+        box = ui_theme.card(parent)
+        box.pack(fill="both", expand=True, padx=(0, 15), pady=15)
+        ui_theme.section_title(box, "📨 前台事件串流").pack(anchor="w", padx=ui_theme.PAD_MD,
+                                                          pady=(ui_theme.PAD_MD, 6))
+        table_box, self.event_tree = ui_theme.table(box, (("time", "時間", 140), ("text", "事件", 200)), height=14)
+        table_box.pack(fill="both", expand=True, padx=ui_theme.PAD_MD, pady=(0, ui_theme.PAD_MD))
+
+    def _refresh_link_card(self):
+        """讀後台收到的最新前台心跳並更新畫面（不連任何機器）。"""
+        tone, headline, details = front_status.describe(front_status.load())
+        colour = {"success": "success", "danger": "danger"}.get(tone, "text_muted")
+        self.link_headline.configure(text=headline, text_color=ui_theme.pair(colour))
+        self.link_detail.configure(text=NEWLINE.join(details))
+        if service_manager.link_service_running():
+            self.link_service_label.configure(text="🟢 後台連線服務執行中（只給前台使用，TLS 加密）")
+        else:
+            reason = f"：{self.link_note}" if self.link_note else "（正在嘗試啟動）"
+            self.link_service_label.configure(text=f"🔴 後台連線服務未執行{reason}")
+        self._refresh_face_control()
+        events = dashboard_stats.get_recent_events(limit=30)
+        if events is not None:
+            ui_theme.fill_table(self.event_tree, [(ts[5:], text) for ts, text in events])
+
     def refresh_dashboard_data(self):
         """每 5 秒更新儀表板的人數、打卡清單與異常件數"""
         if not self.dash_win.winfo_exists():
             return
+        if self.link_wanted:
+            self._refresh_link_card()
 
         # 查詢失敗時 result 為 None，維持畫面原本的數字
         result = dashboard_stats.get_today_attendance_summary(limit=20)
@@ -421,6 +559,36 @@ class BackendManagerApp:
         """開啟員工帳號管理視窗，可停用、啟用、刪除所選員工與設定管理者"""
         operator = self.session.admin_name if self.session is not None else None
         self.admin_win = account_panel.open_account_window(self.root, operator)
+
+    def _tick_digest(self):
+        """每分鐘看一次該不該產生晨報與日報（到時間、當天要上班、還沒有那份才會產生）。"""
+        if not self._alive or not self.root.winfo_exists():
+            return
+        self.morning_runner.tick()
+        self.digest_runner.tick()
+        self.root.after(60000, self._tick_digest)
+
+    @staticmethod
+    def _morning_ready(_report):
+        """晨報產生完成：後台不顯示，前台代理下一輪同步就會拿到。"""
+        print("[後台] 晨報已產生，前台下次同步會顯示。")
+
+    def open_report(self, kind="digest"):
+        """開啟日報查看視窗（kind 保留給舊呼叫端）；已開著就拉到最前面。排程產生新日報時也走這裡彈出。"""
+        win = getattr(self, "report_win", None)
+        if win is not None and win.winfo_exists():
+            win.show(kind)
+            return
+        self.report_win = digest_window.open_report_window(self.root, self.digest_runner, self.morning_runner, kind)
+
+    def open_schedule(self):
+        """開啟「日報與晨報」模組視窗（已開著就拉到最前面）。"""
+        win = getattr(self, "schedule_win", None)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            return
+        self.schedule_win = schedule_window.open_schedule_window(self.root, self.digest_runner, self.morning_runner,
+                                                                 self.open_report)
 
     def open_anomalies(self):
         """開啟異常事件列表（已開著就拉到最前面）；在這裡標為已讀會同步清掉通知列的紅點。"""

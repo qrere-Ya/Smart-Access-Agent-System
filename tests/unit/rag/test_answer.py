@@ -238,6 +238,19 @@ def test_anomaly_question_lists_paths_and_never_the_picture(store, people):
     assert "證據照片存放位置（不在此顯示照片）" in text and "tailgate_20261016_091500.jpg" in text
 
 
+def test_remote_answers_never_include_evidence_paths(store, people):
+    from shared import database_mgr as dbm
+
+    dbm.add_anomaly_event("tailgate", "C:/runtime/anomaly_logs/tailgate_20261016_091500.jpg", "畫面有 2 人",
+                          timestamp="2026-10-16 09:15:00")
+    llm = FakeLLM({"最近有尾隨事件嗎": {"data": "anomalies", "event_type": "tailgate"}}, reply="有一件。")
+    assistant = make(store, llm)
+    assistant.show_evidence_paths = False
+    text = ask(assistant, "最近有尾隨事件嗎")
+    assert "2026-10-16 09:15:00　尾隨　畫面有 2 人" in text
+    assert "存放位置" not in text and "tailgate_20261016" not in text and "anomaly_logs" not in text
+
+
 def test_mixed_question_uses_both_database_and_documents(store, people):
     llm = FakeLLM({"王小明遲到幾次，請假辦法怎麼規定": {"docs": True, "data": "count", "person": "王小明",
                                                        "status": "遲到"}})
