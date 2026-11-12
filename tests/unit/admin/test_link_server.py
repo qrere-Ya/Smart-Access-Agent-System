@@ -28,9 +28,14 @@ def punch(user_id, when=NOW, **extra):
     return {"event_id": lp.new_event_id(), "kind": "punch", "ts": lp.format_ts(when), "user_id": user_id, **extra}
 
 
+ROWS_SQL = {   # 固定的完整查詢語句（不用字串組 SQL，Semgrep 會擋）
+    "Attendance": "SELECT * FROM Attendance", "AnomalyEvents": "SELECT * FROM AnomalyEvents",
+    "LinkEvents": "SELECT * FROM LinkEvents", "Users": "SELECT * FROM Users"}
+
+
 def rows(db, table):
     con = sqlite3.connect(db)
-    out = con.execute(f"SELECT * FROM {table}").fetchall()  # noqa: S608  測試用固定表名
+    out = con.execute(ROWS_SQL[table]).fetchall()
     con.close()
     return out
 

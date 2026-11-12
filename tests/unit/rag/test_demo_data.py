@@ -12,9 +12,15 @@ from shared import database_mgr
 TODAY = datetime.date(2026, 11, 4)
 
 
+COUNT_SQL = {   # 固定的完整查詢語句（不用字串組 SQL，Semgrep 會擋）
+    "Users": "SELECT COUNT(*) FROM Users", "Attendance": "SELECT COUNT(*) FROM Attendance",
+    "AnomalyEvents": "SELECT COUNT(*) FROM AnomalyEvents", "Leaves": "SELECT COUNT(*) FROM Leaves",
+    "Holidays": "SELECT COUNT(*) FROM Holidays"}
+
+
 def count(db, table):
     con = sqlite3.connect(db)
-    n = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608
+    n = con.execute(COUNT_SQL[table]).fetchone()[0]
     con.close()
     return n
 
