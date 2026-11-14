@@ -674,6 +674,8 @@ class BackendManagerApp:
 
     def _digest_ready(self, _report):
         """排程產生了新日報：人在主選單就直接切過去看；正在別的功能頁就不打斷，只在底部提示。"""
+        if not self._alive or not self.content.winfo_exists():       # 畫面已清掉：背景才做完的日報不再動畫面
+            return
         if self.page_key == "home":
             self.open_report("digest")
         else:

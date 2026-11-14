@@ -126,3 +126,11 @@ def test_a_notice_replaces_the_info_popup_and_clears_itself(root, app):
     assert app.notice_var.get() == "已停止人臉辨識終端機。" and not _toplevels(root)
     _pump(root, 0.5)
     assert app.notice_var.get() == ""
+
+
+def test_a_digest_finishing_after_the_screen_is_torn_down_does_nothing(root, app):
+    """回歸：登出後背景才做完的日報，原本會對已銷毀的內容區換頁，噴 bad window path name。"""
+    app.teardown()
+    app._digest_ready({"date": "2026-11-13"})
+    _pump(root, 0.1)
+    assert app.errors == []
