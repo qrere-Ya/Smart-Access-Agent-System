@@ -5,7 +5,8 @@ web_server.py：手機 QR Code 遠端註冊伺服器（Flask，port 5000）。
   - 後台產生 8 碼一次性 Token（60 秒有效，僅限本機呼叫）
   - 手機掃 QR Code 帶 Token 開啟註冊頁，驗證通過才顯示表單
   - 接收姓名、員工編號、性別與照片，萃取人臉特徵後寫入資料庫，成功後 Token 立即作廢
-  - 自動找出本機區網 IP，優先使用 Wi-Fi Direct 熱點網卡
+  - 開啟時所有網卡位址都是註冊通道（shared.phone_address）：啟動時印出每個可連的網址，
+    Wi-Fi Direct 熱點與區網優先、VPN 排最後
 
 串接模組：
   - vision_core：人臉偵測、對齊、特徵萃取
@@ -18,91 +19,32 @@ import cv2
 import numpy as np
 from access import vision_core as vc
 from shared import database_mgr as db
-import socket
+from shared import phone_address
 import secrets
 import string
 import time
 
-def _find_wifi_direct_adapter_ip():
-    """
-    用 `ipconfig /all` 找出描述含「Wi-Fi Direct」的網卡並回傳它的 IPv4，找不到回傳 None。
-    （service_manager.py 內有一份相同邏輯）
-    """
-    import subprocess
-    import re
-    try:
-        result = subprocess.run(
-            ["ipconfig", "/all"],  # noqa: S607
-            capture_output=True,
-            timeout=5,
-        )
-        raw = result.stdout
-        output = None
-        for enc in ("cp950", "utf-8", "big5"):
-            try:
-                output = raw.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
-        if output is None:
-            output = raw.decode("utf-8", errors="ignore")
-
-        # 依網卡切成區塊
-        blocks, current = [], []
-        for line in output.splitlines():
-            if line and not line[0].isspace():
-                if current:
-                    blocks.append("\n".join(current))
-                current = [line]
-            else:
-                current.append(line)
-        if current:
-            blocks.append("\n".join(current))
-
-        for block in blocks:
-            if "Wi-Fi Direct" in block or "WiFi Direct" in block:
-                # 同一張網卡可能列出兩組 IPv4，取最後一組
-                matches = re.findall(r"IPv4.*?:\s*([\d.]+)", block)
-                if matches:
-                    return matches[-1]
-    except Exception as e:
-        print(f"[WiFi Direct IP Discovery Error] {e}")
-    return None
-
-
 def get_local_ip_offline():
-    """取得本機區網 IPv4：優先 Wi-Fi Direct 網卡，其次虛擬熱點網段，再其次一般私有網段。"""
+    """最適合手機的本機區網 IPv4（邏輯在 shared.phone_address）；完全沒有位址回 127.0.0.1。"""
     try:
-        wifi_direct_ip = _find_wifi_direct_adapter_ip()
-        if wifi_direct_ip:
-            return wifi_direct_ip
-
-        hostname = socket.gethostname()
-        _, _, ip_list = socket.gethostbyname_ex(hostname)
-        if not ip_list:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                s.connect(('8.8.8.8', 80))
-                ip = s.getsockname()[0]
-                s.close()
-                return ip
-            except Exception:
-                return '127.0.0.1'
-        priority_ips = ['192.168.137.1', '192.168.5.1']
-        for pip in priority_ips:
-            if pip in ip_list:
-                return pip
-        private_ips = [ip for ip in ip_list
-                       if ip != '127.0.0.1' and (ip.startswith('192.168.') or ip.startswith('10.'))]
-        if private_ips:
-            gateway_like = [ip for ip in private_ips if ip.endswith('.1')]
-            return gateway_like[0] if gateway_like else private_ips[0]
-        for ip in ip_list:
-            if ip != '127.0.0.1':
-                return ip
-    except Exception as e:
+        return phone_address.best_ip() or "127.0.0.1"
+    except Exception as e:  # noqa: BLE001
         print(f"[IP Discovery Error] {e}")
-    return '127.0.0.1'
+        return "127.0.0.1"
+
+
+def print_channels(port=5000, addresses=None):
+    """啟動時印出所有註冊通道（這台電腦每個可用位址都能連，建議的那個標星號）。"""
+    addresses = phone_address.list_addresses() if addresses is None else addresses
+    if not addresses:
+        print("找不到區網位址：請讓筆電連上 Wi-Fi 或開行動熱點，手機才連得到。")
+        return
+    chosen = phone_address.best(addresses)
+    print("請在手機瀏覽器輸入下面任一個網址（手機要和這台電腦在同一個網路）：")
+    for item in addresses:
+        mark = "★建議 " if item is chosen else "       "
+        print(f"  {mark}http://{item['ip']}:{port}   {item['label']}")
+
 
 # --- Token 管理 ---
 valid_tokens = {} # { "token_string": expiry_timestamp }
@@ -196,10 +138,8 @@ def api_register():
         return jsonify({"status": "error", "message": "伺服器內部錯誤，請稍後再試或通知管理員"}), 500
 
 if __name__ == '__main__':
-    local_ip = get_local_ip_offline()
     print("\n" + "="*40)
     print("--- 遠端註冊伺服器 (Sliding Window 安全模式) 已啟動 ---")
-    print(f"本地動態 IP: {local_ip}")
-    print(f"請在手機瀏覽器輸入: http://{local_ip}:5000")
+    print_channels(5000)
     print("="*40 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=False)  # noqa: S104

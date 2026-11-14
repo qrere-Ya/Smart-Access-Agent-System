@@ -143,3 +143,44 @@ def test_the_back_setup_script_has_no_broken_comment_lines():
     assert "admin" + chr(92) + "network_check.py" in text
     stray = [line for line in text.splitlines() if line.startswith("etwork") or chr(13) in line]
     assert stray == []
+
+
+# --- QR 註冊規則（手機連 TCP 5000，只放行同網段） ---
+
+QR_GOOD = rule(nc.QR_RULE[0], "TCP", 5000, RemoteAddress="LocalSubnet")
+
+
+def test_qr_rule_scope_reads_localsubnet_private_ranges_and_any():
+    assert nc.qr_scope("LocalSubnet") == "local_subnet" and nc.qr_scope("localsubnet") == "local_subnet"
+    assert nc.qr_scope("192.168.0.0/255.255.0.0") == "private" and nc.qr_scope("172.16.0.0/12,10.0.0.0/8") == "private"
+    assert nc.qr_scope("172.20.10.0/28") == "private"
+    for bad in ("Any", "", "*"):
+        assert nc.qr_scope(bad) == "any"
+    for other in ("8.8.8.0/24", "172.32.0.0/16", "169.254.0.0/16", "192.168.0.0/16,8.8.8.8", "亂寫"):
+        assert nc.qr_scope(other) == "other", other
+
+
+def test_qr_rule_ok_when_enabled_inbound_tcp_5000_and_local_subnet_only():
+    assert nc.check_qr_rule([QR_GOOD])[0][0] == "OK"
+    assert nc.check_qr_rule([rule(nc.QR_RULE[0], "TCP", 5000, RemoteAddress="192.168.0.0/255.255.0.0")])[0][0] == "OK"
+
+
+def test_qr_rule_missing_only_warns_and_says_how_to_fix():
+    (level, text), = nc.check_qr_rule(GOOD)
+    assert level == "WARN" and "設定後台網路.bat" in text and "5000" in text
+    assert nc.check_qr_rule(None) == []                                   # 讀不到規則時 check_firewall 已經警告過
+
+
+@pytest.mark.parametrize("over, word", [
+    ({"Enabled": "False"}, "沒有啟用"), ({"Action": "Block"}, "入站允許"), ({"Direction": "Outbound"}, "入站允許"),
+    ({"LocalPort": "5001"}, "協定或埠"), ({"Protocol": "UDP"}, "協定或埠"),
+    ({"RemoteAddress": "Any"}, "任何來源"), ({"RemoteAddress": "8.8.8.0/24"}, "不是區網")])
+def test_qr_rule_problems_are_warnings_never_failures(over, word):
+    (level, text), = nc.check_qr_rule([{**QR_GOOD, **over}])
+    assert level == "WARN" and word in text
+
+
+def test_qr_rule_name_port_and_scope_match_the_back_setup_script():
+    back = _read("deploy", "setup_back_network.ps1")
+    assert nc.QR_RULE[0] in back and "-LocalPort 5000" in back and "LocalSubnet" in back
+    assert nc.QR_RULE[0].startswith(nc.RULE_PREFIX + " 後台")                # 重跑時被「SmartAccess 後台*」清掉再重建

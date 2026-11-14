@@ -14,6 +14,7 @@ import pytest
 from admin import service_manager as sm
 from access import web_server as ws
 from shared import paths
+from shared import phone_address as pa
 
 
 class FakePopen:
@@ -241,7 +242,7 @@ def test_interpreter_falls_back_when_the_project_one_is_missing(monkeypatch, tmp
     assert sm._project_python_exe() == sys.executable
 
 
-# ---------- IP 偵測（後台與註冊伺服器各有一份相同邏輯） ----------
+# ---------- IP 偵測（邏輯在 shared.phone_address，後台與註冊伺服器共用） ----------
 
 IPCONFIG = b"""Windows IP Configuration
 
@@ -260,32 +261,29 @@ Wireless LAN adapter Local Area Connection* 3:
 MODULES = [sm, ws]
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_wifi_direct_adapter_ip_uses_the_last_address_of_that_adapter(module, monkeypatch):
+def test_wifi_direct_adapter_ip_uses_the_last_address_of_that_adapter(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout=IPCONFIG))
-    assert module._find_wifi_direct_adapter_ip() == "10.20.30.1"
+    assert sm._find_wifi_direct_adapter_ip() == "10.20.30.1"
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_no_wifi_direct_adapter_means_none(module, monkeypatch):
+def test_no_wifi_direct_adapter_means_none(monkeypatch):
     other = IPCONFIG.replace(b"Wi-Fi Direct", b"Intel Wireless")
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout=other))
-    assert module._find_wifi_direct_adapter_ip() is None
+    assert sm._find_wifi_direct_adapter_ip() is None
 
 
-@pytest.mark.parametrize("module", MODULES)
-def test_ipconfig_failure_means_none(module, monkeypatch):
+def test_ipconfig_failure_means_none(monkeypatch):
     def boom(*args, **kwargs):
         raise FileNotFoundError("ipconfig")
 
     monkeypatch.setattr(subprocess, "run", boom)
-    assert module._find_wifi_direct_adapter_ip() is None
+    assert sm._find_wifi_direct_adapter_ip() is None
 
 
-def local_ip(module, monkeypatch, ips, wifi=None):
-    monkeypatch.setattr(module, "_find_wifi_direct_adapter_ip", lambda: wifi)
-    monkeypatch.setattr(socket, "gethostname", lambda: "host")
-    monkeypatch.setattr(socket, "gethostbyname_ex", lambda host: (host, [], ips))
+def local_ip(module, monkeypatch, ips, wifi=None, default_route=None):
+    monkeypatch.setattr(pa, "read_interfaces", lambda: {"": list(ips)} if ips else {})
+    monkeypatch.setattr(pa, "read_default_route", lambda: default_route)
+    monkeypatch.setattr(pa, "find_wifi_direct_ip", lambda: wifi)
     return module.get_local_ip_offline()
 
 
@@ -295,8 +293,13 @@ def local_ip(module, monkeypatch, ips, wifi=None):
     (["10.0.0.5", "192.168.137.1"], None, "192.168.137.1"),               # 熱點網段優先於一般私有網段
     (["192.168.1.50", "192.168.1.1"], None, "192.168.1.1"),               # 私有網段中偏好 .1
     (["192.168.1.50", "10.0.0.7"], None, "192.168.1.50"),
-    (["8.8.4.4"], None, "8.8.4.4"),
+    (["8.8.4.4"], None, "8.8.4.4"),                                       # 只剩其他位址時才退而求其次
     (["127.0.0.1"], None, "127.0.0.1"),
+    # 使用者這台的真實組合：iPhone 熱點網段 172.20.10.x 是私有位址，Radmin／Tailscale 不能被優先選
+    (["26.244.154.160", "172.20.10.7", "100.96.212.34"], None, "172.20.10.7"),
+    (["26.244.154.160", "100.96.212.34", "172.20.10.7", "169.254.211.163", "127.0.0.1"], None, "172.20.10.7"),
+    (["169.254.211.163", "172.20.10.7"], None, "172.20.10.7"),            # 網路線直連的 169.254 不給手機
+    (["169.254.211.163"], None, "127.0.0.1"),
 ])
 def test_local_ip_preference_order(module, monkeypatch, ips, wifi, expected):
     assert local_ip(module, monkeypatch, ips, wifi) == expected
@@ -304,21 +307,31 @@ def test_local_ip_preference_order(module, monkeypatch, ips, wifi, expected):
 
 @pytest.mark.parametrize("module", MODULES)
 def test_local_ip_falls_back_to_loopback_when_everything_fails(module, monkeypatch):
-    class OfflineSocket:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def connect(self, address):
-            raise OSError("沒有網路")
-
-    monkeypatch.setattr(socket, "socket", OfflineSocket)
     assert local_ip(module, monkeypatch, []) == "127.0.0.1"
 
-    def boom(host):
+    def boom():
         raise OSError("名稱解析失敗")
 
-    monkeypatch.setattr(socket, "gethostbyname_ex", boom)
+    monkeypatch.setattr(pa, "list_addresses", boom)
     assert module.get_local_ip_offline() == "127.0.0.1"
+
+
+def test_phone_addresses_lists_every_channel_with_the_best_first(monkeypatch):
+    monkeypatch.setattr(pa, "read_interfaces", lambda: {"Radmin VPN": ["26.244.154.160"], "Wi-Fi": ["172.20.10.7"]})
+    monkeypatch.setattr(pa, "read_default_route", lambda: None)
+    monkeypatch.setattr(pa, "find_wifi_direct_ip", lambda: None)
+    found = sm.get_phone_addresses()
+    assert [(a["ip"], a["kind"]) for a in found] == [("172.20.10.7", "lan"), ("26.244.154.160", "vpn")]
+
+
+def test_web_server_prints_every_channel_and_marks_the_suggested_one(capsys):
+    found = [{"ip": "172.20.10.7", "adapter": "Wi-Fi", "kind": "lan", "label": "Wi-Fi 172.20.10.7（區網）"},
+             {"ip": "26.244.154.160", "adapter": "Radmin VPN", "kind": "vpn", "label": "Radmin VPN（VPN）"}]
+    ws.print_channels(5000, found)
+    out = capsys.readouterr().out
+    assert "★建議 http://172.20.10.7:5000" in out and "http://26.244.154.160:5000" in out
+    ws.print_channels(5000, [])
+    assert "找不到區網位址" in capsys.readouterr().out
 
 
 # ---------- 登入代碼只交給助理視窗 ----------

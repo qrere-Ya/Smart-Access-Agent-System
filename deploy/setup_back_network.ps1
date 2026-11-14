@@ -1,6 +1,8 @@
-﻿# setup_back_network.ps1：後台（這台）一次設好雙機連線——角色設成後台、位址自動找、防火牆只放行網路線直連那一段。
+﻿# setup_back_network.ps1：後台（這台）一次設好雙機連線——角色設成後台、位址自動找、防火牆只放行網路線直連那一段，
+# 另外開一條讓同網段手機連得進 QR 註冊頁（TCP 5000）的規則。
 # 要用系統管理員執行（由「設定後台網路.bat」呼叫）。不改任何網卡設定，Wi-Fi 與上網不受影響。
 # 做的事：①角色設成 back（綁定位址 auto）②清掉所有「SmartAccess 後台」開頭的舊規則 ③建立下面兩條入站規則（只放行 169.254.0.0/16）
+#        ④建立 QR 註冊規則（TCP 5000，只放行 LocalSubnet＝和這台同網段的手機，所有網路類別）
 # 規則名稱要和 admin\network_check.py 一致（檢查程式靠名稱找規則）。重複執行不會留下重複或過期的規則。
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -28,6 +30,10 @@ foreach ($r in $rules) {
         -RemoteAddress "169.254.0.0/16" -Action Allow | Out-Null
     Write-Host ("已建立規則：{0}（入站允許 {1} {2}，只放行 169.254.0.0/16）" -f $r.Name, $r.Protocol, $r.Port) -ForegroundColor Green
 }
-Write-Host "完成：後台角色已設定，防火牆只放行網路線直連那一段（169.254.0.0/16）。" -ForegroundColor Green
+$qrRule = "SmartAccess 後台 QR 註冊（區網手機）"
+New-NetFirewallRule -DisplayName $qrRule -Direction Inbound -Protocol TCP -LocalPort 5000 `
+    -RemoteAddress LocalSubnet -Profile Any -Action Allow | Out-Null
+Write-Host ("已建立規則：{0}（入站允許 TCP 5000，只放行和這台同網段的手機 LocalSubnet）" -f $qrRule) -ForegroundColor Green
+Write-Host "完成：後台角色已設定，連線服務只放行網路線直連那一段（169.254.0.0/16），QR 註冊只放行同網段的手機。" -ForegroundColor Green
 Write-Host "通行碼請用環境變數 SMART_ACCESS_LINK_TOKEN 設定（和前台同一組）；接著開後台介面（會自動啟動連線服務）。"
 Write-Host "之後可雙擊「檢查後台網路.bat」確認角色、通行碼、網路線位址、連線服務與防火牆規則。"
