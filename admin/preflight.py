@@ -4,7 +4,7 @@ preflight.py：展示前的自動健檢（不啟動任何服務、不改任何�
 主要功能：
   - 逐項檢查：模型檔案、助理文件、資料庫與管理者、顯卡與記憶體、攝影機、通訊埠、語言模型設定、區網位址
   - 雙機展示（角色是後台時才檢查，單機略過）：前台｜開頭的項目——後台設定與通行碼、網路線位址、連線服務與防火牆、
-    前台是否在線、人臉辨識是否執行、鏡頭、人臉資料筆數、待補送事件、今日晨報、全本地模式；每個失敗項都附下一步
+    前台是否在線、人臉辨識是否執行、鏡頭、人臉資料筆數、待補送事件、今日科技早報、全本地模式；每個失敗項都附下一步
   - 每項結果分成 通過／注意／失敗，附上白話的處理建議；全部沒有「失敗」才算可以展示
   - 所有外部依賴（檔案位置、顯卡查詢、攝影機、port）都可由參數傳入，測試不需要真的硬體
   - python -m admin.preflight 執行並印出中文結果；結束碼 0＝可以展示，1＝有失敗項
@@ -13,7 +13,7 @@ preflight.py：展示前的自動健檢（不啟動任何服務、不改任何�
   - paths：模型、文件、資料庫位置
   - network_check（後台網路檢查，前台區段沿用它的判斷）、front_status（前台心跳狀態）
   - front_control（後台對前台的辨識開關）
-  - digest_store（今日晨報）、network_policy（全本地模式）、role_config（角色與通行碼）
+  - digest_store（今日科技早報）、network_policy（全本地模式）、role_config（角色與通行碼）
   - service_manager：port 檢查與區網 IP；llm_settings：語言模型設定與 Ollama 模型清單
   - resource_manager：剩餘顯存與記憶體
 """
@@ -276,32 +276,33 @@ def check_front_pending(state):
 
 
 def check_front_morning(brief, today):
-    """今天的晨報是否已產生（前台每 10 秒從後台同步，儀表板「早報」看得到才算真的同步）。"""
-    name = FRONT + "今日晨報"
+    """今天的科技早報是否已產生（前台每 10 秒從後台同步，儀表板「早報」看得到才算真的同步）。"""
+    name = FRONT + "今日科技早報"
     if not brief:
-        return Check(name, WARN, "後台還沒有晨報",
-                     "晨報到設定時間會自動產生（預設 08:30，後台開著才會跑）；"
-                     "現在要用就到後台「日報與晨報」視窗按立即產生。")
+        return Check(name, WARN, "後台還沒有科技早報",
+                     "科技早報到設定時間會自動產生（預設 08:30，後台開著才會跑）；"
+                     "現在要用就到後台「出勤日報與科技早報」視窗按立即產生。")
     day = str(brief.get("date", ""))
     if day != today.isoformat():
-        return Check(name, WARN, f"最新晨報是 {day or '未知日期'} 的，不是今天",
-                     "後台「日報與晨報」視窗按立即產生晨報（需要後台連網）。")
+        return Check(name, WARN, f"最新科技早報是 {day or '未知日期'} 的，不是今天",
+                     "後台「出勤日報與科技早報」視窗按立即產生科技早報（需要後台連網）。")
     news = brief.get("news")
     count = len(news) if isinstance(news, list) else 0
     if count == 0:
-        return Check(name, WARN, f"今天的晨報沒有新聞：{brief.get('news_problem') or '原因不明'}",
+        return Check(name, WARN, f"今天的科技早報沒有新聞：{brief.get('news_problem') or '原因不明'}",
                      "後台連不上網時會自動重抓（1、2、5 分鐘後每 10 分鐘）；確認後台有網路，或按立即產生。")
-    return Check(name, OK, f"今天的晨報已產生（{count} 則）；前台每 10 秒同步，儀表板「早報」會出現"
+    return Check(name, OK, f"今天的科技早報已產生（{count} 則）；前台每 10 秒同步，儀表板「早報」會出現"
                            "（這裡無法確認前台已收到）")
 
 
 def check_front_online_mode(local_only):
-    """後台全本地模式開著時，日報摘要與晨報都不會連網；這裡只看設定，不真的連網測試。"""
+    """後台全本地模式開著時，出勤日報摘要與科技早報都不會連網；這裡只看設定，不真的連網測試。"""
     name = FRONT + "後台網路模式"
     if local_only:
-        return Check(name, WARN, "後台是全本地模式：晨報抓不到新聞，日報摘要只用本機模型",
-                     "後台「日報與晨報」視窗關閉全本地模式（並確認環境變數 SMART_ACCESS_LOCAL_ONLY 沒設成 1）。")
-    return Check(name, OK, "全本地模式關閉，晨報可以連網抓新聞（只看設定，沒有實際連網測試）")
+        return Check(name, WARN, "後台是全本地模式：科技早報抓不到新聞，出勤日報摘要只用本機模型",
+                     "後台「出勤日報與科技早報」視窗關閉全本地模式"
+                     "（並確認環境變數 SMART_ACCESS_LOCAL_ONLY 沒設成 1）。")
+    return Check(name, OK, "全本地模式關閉，科技早報可以連網抓新聞（只看設定，沒有實際連網測試）")
 
 
 def check_front(settings=None, network_results=None, state=None, enabled=None, users=None, brief=None,

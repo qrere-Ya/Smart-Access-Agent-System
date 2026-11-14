@@ -1,4 +1,4 @@
-"""前台儀表板的畫面內容：晨報分頁與換頁、各種沒有晨報的說明、打卡問候與警示的過期、狀態文字與色調、超長文字截斷。"""
+"""前台儀表板的畫面內容：科技早報分頁與換頁、各種沒有科技早報的說明、打卡問候與警示的過期、狀態文字與色調、超長文字截斷。"""
 import datetime as dt
 
 import pytest
@@ -47,7 +47,7 @@ def test_a_page_stays_the_same_within_one_interval():
 def test_no_brief_yet_says_so_in_plain_words():
     for missing in (None, "text", [], 5):
         view = fv.news_view(missing, NOW.date(), TS)
-        assert view["state"] == "empty" and "還沒有晨報" in view["message"] and view["cards"] == []
+        assert view["state"] == "empty" and "還沒有科技早報" in view["message"] and view["cards"] == []
 
 
 def test_a_brief_without_news_explains_the_problem_and_that_the_back_will_retry():
@@ -160,10 +160,10 @@ def test_module_tiles_preview_the_news_the_last_punch_and_the_worst_status():
 
 
 def test_module_tiles_explain_empty_states_and_raise_the_worst_status_tone():
-    news = {"state": "empty", "cards": [], "message": "還沒有晨報"}
+    news = {"state": "empty", "cards": [], "message": "還沒有科技早報"}
     status = [("後台連線", "後台離線，打卡先暫存", "warning"), ("鏡頭", "異常或未啟動", "danger")]
     tiles = fv.module_tiles(news, [], status)
-    assert tiles[0]["summary"] == "還沒有晨報" and tiles[1]["summary"] == "目前沒有人打卡"
+    assert tiles[0]["summary"] == "還沒有科技早報" and tiles[1]["summary"] == "目前沒有人打卡"
     assert tiles[2]["accent"] == "danger" and tiles[2]["summary"].startswith("鏡頭：")
 
 

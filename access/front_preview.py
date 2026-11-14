@@ -2,9 +2,9 @@
 front_preview.py：前台儀表板的畫面預覽（給改畫面的人用）——用假資料開出完整的儀表板，不需要攝影機、模型、後台、網路。
 
 主要功能：
-  - 用臨時資料夾裡的假資料庫開 FrontDashboard：晨報新聞、剛剛打卡、狀態、資源使用量都是假的
+  - 用臨時資料夾裡的假資料庫開 FrontDashboard：科技早報新聞、剛剛打卡、狀態、資源使用量都是假的
   - --alert 讓頂端出現警示橫幅（tailgate 尾隨、no_scan_walkby 經過未打卡、spoof 非活體），預覽期間會一直維持
-  - --offline 模擬後台沒連上；--no-news 模擬沒有晨報；--theme 指定主題（dark 或 frosted）
+  - --offline 模擬後台沒連上；--no-news 模擬沒有科技早報；--theme 指定主題（dark 或 frosted）
   - 人臉辨識按鈕是假的（按了只會改變按鈕狀態，不會開任何程式），用來看「啟動／執行中」的樣子；
     --recognition-off 模擬後台停止辨識
   結束視窗後臨時資料夾自動刪除，不會留下或改到任何真實資料（不碰 runtime/）。
@@ -56,7 +56,7 @@ class FakeRecognition:
 
 
 def seed(store, offline=False, news=True, theme="dark", now=time.time):
-    """把假資料寫進資料庫（純資料，不開視窗）：晨報、兩筆打卡、後台連線狀態、主題。"""
+    """把假資料寫進資料庫（純資料，不開視窗）：科技早報、兩筆打卡、後台連線狀態、主題。"""
     screen = ScreenState(store)
     current = now()
     if news:
@@ -73,7 +73,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="前台儀表板畫面預覽（假資料）")
     parser.add_argument("--alert", choices=ALERT_KINDS, help="顯示警示橫幅")
     parser.add_argument("--offline", action="store_true", help="模擬後台沒連上")
-    parser.add_argument("--no-news", action="store_true", help="模擬沒有晨報")
+    parser.add_argument("--no-news", action="store_true", help="模擬沒有科技早報")
     parser.add_argument("--theme", choices=tuple(front_dashboard.THEME_LABELS), default="dark")
     parser.add_argument("--recognition-off", action="store_true", help="模擬後台已停止人臉辨識")
     args = parser.parse_args(argv)

@@ -149,7 +149,7 @@ def test_everything_ready_gives_no_front_failures_or_warnings(monkeypatch):
     checks = front_checks(monkeypatch)
     bad = {n: c.status for n, c in checks.items() if c.status != pf.OK}
     assert not bad, bad
-    assert pf.FRONT + "連線" in checks and pf.FRONT + "人臉資料" in checks and pf.FRONT + "今日晨報" in checks
+    assert pf.FRONT + "連線" in checks and pf.FRONT + "人臉資料" in checks and pf.FRONT + "今日科技早報" in checks
 
 
 def test_front_offline_or_never_seen_fails_and_says_what_to_do(monkeypatch):
@@ -196,13 +196,14 @@ def test_pending_events_warn(monkeypatch):
 
 
 def test_morning_brief_missing_old_empty_and_ready(monkeypatch):
-    missing = front_checks(monkeypatch, brief={})[pf.FRONT + "今日晨報"]
+    missing = front_checks(monkeypatch, brief={})[pf.FRONT + "今日科技早報"]
     assert missing.status == pf.WARN and "立即產生" in missing.fix
-    old = front_checks(monkeypatch, brief={**BRIEF, "date": "2026-11-12"})[pf.FRONT + "今日晨報"]
+    old = front_checks(monkeypatch, brief={**BRIEF, "date": "2026-11-12"})[pf.FRONT + "今日科技早報"]
     assert old.status == pf.WARN and "2026-11-12" in old.detail
-    empty = front_checks(monkeypatch, brief={**BRIEF, "news": [], "news_problem": "沒有網路"})[pf.FRONT + "今日晨報"]
+    empty = front_checks(monkeypatch, brief={**BRIEF, "news": [], "news_problem": "沒有網路"})[
+        pf.FRONT + "今日科技早報"]
     assert empty.status == pf.WARN and "沒有網路" in empty.detail
-    ready = front_checks(monkeypatch)[pf.FRONT + "今日晨報"]
+    ready = front_checks(monkeypatch)[pf.FRONT + "今日科技早報"]
     assert ready.status == pf.OK and "2 則" in ready.detail
 
 

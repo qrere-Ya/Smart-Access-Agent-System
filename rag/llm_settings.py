@@ -173,7 +173,7 @@ def explain(err, s=None):
     k = err.kind
     model = s.get("local_model", "")
     if k == "local_only":
-        return "全本地模式已開啟，不連雲端。", ["到「日報與晨報」視窗關閉「全本地模式」，才能使用雲端 API。"]
+        return "全本地模式已開啟，不連雲端。", ["到「出勤日報與科技早報」視窗關閉「全本地模式」，才能使用雲端 API。"]
     if k == "empty_key":
         return "還沒有填 API 金鑰。", ["在「⚙️ 設定」貼上你的 API 金鑰再測試；沒有金鑰的話，選「只用本機模型」即可。"]
     if k == "auth":
