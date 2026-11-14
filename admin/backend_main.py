@@ -249,9 +249,13 @@ class BackendManagerApp:
         ui_theme.muted_label(text_col, desc, wraplength=440, justify="left").pack(anchor="w", pady=(4, 0))
 
         def on_enter(_event=None):
+            if not card.winfo_exists():       # 換頁銷毀卡片時，虛擬螢幕會補送進出事件，這時不要再動已不存在的卡片
+                return
             card.configure(fg_color=ui_theme.pair("secondary"), border_color=ui_theme.pair(accent))
 
         def on_leave(_event=None):
+            if not card.winfo_exists():
+                return
             try:   # 指標移到卡片內的子元件時也會觸發離開事件，這時不要還原
                 widget = card.winfo_containing(*card.winfo_pointerxy())
                 while widget is not None and widget is not card:

@@ -50,7 +50,13 @@ def qr(root, db, monkeypatch):
     monkeypatch.setattr(BackendManagerApp, "_detect_qr_channels", staticmethod(fake_detect))
     errors = []
     previous = root.report_callback_exception
-    root.report_callback_exception = lambda *exc: errors.append(exc[1])     # Tk 回呼的例外預設只印出、不會讓測試失敗
+    def collect(*exc):                       # Tk 回呼的例外預設只印出、不會讓測試失敗；這裡收集並印出堆疊
+        import traceback
+
+        errors.append(exc[1])
+        traceback.print_exception(*exc)
+
+    root.report_callback_exception = collect
     root.deiconify()
     app = BackendManagerApp(root)
     root.withdraw()
