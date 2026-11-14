@@ -266,7 +266,9 @@ class BackendManagerApp:
                 pass
             card.configure(fg_color=ui_theme.pair("card"), border_color=ui_theme.pair("border"))
 
-        def on_click(_event=None):
+        def on_click(event=None):
+            if event is None:         # 不帶事件的呼叫不是使用者點的，不能因此換頁（見 ui_theme.event_only）
+                return
             # 換頁會銷毀這張卡片：等這次點擊事件處理完再換，不要在事件還在分派時銷毀正在處理它的元件
             self.root.after_idle(cmd)
 

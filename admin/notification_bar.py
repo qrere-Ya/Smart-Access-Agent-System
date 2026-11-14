@@ -39,7 +39,7 @@ class NotificationBar:
         self.label.pack(side="left")
         if on_open is not None:                 # 點紅點文字也能查看
             self.label.configure(cursor="hand2")
-            self.label.bind("<Button-1>", lambda e: self.open_list())
+            self.label.bind("<Button-1>", ui_theme.event_only(lambda _e: self.open_list()))
             ui_theme.link_button(self.frame, "查看", self.open_list, width=50, height=24).pack(side="left", padx=(6, 0))
         ui_theme.link_button(self.frame, "全部標為已讀", self.mark_all_read, width=90, height=24).pack(
             side="left", padx=(6, 0))

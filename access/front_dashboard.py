@@ -107,8 +107,8 @@ class FrontDashboard:
         self._apply_theme()
         self.refresh()
         root.bind("<Configure>", self._on_configure, add="+")
-        root.bind("<F11>", lambda _e: self.toggle_fullscreen(), add="+")
-        root.bind("<Escape>", lambda _e: self.set_fullscreen(False), add="+")
+        root.bind("<F11>", ui_theme.event_only(lambda _e: self.toggle_fullscreen()), add="+")
+        root.bind("<Escape>", ui_theme.event_only(lambda _e: self.set_fullscreen(False)), add="+")
         if front_screens.load_pref("dashboard_fullscreen"):         # 上次是全螢幕，這次沿用
             root.after(300, lambda: self.set_fullscreen(True, remember=False))
 
@@ -293,7 +293,7 @@ class FrontDashboard:
         while stack:
             widget = stack.pop()
             stack.extend(w for w in widget.winfo_children() if isinstance(w, ctk.CTkBaseClass))
-            widget.bind("<Button-1>", lambda _e, k=key: self.open_module(k), add="+")
+            widget.bind("<Button-1>", ui_theme.event_only(lambda _e, k=key: self.open_module(k)), add="+")
             widget.bind("<Enter>", on_enter, add="+")
             widget.bind("<Leave>", on_leave, add="+")
         return parts

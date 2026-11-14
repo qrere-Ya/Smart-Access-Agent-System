@@ -136,8 +136,8 @@ def test_a_digest_finishing_after_the_screen_is_torn_down_does_nothing(root, app
     assert app.errors == []
 
 
-def test_a_card_click_handler_survives_being_called_without_an_event(root, app):
-    """回歸：使用者回報過卡片點擊的處理函式「缺 e 參數」（Tcl 以零個參數呼叫它）；處理函式的事件參數必須可省略。"""
+def test_a_card_click_handler_ignores_a_call_without_an_event(root, app):
+    """回歸：使用者與 CI 都遇過繫結函式被零個參數呼叫（「缺 e 參數」）；這種呼叫不能出錯，也不能讓畫面自己換頁。"""
     import re
 
     wall = next(c for c in app.content.winfo_children() if len(c.winfo_children()) == 6)
@@ -154,4 +154,21 @@ def test_a_card_click_handler_survives_being_called_without_an_event(root, app):
     for name in handlers:
         root.tk.call(name)                                            # 等於 Tcl 沒帶任何事件資料就呼叫它
     _pump(root, 0.3)
-    assert app.errors == [] and app.page_key == "accounts"
+    assert app.errors == [] and app.page_key == "home"                 # 沒有事件就不是使用者點的，不換頁
+
+
+def test_the_notification_label_ignores_a_call_without_an_event(root, app):
+    """回歸：CI 上「NotificationBar 的 lambda 缺 e 參數」——紅點文字的點擊繫結被零個參數呼叫時不能出錯、不能開異常頁。"""
+    import re
+
+    label = app.notification_bar.label
+    names = set()
+    for target in (getattr(label, "_canvas", None), getattr(label, "_label", None)):
+        if target is not None:
+            names.update(re.findall(r"\[(\S+) %#", target.bind("<Button-1>")))
+    names = {n for n in names if "handler" in n}
+    assert names, "找不到紅點文字的點擊繫結"
+    for name in names:
+        root.tk.call(name)
+    _pump(root, 0.2)
+    assert app.errors == [] and app.page_key == "home"

@@ -220,7 +220,7 @@ class _Dialog(ctk.CTkToplevel):
         for label, value, style in reversed(buttons):
             make = {"primary": primary_button, "danger": danger_button}.get(style, secondary_button)
             make(row, label, lambda v=value: self._choose(v), width=90).pack(side="right", padx=(PAD_SM, 0))
-        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Escape>", event_only(lambda _e: self.destroy()))
         self._center(master)
         self.deiconify()
         try:
@@ -284,6 +284,20 @@ def style_treeview(tree=None, mode=None, style_name="Smart.Treeview"):
         tree.tag_configure("odd", background=c["table_bg"])
         tree.tag_configure("even", background=c["table_alt"])
     return style_name
+
+
+def event_only(func):
+    """
+    繫結（bind）用：只在真的收到事件時才呼叫 func(event)，不帶事件的呼叫一律忽略。
+    tkinter 偶爾會以零個參數呼叫繫結函式（CI 的視窗測試與實際使用都出現過「缺 e 參數」的 TypeError），
+    那不是使用者的操作，不能讓它出錯，更不能讓它觸發換頁、開視窗這類動作。
+    """
+    def handler(event=None):
+        if event is None:
+            return None
+        return func(event)
+
+    return handler
 
 
 def zebra_tags(index):

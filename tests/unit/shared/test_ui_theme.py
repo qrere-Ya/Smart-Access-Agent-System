@@ -77,3 +77,13 @@ def test_the_chosen_mode_is_remembered_and_a_bad_file_falls_back(tmp_path, monke
 def test_every_mode_choice_has_a_label_and_a_valid_mode():
     assert [m for m, _label in t.MODE_CHOICES] == ["light", "dark", "system"]
     assert all(label for _m, label in t.MODE_CHOICES)
+
+
+def test_event_only_calls_the_function_for_a_real_event_and_ignores_a_call_without_one():
+    calls = []
+    handler = t.event_only(lambda e: calls.append(e) or "done")
+    assert handler() is None and calls == []                 # 不帶事件（tkinter 偶爾會這樣呼叫）：忽略，不出錯
+    assert handler("event") == "done" and calls == ["event"]
+    with_default = t.event_only(lambda _e, k="x": calls.append(k))   # 搭配預設參數的寫法也要能用
+    with_default("event")
+    assert calls[-1] == "x"
