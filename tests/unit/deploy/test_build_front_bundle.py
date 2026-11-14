@@ -144,3 +144,52 @@ def test_text_files_inside_model_folders_are_copied_byte_for_byte(fake):
     copied = open(os.path.join(bundle, "models", "voice", "tokens.txt"), "rb").read()
     assert copied == tokens
     assert bytes([0xEF, 0xBB, 0xBF]) not in copied and CRLF not in copied
+
+
+def test_demo_front_batch_is_bundled_with_crlf_and_runs_the_front_check_first(fake):
+    root, out = fake
+    template = root / "deploy" / "front_template"
+    (template / "展示前台.bat").write_text("echo demo\n", encoding="utf-8")
+    bundle, _a, _c = bb.build(str(out), make_zip=False, root=str(root))
+    data = open(os.path.join(bundle, "展示前台.bat"), "rb").read()
+    assert CRLF in data and LF not in data.replace(CRLF, b"")
+    manifest = json.load(open(os.path.join(bundle, "MANIFEST.json"), encoding="utf-8"))["files"]
+    assert "展示前台.bat" in manifest
+
+
+def test_repo_demo_batches_exist_use_crlf_and_call_the_right_modules():
+    folder = paths.PROJECT_ROOT
+    front = open(os.path.join(folder, "deploy", "front_template", "展示前台.bat"), "rb").read()
+    back = open(os.path.join(folder, "展示啟動.bat"), "rb").read()
+    for data in (front, back):
+        assert data.count(LF) == data.count(CRLF)
+    assert b"access.front_check" in front and "啟動前台.bat".encode("utf-8") in front
+    assert b"admin.preflight" in back and b"admin.backend_main" in back
+    assert "啟動前台門禁".encode("utf-8") in back and "啟動人臉辨識".encode("utf-8") in back
+    guide = open(os.path.join(folder, "deploy", "front_template", "前台使用說明.txt"), encoding="utf-8").read()
+    assert "展示當天流程" in guide and "展示前台.bat" in guide and "展示啟動.bat" in guide
+
+
+def test_verify_batch_and_module_are_bundled_and_never_pull_in_the_back_end(fake):
+    root, out = fake
+    (root / "deploy" / "front_template" / "前台驗證.bat").write_text("echo verify\n", encoding="utf-8")
+    (root / "access" / "front_verify.py").write_text("from shared import verify_common\n", encoding="utf-8")
+    (root / "shared" / "verify_common.py").write_text("x = 1\n", encoding="utf-8")
+    bundle, _a, _c = bb.build(str(out), make_zip=False, root=str(root))
+    data = open(os.path.join(bundle, "前台驗證.bat"), "rb").read()
+    assert CRLF in data and LF not in data.replace(CRLF, b"")
+    manifest = json.load(open(os.path.join(bundle, "MANIFEST.json"), encoding="utf-8"))["files"]
+    assert "前台驗證.bat" in manifest and "access/front_verify.py" in manifest
+    assert "shared/verify_common.py" in manifest and not any(name.startswith("admin/") for name in manifest)
+    assert "access.front_verify" in bb.ENTRY_MODULES
+
+
+def test_repo_verify_batches_use_crlf_and_call_the_right_modules():
+    folder = paths.PROJECT_ROOT
+    back = open(os.path.join(folder, "驗證當天.bat"), "rb").read()
+    front = open(os.path.join(folder, "deploy", "front_template", "前台驗證.bat"), "rb").read()
+    for data in (back, front):
+        assert data.count(LF) == data.count(CRLF) and b"PYTHONUTF8" in data
+    assert b"admin.verify_day" in back and b"access.front_verify" in front
+    guide = open(os.path.join(folder, "deploy", "front_template", "前台使用說明.txt"), encoding="utf-8").read()
+    assert "前台驗證.bat" in guide

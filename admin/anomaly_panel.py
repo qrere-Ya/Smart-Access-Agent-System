@@ -52,7 +52,7 @@ class AnomalyPanel(ctk.CTkFrame):
         for col in self.COLUMNS:                         # 只有「說明」隨視窗伸縮，其餘欄位固定寬度才不會被擠掉
             self.tree.column(col[0], stretch=col[0] == "detail", minwidth=col[2] if col[0] != "detail" else 120)
         box.grid(row=2, column=0, sticky="nsew", padx=(pad, 10), pady=(0, 10))
-        self.tree.bind("<<TreeviewSelect>>", lambda e: self._show_selected())
+        self.tree.bind("<<TreeviewSelect>>", ui_theme.event_only(lambda _e: self._show_selected()))
 
         side = ui_theme.card(self, width=PREVIEW_SIZE[0] + 24)
         side.grid(row=2, column=1, sticky="ns", padx=(0, pad), pady=(0, 10))
@@ -145,13 +145,3 @@ class AnomalyPanel(ctk.CTkFrame):
         else:
             self.notifier.mark_all_read()
         self.refresh()
-
-
-def open_anomaly_window(root, notifier=None, on_mark_read=None):
-    """開啟異常事件視窗並回傳它。"""
-    win = ctk.CTkToplevel(root)
-    win.title("異常事件")
-    win.geometry("1180x700")
-    ui_theme.style_window(win)
-    AnomalyPanel(win, notifier, on_mark_read).pack(fill="both", expand=True)
-    return win

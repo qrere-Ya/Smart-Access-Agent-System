@@ -1,5 +1,5 @@
 """
-schedule_window.py：主選單「日報與晨報」模組的視窗（CustomTkinter）——排程時間設定與立即產生。
+schedule_window.py：主選單「日報與晨報」模組的頁面（CustomTkinter，嵌在後台主視窗裡）——排程時間設定與立即產生。
 
 主要功能：
   - 兩個時間欄（晨報預設 08:30、日報預設 18:00，HH:MM 24 小時制），按「儲存」一次存兩個；
@@ -31,20 +31,16 @@ EXPLAIN = ("後台開著的時候，每分鐘檢查一次。到了設定的時�
            "改完按「儲存」，下一分鐘就生效，不用重開後台。")
 
 
-class ScheduleWindow(ctk.CTkToplevel):
-    """日報與晨報模組視窗：排程時間、立即產生、查看。"""
+class ScheduleView(ctk.CTkFrame):
+    """日報與晨報模組頁（嵌在後台主視窗裡，不另開視窗）：排程時間、立即產生、查看。"""
 
-    def __init__(self, root, digest, morning, on_view=None):
-        super().__init__(root)
+    def __init__(self, master, digest, morning, on_view=None, on_close=None):
+        super().__init__(master, fg_color="transparent", height=1)
         self.runners = {"digest": digest, "morning": morning}
         self._on_view = on_view
-        self.title("日報與晨報")
-        self.geometry("580x680")
-        self.resizable(False, False)
-        ui_theme.style_window(self)
         pad = ui_theme.PAD_LG
         ui_theme.section_title(self, "📰 日報與晨報").pack(anchor="w", padx=pad, pady=(pad, 8))
-        ui_theme.muted_label(self, EXPLAIN, wraplength=520, justify="left").pack(fill="x", padx=pad, pady=(0, 10))
+        ui_theme.muted_label(self, EXPLAIN, wraplength=900, justify="left").pack(fill="x", padx=pad, pady=(0, 10))
 
         self.local_switch = ctk.CTkSwitch(self, text="全本地模式（不連外網：語言模型只用本機、晨報不抓新聞）",
                                           command=self._toggle_local_only)
@@ -88,14 +84,15 @@ class ScheduleWindow(ctk.CTkToplevel):
         bottom.pack(fill="x", padx=pad, pady=(8, pad), side="bottom")
         if on_view is not None:
             ui_theme.primary_button(bottom, "查看日報", lambda: on_view("digest"), width=100).pack(side="left")
-        ui_theme.secondary_button(bottom, "關閉", self.destroy, width=80).pack(side="right")
+        if on_close is not None:
+            ui_theme.secondary_button(bottom, "返回主選單", on_close, width=110).pack(side="right")
         for runner in self.runners.values():
             runner.listeners.append(self._on_done)
         self.bind("<Destroy>", self._on_destroy)
         self._sync_buttons()
 
     def _on_destroy(self, event):
-        if event.widget is self:
+        if event.widget is self or event.widget is getattr(self, "_canvas", None):   # CTkFrame 的事件綁在內部畫布上
             for runner in self.runners.values():
                 if self._on_done in runner.listeners:
                     runner.listeners.remove(self._on_done)
@@ -162,8 +159,3 @@ class ScheduleWindow(ctk.CTkToplevel):
             return
         if self.runners["digest"].start(day):
             self._sync_buttons()
-
-
-def open_schedule_window(root, digest, morning, on_view=None):
-    """開啟日報與晨報模組視窗並回傳它。"""
-    return ScheduleWindow(root, digest, morning, on_view)

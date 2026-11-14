@@ -177,12 +177,16 @@ def register_user(name, gender, emp_id, face_embedding):
     註冊新員工與人臉特徵。姓名或員工編號已存在就拒絕，不覆蓋舊資料。
     回傳 (成功與否, 訊息文字)。
     """
-    conn_db = sqlite3.connect(DB_PATH)
+    # 查重與寫入放在同一個「立即寫入」交易裡：兩個請求同時進來時，後面的會等前面的寫完，再查到已存在
+    # （原本先查、後寫之間沒有鎖，同時送出會讓同一個人被註冊好幾次）
+    conn_db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
+    conn_db.execute("BEGIN IMMEDIATE")
     cursor = conn_db.cursor()
     cursor.execute("SELECT name, employee_id FROM Users WHERE name=? OR employee_id=?", (name, emp_id))
     existing = cursor.fetchone()
 
     if existing is not None:
+        conn_db.execute("ROLLBACK")
         conn_db.close()
         existing_name, existing_emp_id = existing
         if existing_name == name:
@@ -193,10 +197,15 @@ def register_user(name, gender, emp_id, face_embedding):
         print(f"[Database] 拒絕重複註冊: {message}")
         return False, message
 
-    conn_db.execute("INSERT INTO Users (name, gender, employee_id, embedding) VALUES (?, ?, ?, ?)",
-                    (name, gender, emp_id, face_embedding))
-    conn_db.commit()
-    conn_db.close()
+    try:
+        conn_db.execute("INSERT INTO Users (name, gender, employee_id, embedding) VALUES (?, ?, ?, ?)",
+                        (name, gender, emp_id, face_embedding))
+        conn_db.execute("COMMIT")
+    except Exception:
+        conn_db.execute("ROLLBACK")
+        raise
+    finally:
+        conn_db.close()
     print(f"註冊成功: {name} (ID: {emp_id})")
     insert_mock_calendar(emp_id)
     return True, f"註冊成功: {name} (ID: {emp_id})"

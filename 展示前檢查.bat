@@ -9,5 +9,6 @@ if not exist ".venv\Scripts\python.exe" (
 )
 ".venv\Scripts\python.exe" -m admin.preflight
 echo.
+echo 前台也要檢查：請在前台電腦雙擊「前台檢查.bat」（或「展示前台.bat」）。
 echo 看完請按任意鍵關閉。
 pause >nul

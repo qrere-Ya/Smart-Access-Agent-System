@@ -213,12 +213,9 @@ def test_deleted_employees_leave_does_not_break_the_list(panel):
     assert "已刪除員工" in panel.leave_tree.item(row, "values")[0]
 
 
-def test_main_menu_card_opens_the_calendar_window(root, db, monkeypatch):
-    from admin import calendar_panel
+def test_main_menu_card_switches_to_the_calendar_page(root, db):
     from admin.backend_main import BackendManagerApp
 
-    opened = []
-    monkeypatch.setattr(calendar_panel, "open_calendar_window", lambda r: opened.append(r))
     root.deiconify()
     app = BackendManagerApp(root)
     root.update()
@@ -239,7 +236,8 @@ def test_main_menu_card_opens_the_calendar_window(root, db, monkeypatch):
     assert title is not None
     getattr(title, "_label", title).event_generate("<Button-1>", x=5, y=5)   # CTkLabel 的事件綁在內部標籤上
     root.update()
-    assert opened == [root]
+    assert app.page_key == "calendar" and app.calendar_view.winfo_exists()      # 直接換頁，沒有另開視窗
+    assert not [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
     app.teardown()
 
 

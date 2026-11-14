@@ -61,7 +61,7 @@ def test_back_role_dashboard_shows_the_front_link_and_the_event_stream(root, db,
     app = BackendManagerApp(root)
     root.withdraw()
     app.open_dashboard()
-    app.dash_win.update()
+    app.dash_page.update()
     assert not hasattr(app, "face_btn") and app.link_wanted is True
     assert "還沒收到前台回報" in app.link_headline.cget("text")                    # 沒收過心跳
 
@@ -130,7 +130,7 @@ def test_standalone_dashboard_keeps_the_face_switch_and_does_not_start_a_link_se
     app = BackendManagerApp(root)
     root.withdraw()
     app.open_dashboard()
-    app.dash_win.update()
+    app.dash_page.update()
     assert app.link_wanted is False and hasattr(app, "face_btn") and started == []
     app.teardown()
 
@@ -149,7 +149,7 @@ def test_the_back_card_stops_and_resumes_the_front_recognition_with_a_confirmati
     app = BackendManagerApp(root)
     root.withdraw()
     app.open_dashboard()
-    app.dash_win.update()
+    app.dash_page.update()
     assert "停止前台辨識" in app.face_control_btn.cget("text") and front_control.recognition_enabled() is True
     app.face_control_btn.invoke()                                                    # 第一次：只進入確認
     assert front_control.recognition_enabled() is True and "確定停止" in app.face_control_btn.cget("text")
@@ -174,7 +174,7 @@ def test_the_single_machine_dashboard_has_no_front_recognition_button(root, db, 
     app = BackendManagerApp(root)
     root.withdraw()
     app.open_dashboard()
-    app.dash_win.update()
+    app.dash_page.update()
     assert not hasattr(app, "face_control_btn")
     app.teardown()
 
@@ -198,8 +198,8 @@ def test_back_card_front_recognition_control_screenshot(root, db, monkeypatch, t
     app = BackendManagerApp(root)
     root.withdraw()
     app.open_dashboard()
-    app.dash_win.attributes("-topmost", True)
-    app.dash_win.update()
+    root.attributes("-topmost", True)
+    app.dash_page.update()
     app._refresh_link_card()
-    assert screenshot(app.dash_win, "後台_前台辨識控制")
+    assert screenshot(root, "後台_前台辨識控制")
     app.teardown()

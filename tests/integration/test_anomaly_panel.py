@@ -178,8 +178,8 @@ def test_the_notification_bar_without_a_handler_has_no_view_button(root, db, not
     bar.stop()
 
 
-def test_anomaly_window_screenshot(root, db, notifier, evidence_photo, screenshot, appearance):
-    from admin import anomaly_panel
+def test_anomaly_page_screenshot(root, db, notifier, evidence_photo, screenshot, appearance):
+    from admin.backend_main import BackendManagerApp
     from shared import database_mgr as dbm
 
     notifier.poll()
@@ -188,10 +188,14 @@ def test_anomaly_window_screenshot(root, db, notifier, evidence_photo, screensho
     dbm.add_anomaly_event("login_failed", None, "登入失敗")
     for mode in ("light", "dark"):
         appearance(mode)
-        win = anomaly_panel.open_anomaly_window(root, notifier)
+        root.deiconify()
+        app = BackendManagerApp(root)
+        root.geometry("1280x820+20+10")
+        app.notification_bar.notifier = notifier
+        app.open_anomalies()
         root.update()
-        panel = win.winfo_children()[0]
+        panel = app.anomaly_view
         panel.tree.selection_set(panel.tree.get_children()[2])
         root.update()
-        assert screenshot(win, f"後台_異常事件_{mode}")
-        win.destroy()
+        assert screenshot(root, f"後台_異常事件_{mode}")
+        app.teardown()

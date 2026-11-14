@@ -54,3 +54,36 @@ def test_apply_theme_rejects_unknown_mode():
 
 def test_zebra_tags_alternate():
     assert t.zebra_tags(0) != t.zebra_tags(1)
+
+
+# --- 外觀選擇的記憶（後台右上角的淺色／深色／系統按鈕） ---
+
+def test_the_chosen_mode_is_remembered_and_a_bad_file_falls_back(tmp_path, monkeypatch):
+    from shared import paths
+
+    monkeypatch.setattr(paths, "RUNTIME_DIR", str(tmp_path))
+    assert t.load_mode() == "system"                                  # 沒有檔案
+    for mode in ("light", "dark", "system"):
+        t.save_mode(mode)
+        assert t.load_mode() == mode
+    (tmp_path / "ui_mode.json").write_text("{壞掉", encoding="utf-8")
+    assert t.load_mode() == "system"
+    (tmp_path / "ui_mode.json").write_text('{"mode": "rainbow"}', encoding="utf-8")
+    assert t.load_mode() == "system" and t.load_mode("dark") == "dark"
+    with pytest.raises(ValueError):
+        t.save_mode("rainbow")
+
+
+def test_every_mode_choice_has_a_label_and_a_valid_mode():
+    assert [m for m, _label in t.MODE_CHOICES] == ["light", "dark", "system"]
+    assert all(label for _m, label in t.MODE_CHOICES)
+
+
+def test_event_only_calls_the_function_for_a_real_event_and_ignores_a_call_without_one():
+    calls = []
+    handler = t.event_only(lambda e: calls.append(e) or "done")
+    assert handler() is None and calls == []                 # 不帶事件（tkinter 偶爾會這樣呼叫）：忽略，不出錯
+    assert handler("event") == "done" and calls == ["event"]
+    with_default = t.event_only(lambda _e, k="x": calls.append(k))   # 搭配預設參數的寫法也要能用
+    with_default("event")
+    assert calls[-1] == "x"

@@ -14,7 +14,6 @@ service_manager.py：背景服務管理層。
   - rag.chat_window、access.terminal_app、access.web_server：以 python -m 的方式當成子行程啟動
 """
 import os
-import re
 import sys
 import shutil
 import socket
@@ -22,7 +21,7 @@ import subprocess
 import threading
 import time
 
-from shared import auth, lan_discovery, paths, role_config
+from shared import auth, lan_discovery, paths, phone_address, role_config
 
 _PROJECT_ROOT = paths.PROJECT_ROOT
 
@@ -374,80 +373,21 @@ def stop_all_services():
     stop_service("link_server")
 
 
-# --- 本機 IP 偵測：QR Code 網址使用 ---
+# --- 本機 IP 偵測：QR Code 網址使用（邏輯在 shared.phone_address，這裡只是薄薄一層） ---
 def _find_wifi_direct_adapter_ip():
     """用 `ipconfig /all` 找出描述含「Wi-Fi Direct」的網卡並回傳它的 IPv4，找不到或出錯回傳 None。"""
-    try:
-        result = subprocess.run(["ipconfig", "/all"], capture_output=True, timeout=5)  # noqa: S607
-        raw = result.stdout
-        # 繁體中文 Windows 常用 cp950，依序嘗試幾種編碼
-        output = None
-        for enc in ("cp950", "utf-8", "big5"):
-            try:
-                output = raw.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
-        if output is None:
-            output = raw.decode("utf-8", errors="ignore")
+    return phone_address.find_wifi_direct_ip()
 
-        # 依網卡標題行切成區塊
-        blocks, current = [], []
-        for line in output.splitlines():
-            if line and not line[0].isspace():
-                if current:
-                    blocks.append("\n".join(current))
-                current = [line]
-            else:
-                current.append(line)
-        if current:
-            blocks.append("\n".join(current))
 
-        for block in blocks:
-            if "Wi-Fi Direct" in block or "WiFi Direct" in block:
-                # 同一張網卡可能列出兩組 IPv4，實際使用的是最後一組
-                matches = re.findall(r"IPv4.*?:\s*([\d.]+)", block)
-                if matches:
-                    return matches[-1]
-    except Exception as e:
-        print(f"[WiFi Direct IP Discovery Error] {e}")
-    return None
+def get_phone_addresses():
+    """這台電腦所有可當 QR 註冊通道的位址 [{ip, adapter, kind, label}]，最適合手機的排最前面（沒有網路是空清單）。"""
+    return phone_address.list_addresses()
 
 
 def get_local_ip_offline():
-    """取得本機區網 IPv4：優先 Wi-Fi Direct 網卡，其次虛擬熱點網段，再其次一般私有網段。"""
+    """最適合手機的本機區網 IPv4：熱點與區網（含 172.16/12）優先、VPN 排最後；完全沒有位址回 127.0.0.1。"""
     try:
-        wifi_direct_ip = _find_wifi_direct_adapter_ip()
-        if wifi_direct_ip:
-            return wifi_direct_ip
-
-        hostname = socket.gethostname()
-        _, _, ip_list = socket.gethostbyname_ex(hostname)
-
-        if not ip_list:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                s.connect(('8.8.8.8', 80))
-                ip = s.getsockname()[0]
-                s.close()
-                return ip
-            except Exception:
-                return '127.0.0.1'
-
-        priority_ips = ['192.168.137.1', '192.168.5.1']
-        for pip in priority_ips:
-            if pip in ip_list:
-                return pip
-
-        private_ips = [ip for ip in ip_list
-                       if ip != '127.0.0.1' and (ip.startswith('192.168.') or ip.startswith('10.'))]
-        if private_ips:
-            gateway_like = [ip for ip in private_ips if ip.endswith('.1')]
-            return gateway_like[0] if gateway_like else private_ips[0]
-
-        for ip in ip_list:
-            if ip != '127.0.0.1':
-                return ip
-    except Exception as e:
+        return phone_address.best_ip() or "127.0.0.1"
+    except Exception as e:  # noqa: BLE001
         print(f"[IP Discovery Error] {e}")
-    return '127.0.0.1'
+        return "127.0.0.1"

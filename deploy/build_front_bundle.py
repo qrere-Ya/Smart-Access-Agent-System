@@ -27,7 +27,7 @@ from shared import paths
 
 BUNDLE_NAME = "SmartAccessFront"
 ENTRY_MODULES = ("access.terminal_app", "access.front_agent", "access.front_dashboard", "access.front_check",
-                 "shared.role_config")
+                 "access.front_verify", "shared.role_config")
 PROJECT_PACKAGES = ("access", "shared")           # 前台允許打包的專案套件（不含 admin、rag）
 MODEL_FILES = ("arcface_r100_v1.onnx", "MiniFASNetV2.onnx",
                "antispoof_mobilenetv3_antispoof_finetuned_best_sim.onnx", "yolov8s.pt")
@@ -51,6 +51,9 @@ README = """Smart Access 前台安裝包
   - 後台先開，再雙擊桌面「啟動前台門禁」（只開儀表板，沒有黑色視窗；
     連線代理在背景跟著開，人臉辨識要按儀表板右上角「啟動人臉辨識」）。
   - 完整的操作說明（雙螢幕、F11、怎麼停止、警示聲音、記錄檔）看資料夾裡的「前台使用說明.txt」。
+  - 展示當天：雙擊「展示前台.bat」（先做前台檢查，再問要不要啟動前台）。
+  - 驗證當天：雙擊「前台驗證.bat」（自動收集檢查結果、螢幕、攝影機、記錄檔並請你聽語音與警示音），
+    報告用隨身碟複製到後台電腦。
   - 出問題先雙擊「前台檢查.bat」。防火牆要重做：右鍵「設定前台網路.bat」→ 以系統管理員身分執行。
 
 限制：

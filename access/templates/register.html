@@ -42,7 +42,10 @@
             }
         };
 
+        let uploading = false;           // 註冊要幾秒（伺服器在算人臉特徵），送出期間不能再按，否則同一個人會送出好幾次
+
         async function uploadData() {
+            if (uploading) { return; }
             const name = document.getElementById('emp_name').value;
             const id = document.getElementById('emp_id').value;
             const file = cameraInput.files[0];
@@ -61,13 +64,24 @@
             formData.append('gender', gender);
             formData.append('token', token); // 夾帶 Token 送往後端驗證
 
-            const response = await fetch('/api/register', {
-                method: 'POST',
-                body: formData
-            });
-            const result = await response.json();
-            alert(result.message);
-            if(result.status === "success") { location.reload(); }
+            uploading = true;
+            submitBtn.disabled = true;
+            submitBtn.textContent = "處理中，請稍候…";
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                alert(result.message);
+                if(result.status === "success") { location.reload(); }
+            } catch (e) {
+                alert("連線失敗，請確認手機與電腦在同一個網路後再試一次。");
+            } finally {
+                uploading = false;
+                submitBtn.disabled = false;
+                submitBtn.textContent = "確認註冊";
+            }
         }
     </script>
 </body>

@@ -178,3 +178,25 @@ def test_init_db_upgrades_an_old_users_table(tmp_path, monkeypatch):
     assert con.execute("SELECT role, is_active FROM Users").fetchone() == ("employee", 1)
     con.close()
     assert dbm.recognize_face(np.zeros(4, dtype=np.float32))[0] == "舊員工"
+
+
+def test_simultaneous_registrations_of_the_same_person_create_exactly_one_user(db):
+    """回歸：查重與寫入之間沒有鎖時，同時送出的請求都能通過檢查，同一個人會被註冊好幾次（手機連按送出鍵）。"""
+    import threading
+
+    start = threading.Barrier(8)
+    results = []
+
+    def register():
+        start.wait()
+        results.append(dbm.register_user("王小明", "M", "E001", np.ones(4, dtype=np.float32))[0])
+
+    threads = [threading.Thread(target=register) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM Users").fetchone()[0] == 1
+    con.close()
+    assert results.count(True) == 1 and results.count(False) == 7

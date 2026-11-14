@@ -1,11 +1,11 @@
 """
-digest_window.py：日報與晨報的背景產生，以及日報的查看視窗（CustomTkinter）。
+digest_window.py：日報與晨報的背景產生，以及日報頁（CustomTkinter，嵌在後台主視窗裡）。
 
 主要功能：
   - DigestRunner：在背景執行緒產生報告（查資料庫、必要時呼叫雲端模型、抓新聞），完成後在主執行緒回呼；
     tick() 由後台每分鐘呼叫一次，依 pending 判斷該不該產生；失敗 10 分鐘後才會再試，不會狂重試
     digest_runner（傍晚日報，預設 18:00）與 morning_runner（早上晨報，預設 08:30）是兩個設定好的 DigestRunner
-  - open_report_window：只看日報的視窗，聊天室樣式、只有助理的訊息、沒有輸入框
+  - ReportView：只看日報的頁面，聊天室樣式、只有助理的訊息、沒有輸入框
     （AI 摘要標示「數字與人名已核對」，沒有摘要就只顯示明細）；視窗可放大、訊息寬度跟著變，滾輪在訊息上也能捲動；
     文字裡的網址可以點（只有 https 公開網域，用預設瀏覽器開）；排程自動產生新日報時會彈出
   - 晨報後台不顯示：產生後由前台代理同步、在前台的螢幕上顯示（後台只留排程時間與立即產生）
@@ -136,18 +136,14 @@ def digest_text(digest) -> str:
     return "\n".join(parts)
 
 
-class ReportWindow(ctk.CTkToplevel):
-    """查看視窗：只有日報，一則助理訊息（晨報在前台螢幕顯示，後台不看）。"""
+class ReportView(ctk.CTkFrame):
+    """日報頁（嵌在後台主視窗裡，不另開視窗）：只有日報，一則助理訊息（晨報在前台螢幕顯示，後台不看）。"""
 
     TABS = (("digest", "📋 日報"),)
 
-    def __init__(self, root, digest, morning=None, tab="digest"):
-        super().__init__(root)
+    def __init__(self, master, digest, morning=None, tab="digest", on_close=None):
+        super().__init__(master, fg_color="transparent", height=1)
         self.runners = {"digest": digest}
-        self.title("日報")
-        self.geometry("960x860")
-        self.minsize(640, 520)
-        ui_theme.style_window(self)
         pad = ui_theme.PAD_LG
         self.tabs = ctk.CTkTabview(self)
         self.tabs.pack(fill="both", expand=True, padx=pad, pady=(pad, 8))
@@ -161,7 +157,8 @@ class ReportWindow(ctk.CTkToplevel):
         self.status.pack(fill="x", padx=pad)
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=pad, pady=(6, pad))
-        ui_theme.secondary_button(bottom, "關閉", self.destroy, width=80).pack(side="right")
+        if on_close is not None:
+            ui_theme.secondary_button(bottom, "返回主選單", on_close, width=110).pack(side="right")
         for runner in self.runners.values():
             runner.listeners.append(self._on_done)
         self._last_width = 0
@@ -170,24 +167,27 @@ class ReportWindow(ctk.CTkToplevel):
         self.show(tab)
 
     def show(self, kind="digest"):
-        """重畫日報內容並拉到最前面（kind 保留給舊呼叫端，只有日報）。"""
+        """重畫日報內容（kind 保留給舊呼叫端，只有日報）。"""
         self.bubbles["digest"].set_text(digest_text(digest_store.load()))
         for bubble in self.bubbles.values():
             bubble.linkify(lambda url: link_check.link_problem(url) == "")
         self.tabs.set(dict(self.TABS)["digest"])
-        self.lift()
 
     def _on_resize(self, event):
-        """視窗大小改變時，訊息寬度跟著變（寬度沒變就略過，避免重排又觸發自己）。"""
-        if event.widget is not self or event.width == self._last_width:
+        """頁面大小改變時，訊息寬度跟著變（寬度沒變就略過，避免重排又觸發自己）。"""
+        if not self._is_me(event.widget) or event.width == self._last_width:
             return
         self._last_width = event.width
         width = max(BUBBLE_MIN_WIDTH, event.width - BUBBLE_MARGIN)
         for bubble in self.bubbles.values():
             bubble.set_width(width)
 
+    def _is_me(self, widget):
+        """CTkFrame 的事件綁在內部畫布上，事件的 widget 可能是畫布而不是框架本身。"""
+        return widget is self or widget is getattr(self, "_canvas", None)
+
     def _on_destroy(self, event):
-        if event.widget is self:
+        if self._is_me(event.widget):
             for runner in self.runners.values():
                 if self._on_done in runner.listeners:
                     runner.listeners.remove(self._on_done)
@@ -195,8 +195,3 @@ class ReportWindow(ctk.CTkToplevel):
     def _on_done(self, runner, report, error):
         if self.winfo_exists() and report:
             self.show()
-
-
-def open_report_window(root, digest, morning=None, tab="digest"):
-    """開啟日報查看視窗並回傳它（morning、tab 參數保留給舊呼叫端）。"""
-    return ReportWindow(root, digest, morning, tab)

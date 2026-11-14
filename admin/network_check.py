@@ -6,7 +6,7 @@ network_check.py：後台網路自我檢查——兩台直連前跑一次，逐�
   - 有沒有「網路線」那張網卡的 169.254.x.x 位址（Wi-Fi、藍牙、VPN 的不算）
   - 連線服務（TCP 8770）與自動尋找（UDP 8772）有沒有人在聽，聽的位址是不是網路線那一段
   - Windows 防火牆規則是否存在、已啟用、放行、而且只放行 169.254.0.0/16
-    （讀規則不需要系統管理員，讀不到就警告）
+    （讀規則不需要系統管理員，讀不到就警告）；另外檢查手機連 QR 註冊頁（TCP 5000）的規則，缺了只警告
   - 網路線那張網卡的網路類別（公用／私人）會不會讓規則不套用
   - 每項回報 OK／WARN／FAIL，有 FAIL 時結束碼為 1；啟動：python -m admin.network_check 或 deploy\\檢查後台網路.bat
 
@@ -29,6 +29,9 @@ RULE_PREFIX = "SmartAccess"
 # (規則顯示名稱, 協定, 埠)：必須和 deploy\setup_back_network.ps1 的規則一致（測試會核對）
 SERVICE_RULE = ("SmartAccess 後台連線（只允許網路線直連）", "TCP")
 DISCOVERY_RULE = ("SmartAccess 後台尋找回應（只允許網路線直連）", "UDP")
+QR_RULE = ("SmartAccess 後台 QR 註冊（區網手機）", "TCP")      # 手機掃 QR 註冊用，只放行和這台同網段的位址
+QR_PORT = 5000
+_PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 _RULES_QUERY = (
     "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
@@ -101,6 +104,22 @@ def remote_scope(value):
     except ValueError:
         return "other"
     return "link_local" if nets == {lan_discovery.LINK_LOCAL_NET} else "other"
+
+
+def qr_scope(value):
+    """QR 註冊規則的遠端位址欄位 → "any"（任何來源）、"local_subnet"（LocalSubnet＝同網段）、
+    "private"（只放行 10/8、172.16/12、192.168/16 內的範圍）或 "other"。"""
+    parts = [p.strip() for p in str(value or "").split(",") if p.strip()]
+    if not parts or any(p.lower() in ("any", "*") for p in parts):
+        return "any"
+    if {p.lower() for p in parts} == {"localsubnet"}:
+        return "local_subnet"
+    try:
+        nets = [ipaddress.ip_network(p, strict=False) for p in parts]
+    except ValueError:
+        return "other"
+    private = all(net.version == 4 and any(net.subnet_of(p) for p in _PRIVATE_NETS) for net in nets)
+    return "private" if private else "other"
 
 
 def profile_covers(profile, category):
@@ -196,6 +215,32 @@ def check_firewall(rules, port=role_config.DEFAULT_BACK_PORT, discovery_port=lan
     return results
 
 
+def check_qr_rule(rules, port=QR_PORT):
+    """QR 註冊規則（手機連 TCP 5000）：存在、啟用、入站允許，而且不是「任何來源」；缺了只警告（不影響雙機連線）。"""
+    if rules is None:
+        return []                                  # 讀不到規則時 check_firewall 已經警告過
+    name, protocol = QR_RULE
+    rule = {str(r.get("Name")): r for r in rules}.get(name)
+    fix = "右鍵「設定後台網路.bat」→ 以系統管理員身分執行"
+    if rule is None:
+        return [("WARN", f"缺防火牆規則「{name}」：手機可能連不到 QR 註冊頁（{protocol} {port}）；{fix}")]
+    problems = []
+    if str(rule.get("Enabled")).lower() != "true":
+        problems.append("沒有啟用")
+    if str(rule.get("Action")).lower() != "allow" or str(rule.get("Direction")).lower() != "inbound":
+        problems.append("不是「入站允許」")
+    if str(rule.get("Protocol")).upper() != protocol or str(rule.get("LocalPort")) != str(port):
+        problems.append(f"協定或埠不是 {protocol} {port}")
+    scope = qr_scope(rule.get("RemoteAddress"))
+    if scope == "any":
+        problems.append("允許任何來源（應該只放行同網段的手機 LocalSubnet）")
+    elif scope not in ("local_subnet", "private"):
+        problems.append(f"放行範圍不是區網（{rule.get('RemoteAddress')}）")
+    if problems:
+        return [("WARN", f"防火牆規則「{name}」：{'、'.join(problems)}；{fix}")]
+    return [("OK", f"防火牆規則「{name}」：{protocol} {port}，只放行區網（手機要和這台同一個網路）")]
+
+
 def check_category(profiles, rules, adapter_names):
     """網路線網卡的網路類別；沒有插線的直連網路多半被 Windows 當成「公用」，規則要涵蓋它才會生效。"""
     if profiles is None:
@@ -237,6 +282,7 @@ def run_checks():
     else:
         results += check_listeners(listeners, settings.back_port)
     results += check_firewall(rules, settings.back_port)
+    results += check_qr_rule(rules)
     results += check_category(_safe("網路類別", read_network_profiles), rules,
                               {name for name, _a, wired in details if wired})
     return results

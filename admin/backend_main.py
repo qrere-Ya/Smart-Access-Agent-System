@@ -2,19 +2,21 @@
 backend_main.py：門禁系統管理後台主程式（CustomTkinter，套用 shared/ui_theme）。
 
 主要功能：
-  - 主選單：五張功能卡片、即時時鐘、底部 CPU/RAM 狀態列與異常通知
+  - 單一主視窗（固定大小、可縮放）：頂部品牌與時鐘、淺色／深色／跟隨系統按鈕（記在 runtime/ui_mode.json）、
+    中間內容區、底部 CPU/RAM 狀態列與異常通知；功能不再另開彈出視窗，按卡片直接換成該功能頁，頁首「返回主選單」回來
+  - 主選單：六張功能卡片
   - 營運狀態與尾隨監控：今日打卡統計、異常件數、人臉辨識終端機開關與即時輸出；
     雙機的後台角色改顯示「前台連線」（燈號、最後回報時間、鏡頭與辨識狀態）與前台事件串流，並自動啟動連線服務
   - 員工帳號管理（account_panel）、出勤報告與假日請假（calendar_panel，內嵌 report_panel）
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
-  - 企業知識庫與出勤查詢：另開聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
+  - 企業知識庫與出勤查詢：模型很大，另開獨立行程的聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
   - 登入保護：啟動先用人臉登入（login_window），閒置 15 分鐘或按「登出」就回到登入畫面
   整個行程只建立一個主視窗，登入畫面與主畫面共用。只負責畫面，實際工作轉發給其他模組。
 
 串接模組：
   - service_manager：啟動、停止、監控背景服務與 IP 偵測
   - login_window、auth：人臉登入、工作階段與閒置逾時
-  - account_panel、calendar_panel：各功能視窗
+  - account_panel、calendar_panel、anomaly_panel、digest_window、schedule_window：各功能頁（嵌在內容區）
   - console_panel：內建終端機文字框；notification_bar：異常通知
   - dashboard_stats：儀表板統計查詢
   - ui_theme：色彩、字型、元件與對話框
@@ -24,6 +26,8 @@ import datetime
 import gc
 import io
 import os
+import queue
+import threading
 import time
 import tkinter as tk
 
@@ -44,11 +48,14 @@ from admin import (
     schedule_window,
     service_manager,
 )
-from shared import auth, front_control, paths, ui_theme
+from shared import auth, front_control, paths, phone_address, ui_theme
 from shared import database_mgr as db
 
 ANOMALY_DIR = paths.ANOMALY_DIR
 NEWLINE = chr(10)
+WINDOW_MAX = (1280, 820)      # 主視窗的統一大小（螢幕放不下才縮小）
+WINDOW_MIN = (1000, 640)
+NOTICE_SECONDS = 8            # 底部提示訊息顯示幾秒
 
 
 class BackendManagerApp:
@@ -61,10 +68,13 @@ class BackendManagerApp:
         self._last_touch = 0.0
         self._alive = True            # teardown 之後，定時更新的函式不再動舊畫面
         self.root.title("智慧門禁 - 戰情控制中心")
-        self.root.geometry("700x680")
-        self.root.minsize(640, 640)
+        self._place_window()
         self.root.resizable(True, True)
         ui_theme.style_window(self.root)
+        self.page_key = None          # 目前顯示的頁面："home"＝主選單，其餘是功能頁
+        self.page = None              # 目前功能頁的外框（含頁首與內容）；主選單時是 None
+        self._page_args = None
+        self._notice_job = None
 
         # 兩個服務的狀態文字，視窗關閉後仍保留，重開視窗時再同步實際狀態
         self.face_status_var = tk.StringVar(master=root, value="⚪ 人臉辨識未啟動")
@@ -77,7 +87,8 @@ class BackendManagerApp:
         self.link_note = ""
         self._link_lines = []
 
-        self._build_main_menu()
+        self._build_shell()
+        self.show_home()
         self._start_session_watch()
         if self.link_wanted:
             self._tick_link_service()
@@ -85,20 +96,37 @@ class BackendManagerApp:
         # 關閉視窗時詢問是否一併停止背景服務
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
 
-    def _build_main_menu(self):
-        """建立主選單：標題列、功能卡片牆、底部狀態列。"""
+    def _place_window(self):
+        """統一的主視窗大小，置中；螢幕比預設小就縮到放得下。"""
+        screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        width, height = min(WINDOW_MAX[0], screen_w - 40), min(WINDOW_MAX[1], screen_h - 100)
+        self.root.geometry(f"{width}x{height}+{(screen_w - width) // 2}+{max(0, (screen_h - height) // 2 - 20)}")
+        self.root.minsize(min(WINDOW_MIN[0], width), min(WINDOW_MIN[1], height))
+
+    def _build_shell(self):
+        """建立固定不變的外框：頂部標題列、底部狀態列、中間內容區。切換功能頁只換內容區。"""
+        self._build_header()
+        ctk.CTkFrame(self.root, height=1, fg_color=ui_theme.pair("border")).pack(fill="x", padx=25)
+        self._build_status_footer()                      # 先 pack 底部，內容區才不會把它擠掉
+        self.content = ctk.CTkFrame(self.root, fg_color="transparent", height=1)
+        self.content.pack(fill="both", expand=True)
+
+    def _build_header(self):
+        """標題列：品牌與狀態徽章、外觀按鈕、時鐘、登入者與登出。"""
         header = ctk.CTkFrame(self.root, fg_color="transparent", height=1)
-        header.pack(fill="x", padx=25, pady=(20, 10))
+        header.pack(fill="x", padx=25, pady=(16, 10))
 
         brand_col = ctk.CTkFrame(header, fg_color="transparent", height=1)
         brand_col.pack(side="left")
         ctk.CTkLabel(brand_col, text="🔐 Smart Access Hub", font=ui_theme.font(ui_theme.FONT_SIZE_HERO, bold=True),
                      text_color=ui_theme.pair("text"), anchor="w").pack(anchor="w")
         ui_theme.muted_label(brand_col, "邊緣運算門禁後臺系統").pack(anchor="w", pady=(2, 0))
-        ui_theme.status_badge(brand_col, "● 系統運作中", "success").pack(anchor="w", pady=(6, 0))
-        if self.link_wanted:      # 雙機後台：主選單就看得到前台有沒有連上，不用點進營運狀態頁
-            self.front_badge = ui_theme.status_badge(brand_col, "● 前台未連線", "neutral")
-            self.front_badge.pack(anchor="w", pady=(4, 0))
+        badges = ctk.CTkFrame(brand_col, fg_color="transparent", height=1)
+        badges.pack(anchor="w", pady=(6, 0))
+        ui_theme.status_badge(badges, "● 系統運作中", "success").pack(side="left")
+        if self.link_wanted:      # 雙機後台：標題列就看得到前台有沒有連上，不用點進營運狀態頁
+            self.front_badge = ui_theme.status_badge(badges, "● 前台未連線", "neutral")
+            self.front_badge.pack(side="left", padx=(8, 0))
             self._refresh_front_badge()
 
         clock_col = ctk.CTkFrame(header, fg_color="transparent", height=1)
@@ -115,12 +143,51 @@ class BackendManagerApp:
             ctk.CTkLabel(who, text=f"👤 {self.session.admin_name}", font=ui_theme.font(ui_theme.FONT_SIZE_SMALL),
                          text_color=ui_theme.pair("info")).pack(side="left")
             ui_theme.secondary_button(who, "登出", self.logout, width=56, height=26).pack(side="left", padx=(8, 0))
+
+        mode_col = ctk.CTkFrame(header, fg_color="transparent", height=1)
+        mode_col.pack(side="right", padx=(0, 30))
+        ui_theme.muted_label(mode_col, "外觀").pack(anchor="e")
+        labels = [label for _mode, label in ui_theme.MODE_CHOICES]
+        self.mode_buttons = ctk.CTkSegmentedButton(
+            mode_col, values=labels, command=self._on_mode_choice, font=ui_theme.font(ui_theme.FONT_SIZE_SMALL),
+            selected_color=ui_theme.pair("primary"), selected_hover_color=ui_theme.pair("primary_hover"),
+            unselected_color=ui_theme.pair("secondary"), unselected_hover_color=ui_theme.pair("secondary_hover"),
+            text_color=ui_theme.pair("on_secondary"))
+        self.mode_buttons.pack(anchor="e", pady=(2, 0))
+        self.mode_buttons.set(dict(ui_theme.MODE_CHOICES)[ui_theme.load_mode()])
         self._tick_clock()
 
-        ctk.CTkFrame(self.root, height=1, fg_color=ui_theme.pair("border")).pack(fill="x", padx=25)
-        ui_theme.muted_label(self.root, "功能模組").pack(fill="x", padx=25, pady=(12, 4))
+    def _on_mode_choice(self, label):
+        """按下淺色／深色／系統：立刻換外觀並記住；目前頁面重建一次，表格等元件才會跟著換色。"""
+        mode = next((m for m, text in ui_theme.MODE_CHOICES if text == label), None)
+        if mode is None:
+            return
+        ctk.set_appearance_mode(mode)
+        ui_theme.save_mode(mode)
+        ui_theme.style_window(self.root)
+        self._rebuild_page()
 
-        card_wall = ctk.CTkFrame(self.root, fg_color="transparent", height=1)
+    # --- 頁面：主選單與各功能頁都畫在同一個內容區 ---
+    def _clear_page(self):
+        """清掉內容區現有的畫面（主選單或功能頁）。"""
+        self.root.update_idletasks()      # 先跑完閒置時排的重畫，銷毀後才不會對已不存在的元件重畫而出錯
+        for child in self.content.winfo_children():
+            child.destroy()
+        self.page = None
+
+    def _rebuild_page(self):
+        """依目前頁面重畫（換外觀後用）。"""
+        if self.page_key in (None, "home") or self._page_args is None:
+            self.show_home()
+        else:
+            self._open_page(self.page_key, *self._page_args)
+
+    def show_home(self):
+        """回到主選單：功能卡片牆。"""
+        self._clear_page()
+        self.page_key, self._page_args = "home", None
+        ui_theme.muted_label(self.content, "功能模組").pack(fill="x", padx=25, pady=(12, 4))
+        card_wall = ctk.CTkFrame(self.content, fg_color="transparent", height=1)
         card_wall.pack(fill="both", expand=True, padx=15, pady=(0, 5))
         card_wall.columnconfigure((0, 1), weight=1, uniform="cards")
         card_wall.rowconfigure((0, 1, 2), weight=1, uniform="cards")
@@ -130,10 +197,10 @@ class BackendManagerApp:
             ("📊", "營運狀態與尾隨監控", "今日打卡統計、安全警報、人臉辨識即時輸出", "success", self.open_dashboard),
             ("👤", "員工帳號管理", "列出、停用、啟用、刪除員工帳號與角色", "info", self.open_account_admin),
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", "warning", self.open_qr_registration),
-            ("🤖", "企業知識庫與出勤查詢", "用聊天查公司文件與法規、考勤紀錄、異常事件", "primary",
+            ("🤖", "企業知識庫與出勤查詢", "用聊天查公司文件與法規、考勤紀錄、異常事件（模型另開獨立視窗）", "primary",
              self.open_assistant_window),
             ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
-             lambda: calendar_panel.open_calendar_window(self.root)),
+             self.open_calendar),
             ("📰", "日報與晨報", "設定每天自動產生的時間、立即產生、查看每日出勤日報；科技早報送到前台螢幕", "info",
              self.open_schedule),
         ]
@@ -141,26 +208,54 @@ class BackendManagerApp:
             row, col = divmod(idx, 2)
             self._create_module_card(card_wall, icon, title, desc, accent, cmd, row, col)
 
-        self._build_status_footer()
+    def _open_page(self, key, title, build):
+        """切換到功能頁：頁首有「返回主選單」與標題，下方是 build(body) 畫的內容；回傳內容區的外框。"""
+        self._clear_page()
+        self.page_key, self._page_args = key, (title, build)
+        page = ctk.CTkFrame(self.content, fg_color="transparent", height=1)
+        page.pack(fill="both", expand=True)
+        bar = ctk.CTkFrame(page, fg_color="transparent", height=1)
+        bar.pack(fill="x", padx=20, pady=(10, 4))
+        ui_theme.secondary_button(bar, "← 返回主選單", self.show_home, width=120, height=32).pack(side="left")
+        ctk.CTkLabel(bar, text=title, font=ui_theme.font(ui_theme.FONT_SIZE_TITLE, bold=True),
+                     text_color=ui_theme.pair("text")).pack(side="left", padx=16)
+        body = ctk.CTkFrame(page, fg_color="transparent", height=1)
+        body.pack(fill="both", expand=True)
+        self.page = page
+        build(body)
+        return body
+
+    def notice(self, text, seconds=NOTICE_SECONDS):
+        """底部狀態列顯示一則短暫提示（取代彈出訊息）。"""
+        if not self._alive or not self.root.winfo_exists():
+            return
+        self.notice_var.set(text)
+        if self._notice_job is not None:
+            self.root.after_cancel(self._notice_job)
+        self._notice_job = self.root.after(int(seconds * 1000), lambda: self.notice_var.set(""))
 
     def _create_module_card(self, master, icon, title, desc, accent, cmd, row, col):
         """建立一張整張可點擊的功能卡片：左邊圖示色塊，右邊標題與說明；滑鼠移入時亮起並換成強調色邊框。"""
         card = ui_theme.card(master, height=108)
         card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
         card.pack_propagate(False)
-        ctk.CTkLabel(card, text=icon, width=44, height=44, corner_radius=10, fg_color=ui_theme.pair(accent),
-                     font=("Segoe UI Emoji", 20), text_color=ui_theme.pair("on_status")).pack(
-            side="left", anchor="n", padx=(14, 10), pady=16)
+        ctk.CTkLabel(card, text=icon, width=56, height=56, corner_radius=12, fg_color=ui_theme.pair(accent),
+                     font=("Segoe UI Emoji", 26), text_color=ui_theme.pair("on_status")).pack(
+            side="left", padx=(22, 16))
         text_col = ctk.CTkFrame(card, fg_color="transparent", height=1)
-        text_col.pack(side="left", fill="both", expand=True, padx=(0, 10), pady=14)
-        ctk.CTkLabel(text_col, text=title, font=ui_theme.font(ui_theme.FONT_SIZE_INPUT, bold=True),
+        text_col.pack(side="left", fill="x", expand=True, padx=(0, 16))      # 不 fill y：文字在卡片裡垂直置中
+        ctk.CTkLabel(text_col, text=title, font=ui_theme.font(ui_theme.FONT_SIZE_TITLE, bold=True),
                      text_color=ui_theme.pair("text"), anchor="w").pack(anchor="w")
-        ui_theme.muted_label(text_col, desc, wraplength=210, justify="left").pack(anchor="w", pady=(2, 0))
+        ui_theme.muted_label(text_col, desc, wraplength=440, justify="left").pack(anchor="w", pady=(4, 0))
 
         def on_enter(_event=None):
+            if not card.winfo_exists():       # 換頁銷毀卡片時，虛擬螢幕會補送進出事件，這時不要再動已不存在的卡片
+                return
             card.configure(fg_color=ui_theme.pair("secondary"), border_color=ui_theme.pair(accent))
 
         def on_leave(_event=None):
+            if not card.winfo_exists():
+                return
             try:   # 指標移到卡片內的子元件時也會觸發離開事件，這時不要還原
                 widget = card.winfo_containing(*card.winfo_pointerxy())
                 while widget is not None and widget is not card:
@@ -171,11 +266,17 @@ class BackendManagerApp:
                 pass
             card.configure(fg_color=ui_theme.pair("card"), border_color=ui_theme.pair("border"))
 
+        def on_click(event=None):
+            if event is None:         # 不帶事件的呼叫不是使用者點的，不能因此換頁（見 ui_theme.event_only）
+                return
+            # 換頁會銷毀這張卡片：等這次點擊事件處理完再換，不要在事件還在分派時銷毀正在處理它的元件
+            self.root.after_idle(cmd)
+
         stack = [card]
         while stack:
             widget = stack.pop()
             stack.extend(w for w in widget.winfo_children() if isinstance(w, ctk.CTkBaseClass))   # 略過元件內部的畫布
-            widget.bind("<Button-1>", lambda e: cmd(), add="+")
+            widget.bind("<Button-1>", on_click, add="+")
             widget.bind("<Enter>", on_enter, add="+")
             widget.bind("<Leave>", on_leave, add="+")
 
@@ -227,6 +328,7 @@ class BackendManagerApp:
                 getattr(self, name).stop()
         for event in ("<Key>", "<Button>", "<Motion>"):
             self.root.unbind_all(event)
+        self.root.update_idletasks()      # 先跑完閒置時排的重畫，銷毀後才不會對已不存在的元件重畫而出錯
         for child in self.root.winfo_children():
             child.destroy()
         self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
@@ -242,16 +344,19 @@ class BackendManagerApp:
 
     def _build_status_footer(self):
         """建立底部 CPU/RAM 狀態列與異常通知"""
-        ctk.CTkFrame(self.root, height=1, fg_color=ui_theme.pair("border")).pack(fill="x", padx=25)
         footer = ctk.CTkFrame(self.root, fg_color="transparent", height=1)
-        footer.pack(fill="x", padx=25, pady=(8, 14))
+        footer.pack(side="bottom", fill="x", padx=25, pady=(8, 14))
+        ctk.CTkFrame(self.root, height=1, fg_color=ui_theme.pair("border")).pack(side="bottom", fill="x", padx=25)
 
         self.sys_status_var = tk.StringVar(master=self.root, value="系統資源監控準備中…")
+        self.notice_var = tk.StringVar(master=self.root, value="")
         ctk.CTkLabel(footer, textvariable=self.sys_status_var, font=ui_theme.mono_font(ui_theme.FONT_SIZE_SMALL),
                      text_color=ui_theme.pair("text_muted")).pack(side="left")
+        ctk.CTkLabel(footer, textvariable=self.notice_var, font=ui_theme.font(ui_theme.FONT_SIZE_SMALL),
+                     text_color=ui_theme.pair("warning")).pack(side="left", padx=(24, 0))
         self.notification_bar = notification_bar.NotificationBar(footer, on_open=self.open_anomalies)  # 紅點與彈窗
         self.notification_bar.frame.pack(side="right")
-        self.digest_runner = digest_window.digest_runner(self.root, on_new=lambda r: self.open_report("digest"))
+        self.digest_runner = digest_window.digest_runner(self.root, on_new=self._digest_ready)
         self.morning_runner = digest_window.morning_runner(self.root, on_new=self._morning_ready)   # 晨報只給前台
         ui_theme.link_button(footer, "📋 日報", lambda: self.open_report("digest"), width=90,
                              height=24).pack(side="right", padx=(0, 10))
@@ -292,24 +397,13 @@ class BackendManagerApp:
             self.sys_status_var.set("系統資源監控未啟用（未偵測到 psutil）")
         self.root.after(3000, self._tick_system_status)
 
-    def _dialog_parent(self, win_attr):
-        """回傳對話框的父視窗：浮在使用者正在看的子視窗上；子視窗已關閉就用主視窗。"""
-        win = getattr(self, win_attr, None)
-        try:
-            if win is not None and win.winfo_exists():
-                return win
-        except tk.TclError:
-            pass
-        return self.root
-
     # --- 人臉辨識終端機開關 ---
     def toggle_face_service(self):
         """人臉辨識終端機開關：執行中就停止，否則啟動"""
-        parent = self._dialog_parent("dash_win")
         if service_manager.face_service_running():
             service_manager.stop_face_service()
             self._update_face_status()
-            ui_theme.show_message(parent, "提示", "已停止人臉辨識終端機。")
+            self.notice("已停止人臉辨識終端機。")
             return
 
         def on_output_line(line):
@@ -318,9 +412,9 @@ class BackendManagerApp:
         ok, message = service_manager.start_face_service(on_output_line)
         self._update_face_status()
         if ok:
-            ui_theme.show_message(parent, "提示", message)
+            self.notice(message)
         else:
-            ui_theme.show_message(parent, "啟動失敗", message, "error")
+            ui_theme.show_message(self.root, "啟動失敗", message, "error")
 
     def _update_face_status(self):
         """依實際狀態更新人臉辨識狀態文字與按鈕文字"""
@@ -336,11 +430,10 @@ class BackendManagerApp:
     # --- QR 註冊伺服器開關 ---
     def toggle_registration_service(self):
         """QR 註冊伺服器開關：執行中就停止，否則啟動"""
-        parent = self._dialog_parent("reg_win")
         if service_manager.reg_server_running():
             service_manager.stop_reg_service()
             self._update_reg_status()
-            ui_theme.show_message(parent, "提示", "已停止 QR 註冊伺服器。")
+            self.notice("已停止 QR 註冊伺服器。")
             return
 
         def on_output_line(line):
@@ -349,9 +442,9 @@ class BackendManagerApp:
         ok, message = service_manager.start_reg_service(on_output_line)
         self._update_reg_status()
         if ok:
-            ui_theme.show_message(parent, "提示", message)
+            self.notice(message)
         else:
-            ui_theme.show_message(parent, "啟動失敗", message, "error")
+            ui_theme.show_message(self.root, "啟動失敗", message, "error")
 
     def _update_reg_status(self):
         """依實際狀態更新註冊伺服器狀態文字與按鈕文字"""
@@ -379,20 +472,14 @@ class BackendManagerApp:
             self.session = None
         self.root.destroy()
 
-    def _new_window(self, title, size):
-        """建立套用主題底色的子視窗。"""
-        win = ctk.CTkToplevel(self.root)
-        win.title(title)
-        win.geometry(size)
-        ui_theme.style_window(win)
-        return win
-
-    # --- 視窗 1：營運狀態與尾隨監控 ---
+    # --- 頁面 1：營運狀態與尾隨監控 ---
     def open_dashboard(self):
-        """開啟儀表板：左邊統計與打卡清單，右邊人臉辨識即時輸出"""
-        self.dash_win = self._new_window("實時營運狀態", "1260x700")
+        """切到儀表板頁：左邊統計與打卡清單，右邊人臉辨識即時輸出"""
+        self._open_page("dashboard", "📊 營運狀態與尾隨監控", self._build_dashboard)
 
-        main_split = ctk.CTkFrame(self.dash_win, fg_color="transparent", height=1)
+    def _build_dashboard(self, body):
+        self.dash_page = body
+        main_split = ctk.CTkFrame(body, fg_color="transparent", height=1)
         main_split.pack(fill="both", expand=True)
 
         right_col = ctk.CTkFrame(main_split, fg_color="transparent", width=360, height=1)
@@ -527,9 +614,10 @@ class BackendManagerApp:
         if events is not None:
             ui_theme.fill_table(self.event_tree, [(ts[5:], text) for ts, text in events])
 
-    def refresh_dashboard_data(self):
-        """每 5 秒更新儀表板的人數、打卡清單與異常件數"""
-        if not self.dash_win.winfo_exists():
+    def refresh_dashboard_data(self, page=None):
+        """每 5 秒更新儀表板的人數、打卡清單與異常件數；離開儀表板頁（或換外觀重畫成新的一頁）後這一輪就停止。"""
+        page = page or self.dash_page
+        if page is not self.dash_page or not page.winfo_exists() or not self._alive:
             return
         if self.link_wanted:
             self._refresh_link_card()
@@ -545,7 +633,7 @@ class BackendManagerApp:
 
         self.anomaly_var.set(f"{dashboard_stats.get_anomaly_count()} 件")
 
-        self.dash_win.after(5000, self.refresh_dashboard_data)
+        self.root.after(5000, self.refresh_dashboard_data, page)       # 掛在主視窗上：頁面銷毀時不會留下失效的排程
 
     def open_evidence_folder(self):
         """開啟尾隨證據照片資料夾（Windows 專用）"""
@@ -554,11 +642,24 @@ class BackendManagerApp:
             os.makedirs(target)
         os.startfile(target)  # noqa: S606
 
-    # --- 視窗 2：員工帳號管理 ---
+    # --- 頁面 2：員工帳號管理 ---
     def open_account_admin(self):
-        """開啟員工帳號管理視窗，可停用、啟用、刪除所選員工與設定管理者"""
+        """切到員工帳號管理頁，可停用、啟用、刪除所選員工與設定管理者"""
         operator = self.session.admin_name if self.session is not None else None
-        self.admin_win = account_panel.open_account_window(self.root, operator)
+
+        def build(body):
+            self.account_view = account_panel.AccountPanel(body, operator)
+            self.account_view.pack(fill="both", expand=True)
+
+        self._open_page("accounts", "👤 員工帳號管理", build)
+
+    def open_calendar(self):
+        """切到出勤報告與假日請假頁"""
+        def build(body):
+            self.calendar_view = calendar_panel.CalendarPanel(body)
+            self.calendar_view.pack(fill="both", expand=True)
+
+        self._open_page("calendar", "🗓️ 出勤報告與假日請假", build)
 
     def _tick_digest(self):
         """每分鐘看一次該不該產生晨報與日報（到時間、當天要上班、還沒有那份才會產生）。"""
@@ -573,44 +674,82 @@ class BackendManagerApp:
         """晨報產生完成：後台不顯示，前台代理下一輪同步就會拿到。"""
         print("[後台] 晨報已產生，前台下次同步會顯示。")
 
-    def open_report(self, kind="digest"):
-        """開啟日報查看視窗（kind 保留給舊呼叫端）；已開著就拉到最前面。排程產生新日報時也走這裡彈出。"""
-        win = getattr(self, "report_win", None)
-        if win is not None and win.winfo_exists():
-            win.show(kind)
+    def _digest_ready(self, _report):
+        """排程產生了新日報：人在主選單就直接切過去看；正在別的功能頁就不打斷，只在底部提示。"""
+        if not self._alive or not self.content.winfo_exists():       # 畫面已清掉：背景才做完的日報不再動畫面
             return
-        self.report_win = digest_window.open_report_window(self.root, self.digest_runner, self.morning_runner, kind)
+        if self.page_key == "home":
+            self.open_report("digest")
+        else:
+            self.notice("新的日報已產生，按底部「📋 日報」查看。")
+
+    def open_report(self, kind="digest"):
+        """切到日報頁（kind 保留給舊呼叫端）；已經在日報頁就只重畫。"""
+        view = getattr(self, "report_view", None)
+        if self.page_key == "report" and view is not None and view.winfo_exists():
+            view.show(kind)
+            return
+
+        def build(body):
+            self.report_view = digest_window.ReportView(body, self.digest_runner, self.morning_runner, kind,
+                                                        on_close=self.show_home)
+            self.report_view.pack(fill="both", expand=True)
+
+        self._open_page("report", "📋 日報", build)
 
     def open_schedule(self):
-        """開啟「日報與晨報」模組視窗（已開著就拉到最前面）。"""
-        win = getattr(self, "schedule_win", None)
-        if win is not None and win.winfo_exists():
-            win.lift()
-            return
-        self.schedule_win = schedule_window.open_schedule_window(self.root, self.digest_runner, self.morning_runner,
-                                                                 self.open_report)
+        """切到「日報與晨報」模組頁。"""
+        def build(body):
+            self.schedule_view = schedule_window.ScheduleView(body, self.digest_runner, self.morning_runner,
+                                                              self.open_report, on_close=self.show_home)
+            self.schedule_view.pack(fill="both", expand=True)
+
+        self._open_page("schedule", "📰 日報與晨報", build)
 
     def open_anomalies(self):
-        """開啟異常事件列表（已開著就拉到最前面）；在這裡標為已讀會同步清掉通知列的紅點。"""
-        win = getattr(self, "anomaly_win", None)
-        if win is not None and win.winfo_exists():
-            win.lift()
-            return
+        """切到異常事件頁；在這裡標為已讀會同步清掉通知列的紅點。"""
         bar = self.notification_bar
-        self.anomaly_win = anomaly_panel.open_anomaly_window(self.root, bar.notifier, bar.mark_all_read)
 
-    # --- 視窗 3：企業知識庫與出勤查詢（另開行程的聊天視窗） ---
+        def build(body):
+            self.anomaly_view = anomaly_panel.AnomalyPanel(body, bar.notifier, bar.mark_all_read)
+            self.anomaly_view.pack(fill="both", expand=True)
+
+        self._open_page("anomaly", "🔔 異常事件", build)
+
+    # --- 企業知識庫與出勤查詢（模型要另開行程載入，所以是獨立的聊天視窗） ---
     def open_assistant_window(self):
         """開啟企業知識庫聊天視窗；模型在那個行程裡載入，這裡只負責啟動與提示。"""
         token = self.session.token if self.session is not None else None
         ok, message = service_manager.start_assistant_window(lambda line: print(f"[企業知識庫] {line}"), token)
-        ui_theme.show_message(self.root, "企業知識庫與出勤查詢", message, "info" if ok else "warning")
+        if ok:
+            self.notice(message, seconds=12)
+        else:
+            ui_theme.show_message(self.root, "企業知識庫與出勤查詢", message, "warning")
 
-    # --- 視窗 4：手機遠端 QR Code 註冊 ---
+    # --- 頁面 4：手機遠端 QR Code 註冊 ---
+    @staticmethod
+    def _fetch_qr_token():
+        """向本機註冊伺服器取一組新 Token（在背景執行緒呼叫，連不上會阻塞到逾時）；不走系統代理。"""
+        import json
+        import urllib.request
+
+        url = "http://127.0.0.1:5000/api/internal/generate_token"   # 固定的本機網址
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=2) as response:  # nosec B310
+            return json.loads(response.read().decode())["token"]  # noqa: S105  這是註冊用的動態碼，不是密碼
+
+    @staticmethod
+    def _detect_qr_channels():
+        """這台電腦所有可當註冊通道的位址（在背景執行緒呼叫，會執行 ipconfig）。"""
+        return service_manager.get_phone_addresses()
+
     def open_qr_registration(self):
-        """開啟 QR Code 註冊視窗：每 5 秒向註冊伺服器取新 Token 並重畫 QR Code"""
-        reg_window = self._new_window("手機遠端註冊 - 動態安全碼", "820x620")
-        self.reg_win = reg_window
+        """切到 QR Code 註冊頁：每 5 秒（背景）向註冊伺服器取新 Token、偵測所有網路位址並重畫 QR Code；
+        所有位址都是註冊通道，可在選單切換"""
+        self._open_page("qr", "📱 手機遠端註冊 - 動態安全碼", self._build_qr_page)
+
+    def _build_qr_page(self, reg_window):
+        self.reg_page = reg_window
 
         main_split = ctk.CTkFrame(reg_window, fg_color="transparent", height=1)
         main_split.pack(fill="both", expand=True)
@@ -621,9 +760,19 @@ class BackendManagerApp:
         left_col = ctk.CTkFrame(main_split, fg_color="transparent", height=1)
         left_col.pack(side="left", fill="both", expand=True)
 
-        # 每次刷新都重新偵測 IP，因為熱點網卡的 IP 可能在開窗後才穩定
-        def _current_base_url():
-            return f"http://{service_manager.get_local_ip_offline()}:5000"
+        # 註冊通道：這台電腦所有可用的網路位址都是通道（手機連哪個網路就選哪個），預設選最適合手機的；
+        # 每 5 秒在背景重新偵測（熱點網卡的位址可能在開窗後才穩定），位址集合沒變就保留使用者選的
+        self._reg_closed = False
+        self._qr_channels = None            # None＝還沒偵測過；[] ＝偵測過但沒有可用位址
+        self._qr_selected_ip = None
+        self._qr_last_token = None
+        self._qr_image = None
+        self._qr_blank = ctk.CTkImage(light_image=Image.new("RGBA", (1, 1), (0, 0, 0, 0)), size=(1, 1))
+        self._qr_results = queue.Queue()    # 背景執行緒只把結果放進來，畫面更新留給畫面執行緒（tk 不能跨執行緒呼叫）
+        self._qr_fetching = False
+        self._qr_next_fetch = 0.0
+        self._qr_fail_count = 0
+        self.qr_timer_id = None
 
         # 註冊伺服器開關
         reg_ctrl_frame = ctk.CTkFrame(left_col, fg_color="transparent", height=1)
@@ -634,6 +783,14 @@ class BackendManagerApp:
                                                 self.toggle_registration_service)
         self.reg_btn.pack(side="right")
         self._update_reg_status()
+
+        channel_frame = ctk.CTkFrame(left_col, fg_color="transparent", height=1)
+        channel_frame.pack(fill="x", padx=20, pady=(10, 0))
+        ctk.CTkLabel(channel_frame, text="註冊通道（手機連哪個網路就選哪個）",
+                     font=ui_theme.font(ui_theme.FONT_SIZE_SMALL), text_color=ui_theme.pair("text_muted"),
+                     anchor="w").pack(fill="x")
+        self.channel_combo = ui_theme.combo(channel_frame, ["偵測網路位址中…"], command=lambda label: on_channel(label))
+        self.channel_combo.pack(fill="x", pady=(2, 0))
 
         # 右邊顯示 web_server.py 的輸出
         self.reg_console = console_panel.build_console_panel(right_col, "註冊伺服器即時輸出")
@@ -648,63 +805,126 @@ class BackendManagerApp:
                                       text_color=ui_theme.pair("text_muted"), wraplength=380)
         self.url_label.pack(pady=10)
 
-        # 刷新計時器 id，關窗時用來取消
-        self.qr_timer_id = None
+        _QR_STARTUP_GRACE_ATTEMPTS = 6  # 伺服器啟動需要載入模型，前 6 次（約 30 秒）連不上屬正常，只顯示提示不印錯誤
 
-        # 伺服器啟動需要載入模型，前 30 秒連不上屬正常，只顯示提示不印錯誤
-        self._qr_fail_count = 0
-        _QR_STARTUP_GRACE_ATTEMPTS = 6  # 6 次 x 5 秒 = 30 秒
-
-        def update_qr():
-            """向註冊伺服器取 Token、產生 QR Code 並顯示，每 5 秒執行一次"""
+        def worker():
+            """背景執行緒：偵測所有通道、向註冊伺服器取 Token，結果放進佇列（不碰任何 tk 元件）。"""
             try:
-                import json
-                import urllib.request
+                channels = self._detect_qr_channels()
+            except Exception as e:  # noqa: BLE001
+                print(f"[QR 註冊] 偵測網路位址失敗：{type(e).__name__}")
+                channels = None
+            try:
+                outcome = ("ok", self._fetch_qr_token())
+            except Exception as e:  # noqa: BLE001
+                outcome = ("err", e)
+            self._qr_results.put((outcome[0], outcome[1], channels))
 
-                # 1. 取得 Token
-                url = "http://127.0.0.1:5000/api/internal/generate_token"   # 固定的本機網址
-                with urllib.request.urlopen(url, timeout=2) as response:  # nosec B310
-                    data = json.loads(response.read().decode())
-                    token = data['token']  # noqa: S105  這是註冊用的動態碼，不是密碼
+        def set_channels(channels):
+            """更新通道清單與選單；位址集合沒變就保留使用者選的，選的位址消失就回到預設（最適合手機的）。"""
+            ips = [c["ip"] for c in channels]
+            if self._qr_channels is not None and {c["ip"] for c in self._qr_channels} == set(ips):
+                return
+            self._qr_channels = channels
+            if self._qr_selected_ip not in ips:
+                chosen = phone_address.best(channels)
+                self._qr_selected_ip = chosen["ip"] if chosen else None
+            labels = [c["label"] for c in channels] or ["（沒有可用的網路位址）"]
+            self.channel_combo.configure(values=labels)
+            self.channel_combo.set(next((c["label"] for c in channels if c["ip"] == self._qr_selected_ip), labels[0]))
 
-                dynamic_url = f"{_current_base_url()}?t={token}"
+        def render():
+            """依目前選的通道與最新 Token 畫 QR Code 與網址。"""
+            if self._qr_channels is None or self._qr_last_token is None and self._qr_channels:
+                self.url_label.configure(text="伺服器準備中，請稍候...")
+                return
+            if not self._qr_channels or not self._qr_selected_ip:
+                self.qr_label.configure(image=self._qr_blank)   # 不能傳 None：tkinter 會略過，標籤仍指著舊圖
+                self._qr_image = None
+                self.url_label.configure(text="找不到區網位址：請讓筆電連上 Wi-Fi 或開行動熱點，手機才連得到")
+                return
+            dynamic_url = f"http://{self._qr_selected_ip}:5000?t={self._qr_last_token}"
+            qr = pyqrcode.create(dynamic_url)
+            buffer = io.BytesIO()
+            qr.png(buffer, scale=6)
+            buffer.seek(0)
+            img = Image.open(buffer)
+            new_image = ctk.CTkImage(light_image=img, size=img.size)   # 自帶一圈白邊，亮暗色都掃得到
+            self.qr_label.configure(image=new_image)                    # 先換上新圖，舊圖才能放掉
+            self._qr_image = new_image
+            self.url_label.configure(text=f"目前網址: {dynamic_url}")
 
-                # 2. 在記憶體中產生 QR Code
-                qr = pyqrcode.create(dynamic_url)
-                buffer = io.BytesIO()
-                qr.png(buffer, scale=6)
-                buffer.seek(0)
+        def on_channel(label):
+            """使用者在選單選了另一個通道：立刻用最新 Token 重畫。"""
+            for item in self._qr_channels or []:
+                if item["label"] == label:
+                    self._qr_selected_ip = item["ip"]
+                    break
+            render()
 
-                # 3. 轉成 CTkImage（自帶一圈白邊，亮暗色都掃得到）
-                img = Image.open(buffer)
-                self._qr_image = ctk.CTkImage(light_image=img, size=img.size)
-
-                # 4. 更新畫面
-                self.qr_label.configure(image=self._qr_image)
-                self.url_label.configure(text=f"目前網址: {dynamic_url}")
+        def apply(kind, value, channels):
+            """套用背景執行緒回來的結果（在畫面執行緒執行）。"""
+            if channels is not None:
+                set_channels(channels)
+            if kind == "ok":
                 self._qr_fail_count = 0
+                self._qr_last_token = value
+                render()
+                return
+            self._qr_fail_count += 1
+            if self._qr_channels == []:
+                render()                                    # 沒有網路位址：提示比「伺服器連線失敗」更有用
+            elif self._qr_fail_count <= _QR_STARTUP_GRACE_ATTEMPTS:
+                self.url_label.configure(text="伺服器準備中，請稍候...")
+            else:
+                # 超過 30 秒仍連不上，只在主控台印出詳細錯誤，畫面不顯示例外內容
+                print(f"[QR Update Error] 已連續 {self._qr_fail_count} 次連線失敗"
+                      f"（約 {self._qr_fail_count * 5} 秒），可能是 web_server.py 沒有成功啟動：{value}")
+                self.url_label.configure(text="⚠️ 伺服器連線失敗，請確認「啟動 QR 註冊伺服器」是否正常運作")
 
-            except Exception as e:
-                self._qr_fail_count += 1
-                if self._qr_fail_count <= _QR_STARTUP_GRACE_ATTEMPTS:
-                    self.url_label.configure(text="伺服器準備中，請稍候...")
-                else:
-                    # 超過 30 秒仍連不上，只在主控台印出詳細錯誤，畫面不顯示例外內容
-                    print(f"[QR Update Error] 已連續 {self._qr_fail_count} 次連線失敗"
-                          f"（約 {self._qr_fail_count * 5} 秒），可能是 web_server.py 沒有成功啟動：{e}")
-                    self.url_label.configure(text="⚠️ 伺服器連線失敗，請確認「啟動 QR 註冊伺服器」是否正常運作")
+        def window_alive():
+            try:
+                return not self._reg_closed and bool(reg_window.winfo_exists())
+            except tk.TclError:
+                return False
 
-            self.qr_timer_id = reg_window.after(5000, update_qr)
+        def tick():
+            """每 0.2 秒在畫面執行緒執行：收背景結果、每 5 秒再啟動一次背景取 Token；視窗關了就停止。"""
+            if not window_alive():
+                return
+            while True:
+                try:
+                    item = self._qr_results.get_nowait()
+                except queue.Empty:
+                    break
+                self._qr_fetching = False
+                try:
+                    apply(*item)
+                except tk.TclError:          # 視窗在這一刻被銷毀：不再更新
+                    return
+            now = time.monotonic()
+            if not self._qr_fetching and now >= self._qr_next_fetch:
+                self._qr_fetching = True
+                self._qr_next_fetch = now + 5.0
+                threading.Thread(target=worker, daemon=True).start()
+            self.qr_timer_id = self.root.after(200, tick)
 
-        # 關窗時取消計時器
-        def on_close():
-            if self.qr_timer_id:
-                reg_window.after_cancel(self.qr_timer_id)
-            reg_window.destroy()
+        # 離開這一頁（返回主選單、換外觀重畫、登出）時頁面被銷毀：設旗標並取消計時器，背景結果就不會再碰已不存在的元件
+        def on_destroy(event):
+            # CTkFrame 的事件綁在內部畫布上，事件的 widget 可能是畫布
+            if event.widget is reg_window or event.widget is getattr(reg_window, "_canvas", None):
+                self._reg_closed = True
+                if self.qr_timer_id:
+                    try:
+                        self.root.after_cancel(self.qr_timer_id)
+                    except tk.TclError:
+                        pass
 
-        reg_window.protocol("WM_DELETE_WINDOW", on_close)
+        reg_window.bind("<Destroy>", on_destroy, add="+")
 
-        update_qr()
+        self.url_label.configure(text="伺服器準備中，請稍候...")
+        self._qr_tick = tick                    # 測試用：模擬頁面銷毀後才輪到的那一次刷新
+        tick()
 
 
 def create_hidden_root():
@@ -712,7 +932,7 @@ def create_hidden_root():
     建立整個行程唯一的主視窗並先隱藏。隱藏後要立刻 update 一次：customtkinter 在第一次 update／mainloop 前
     認為視窗還不存在，之後 resizable 觸發的標題列處理會把剛 deiconify 的視窗又藏回去，主畫面就永遠不出現。
     """
-    ui_theme.apply_theme("system")
+    ui_theme.apply_theme(ui_theme.load_mode())          # 沿用使用者上次選的淺色／深色／跟隨系統
     app = ctk.CTk()
     ui_theme.style_window(app)
     app.withdraw()

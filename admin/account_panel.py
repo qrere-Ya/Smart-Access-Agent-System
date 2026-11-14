@@ -10,7 +10,7 @@ account_panel.py：員工帳號管理的畫面（CustomTkinter 外框，表格�
 串接模組：
   - account_admin：帳號資料庫操作與規則
   - ui_theme：色彩、字型、按鈕、表格、對話框
-  - backend_main：用 open_account_window 開啟，並傳入登入者名稱作為操作者
+  - backend_main：在主視窗內以頁面顯示，並傳入登入者名稱作為操作者
 """
 import customtkinter as ctk
 
@@ -129,13 +129,3 @@ class AccountPanel(ctk.CTkFrame):
             self.refresh()
         if problems:
             ui_theme.show_message(self._parent(), "無法設定", "\n".join(problems), "warning")
-
-
-def open_account_window(root, operator=None):
-    """開啟員工帳號管理視窗並回傳它。"""
-    win = ctk.CTkToplevel(root)
-    win.title("員工帳號管理")
-    win.geometry("1000x600")
-    ui_theme.style_window(win)
-    AccountPanel(win, operator).pack(fill="both", expand=True)
-    return win

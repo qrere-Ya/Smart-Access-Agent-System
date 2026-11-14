@@ -86,7 +86,7 @@ def test_main_menu_screenshot(root, db, screenshot, appearance, mode):
     auth.save_session(session)
     root.deiconify()
     app = BackendManagerApp(root, session)
-    root.geometry("700x740+40+20")
+    root.geometry("1280x820+20+10")
     assert screenshot(root, f"後台_主選單_{mode}")
     assert root.winfo_height() < 900
     app.teardown()
@@ -94,16 +94,20 @@ def test_main_menu_screenshot(root, db, screenshot, appearance, mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_report_window_screenshot(root, db, add_user, add_attendance, screenshot, appearance, mode):
-    from admin import report_panel
+def test_report_page_screenshot(root, db, add_user, add_attendance, screenshot, appearance, mode):
+    from admin.backend_main import BackendManagerApp
 
     appearance(mode)
     _seed(add_user, add_attendance)
-    win = report_panel.open_report_window(root)
-    win.geometry("900x560+80+80")
-    win.winfo_children()[0].date_var.set("2026-11-02")
-    win.winfo_children()[0].refresh()
-    assert screenshot(win, f"後台_每日出勤報告_{mode}")
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.geometry("1280x820+20+10")
+    app.open_calendar()
+    panel = app.calendar_view.report_panel
+    panel.date_var.set("2026-11-02")
+    panel.refresh()
+    assert screenshot(root, f"後台_每日出勤報告_{mode}")
+    app.teardown()
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -123,21 +127,24 @@ def test_notification_popup_screenshot(root, db, tmp_path, screenshot, appearanc
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_account_window_screenshot(root, db, add_user, add_attendance, screenshot, appearance, mode):
-    from admin import account_panel
+def test_account_page_screenshot(root, db, add_user, add_attendance, screenshot, appearance, mode):
+    from admin.backend_main import BackendManagerApp
 
     appearance(mode)
     _seed(add_user, add_attendance)
     add_user("管理者甲", "A1", role="admin")
     add_user("停用員工", "E9", active=0)
-    win = account_panel.open_account_window(root, "管理者甲")
-    win.geometry("1000x600+60+60")
-    assert screenshot(win, f"後台_員工帳號管理_{mode}")
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.geometry("1280x820+20+10")
+    app.open_account_admin()
+    assert screenshot(root, f"後台_員工帳號管理_{mode}")
+    app.teardown()
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_calendar_window_screenshot(root, db, add_user, screenshot, appearance, mode):
-    from admin import calendar_panel
+def test_calendar_pages_screenshot(root, db, add_user, screenshot, appearance, mode):
+    from admin.backend_main import BackendManagerApp
     from shared import database_mgr as dbm
 
     appearance(mode)
@@ -146,16 +153,20 @@ def test_calendar_window_screenshot(root, db, add_user, screenshot, appearance, 
     dbm.add_holiday("2026-12-25", "行憲紀念日")
     dbm.add_holiday("2027-01-01", "開國紀念日")
     dbm.add_leave(1, "2026-11-10", "2026-11-12", "特休", "出國旅遊")
-    win = calendar_panel.open_calendar_window(root)
-    win.geometry("900x640+60+40")
-    shots = [screenshot(win, f"後台_假日_{mode}")]
-    panel = win.winfo_children()[0]
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.geometry("1280x820+20+10")
+    app.open_calendar()
+    panel = app.calendar_view
+    panel.tabs.set("假日")
+    shots = [screenshot(root, f"後台_假日_{mode}")]
     panel.tabs.set("請假")
     panel.refresh_all()
-    shots.append(screenshot(win, f"後台_請假_{mode}"))
+    shots.append(screenshot(root, f"後台_請假_{mode}"))
     panel.tabs.set("每週休息日")
-    shots.append(screenshot(win, f"後台_每週休息日_{mode}"))
+    shots.append(screenshot(root, f"後台_每週休息日_{mode}"))
     assert all(shots)
+    app.teardown()
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -171,20 +182,25 @@ def test_dashboard_window_screenshot(root, db, add_user, add_attendance, screens
     app = BackendManagerApp(root)
     root.withdraw()                                             # 主視窗不要蓋住要截圖的子視窗
     app.open_dashboard()
-    app.dash_win.geometry("1260x700+20+20")
-    assert screenshot(app.dash_win, f"後台_營運狀態_{mode}")
-    assert app.dash_win.winfo_height() < 900
+    root.geometry("1280x820+20+10")
+    assert screenshot(root, f"後台_營運狀態_{mode}")
+    assert root.winfo_height() < 900
     app.teardown()
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_qr_window_shows_a_qr_image_from_the_server(root, db, screenshot, appearance, mode):
+def test_qr_window_shows_a_qr_image_from_the_server(root, db, screenshot, appearance, mode, monkeypatch):
     """用本機假的註冊伺服器回 Token，確認 QR Code 以 CTkImage 顯示（5000 埠被占用就略過）。"""
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     from admin.backend_main import BackendManagerApp
+
+    monkeypatch.setattr(BackendManagerApp, "_detect_qr_channels", staticmethod(lambda: [
+        {"ip": "172.20.10.7", "adapter": "Wi-Fi", "kind": "lan", "label": "Wi-Fi 172.20.10.7（區網）"},
+        {"ip": "26.244.154.160", "adapter": "Radmin VPN", "kind": "vpn",
+         "label": "Radmin VPN 26.244.154.160（VPN／其他，手機通常連不到）"}]))
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -208,11 +224,14 @@ def test_qr_window_shows_a_qr_image_from_the_server(root, db, screenshot, appear
         app = BackendManagerApp(root)
         root.withdraw()
         app.open_qr_registration()
-        app.reg_win.geometry("820x620+20+20")
+        root.geometry("1280x820+20+10")
+        deadline = time.time() + 5                              # Token 與位址在背景取得，等結果回到畫面
+        while time.time() < deadline and app._qr_image is None:
+            root.update()
+            time.sleep(0.02)
         assert "abcd1234" in app.url_label.cget("text")
         assert app._qr_image is not None
-        assert screenshot(app.reg_win, f"後台_QR註冊_{mode}")
-        app.reg_win.after_cancel(app.qr_timer_id)
+        assert screenshot(root, f"後台_QR註冊_{mode}")
         app.teardown()
     finally:
         server.shutdown()
@@ -242,6 +261,6 @@ def test_back_role_dashboard_window_screenshot(root, db, add_user, add_attendanc
     app = BackendManagerApp(root)
     root.withdraw()
     app.open_dashboard()
-    app.dash_win.geometry("1260x700+20+20")
-    assert screenshot(app.dash_win, f"後台_營運狀態_雙機_{mode}")
+    root.geometry("1280x820+20+10")
+    assert screenshot(root, f"後台_營運狀態_雙機_{mode}")
     app.teardown()
