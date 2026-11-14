@@ -35,6 +35,7 @@ def _tk_root():
 @pytest.fixture
 def root(_tk_root):
     yield _tk_root
+    _tk_root.update_idletasks()               # 先跑完閒置重畫再銷毀，免得殘留的重畫在下個測試才出錯
     for child in _tk_root.winfo_children():
         child.destroy()
     for sequence in ("<Key>", "<Button>", "<Motion>", "<MouseWheel>"):

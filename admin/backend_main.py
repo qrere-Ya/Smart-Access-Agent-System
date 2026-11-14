@@ -170,6 +170,7 @@ class BackendManagerApp:
     # --- 頁面：主選單與各功能頁都畫在同一個內容區 ---
     def _clear_page(self):
         """清掉內容區現有的畫面（主選單或功能頁）。"""
+        self.root.update_idletasks()      # 先跑完閒置時排的重畫，銷毀後才不會對已不存在的元件重畫而出錯
         for child in self.content.winfo_children():
             child.destroy()
         self.page = None
@@ -321,6 +322,7 @@ class BackendManagerApp:
                 getattr(self, name).stop()
         for event in ("<Key>", "<Button>", "<Motion>"):
             self.root.unbind_all(event)
+        self.root.update_idletasks()      # 先跑完閒置時排的重畫，銷毀後才不會對已不存在的元件重畫而出錯
         for child in self.root.winfo_children():
             child.destroy()
         self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)

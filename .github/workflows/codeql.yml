@@ -11,6 +11,8 @@ on:
 jobs:
   analyze:
     name: Analyze (python)
+    # 私人 repo 沒有 GitHub Advanced Security 就不能跑 CodeQL 並上傳結果（改在本機執行）；repo 公開時自動恢復
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     permissions:
       security-events: write
