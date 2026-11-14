@@ -49,11 +49,12 @@ class SettingsDialog(ctk.CTkToplevel):
                                              dynamic_resizing=False)
         self.local_model.set(self._saved_model)
         self.local_model.pack(padx=18, pady=(2, 0), fill="x")
+        self._timers = set()                # 還沒觸發的計時器；視窗銷毀時取消，不然會對已不存在的視窗觸發
         self._model_names = queue.Queue()
         self._test_results = queue.Queue()  # 測試連線的結果，背景執行緒只放進來，畫面更新留給畫面執行緒
         chat_worker.spawn(self._load_model_names, s)
-        self.after(100, self._poll_model_names)
-        self.after(100, self._poll_test_results)
+        self._later(self._poll_model_names)
+        self._later(self._poll_test_results)
         self.api_base = self._entry("雲端 API 網址（OpenAI 相容）", s["api_base"])
         self.api_model = self._entry("雲端模型名稱", s["api_model"])
         ctk.CTkLabel(self, text="雲端 API 金鑰：" + self.ls.key_status_text(s), text_color=META_COLOR, wraplength=470,
@@ -69,6 +70,26 @@ class SettingsDialog(ctk.CTkToplevel):
                                    font=ui_theme.font(ui_theme.FONT_SIZE_SMALL))
         self.result.pack(padx=18, anchor="w")
 
+    def _later(self, func):
+        """100 毫秒後在畫面執行緒呼叫 func，並記下計時器，視窗銷毀時一併取消。"""
+        holder = []
+
+        def run():
+            self._timers.discard(holder[0])
+            func()
+
+        holder.append(self.after(100, run))
+        self._timers.add(holder[0])
+
+    def destroy(self):
+        for timer in list(self._timers):
+            try:
+                self.after_cancel(timer)
+            except Exception:  # noqa: BLE001, S110
+                pass
+        self._timers.clear()
+        super().destroy()
+
     def _load_model_names(self, settings):
         """背景向 Ollama 問已安裝的模型，問不到就維持只有目前設定的那一個。"""
         ok, names = self.ls.list_local_models(settings)
@@ -81,7 +102,7 @@ class SettingsDialog(ctk.CTkToplevel):
         try:
             names = self._model_names.get_nowait()
         except queue.Empty:
-            self.after(100, self._poll_model_names)
+            self._later(self._poll_model_names)
             return
         if names:
             self._fill_model_names(names)
@@ -95,7 +116,7 @@ class SettingsDialog(ctk.CTkToplevel):
                 self._show(self._test_results.get_nowait())
         except queue.Empty:
             pass
-        self.after(100, self._poll_test_results)
+        self._later(self._poll_test_results)
 
     def _fill_model_names(self, names):
         """把查到的已安裝模型填進下拉選單，並處理已存模型沒安裝或少了標籤的情況。"""

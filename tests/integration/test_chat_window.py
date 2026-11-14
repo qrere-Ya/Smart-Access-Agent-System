@@ -234,3 +234,11 @@ def test_a_failed_document_rescan_is_reported_and_the_button_comes_back(window):
     assert window.docs_btn.cget("state") == "disabled"
     assert pump(window, lambda: window.docs_btn.cget("state") == "normal")
     assert any("重新掃描失敗" in w.cget("text") and "顯存不足" in w.cget("text") for w in window._notes_widgets)
+
+
+def test_closing_the_settings_dialog_cancels_its_pending_timers(window, settings_dialog):
+    """回歸：設定視窗關閉後，查模型清單與測試結果的計時器還會觸發（invalid command name）。"""
+    pending = set(settings_dialog._timers)
+    assert pending, "開窗時應該排了兩個輪詢計時器"
+    settings_dialog.destroy()
+    assert not pending & set(window.tk.splitlist(window.tk.call("after", "info")))

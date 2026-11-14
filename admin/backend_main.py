@@ -67,6 +67,7 @@ class BackendManagerApp:
         self.relogin = False          # 登出或閒置逾時後，main() 會再顯示登入畫面
         self._last_touch = 0.0
         self._alive = True            # teardown 之後，定時更新的函式不再動舊畫面
+        self._console_lines = queue.Queue()   # 讀取執行緒只放進來，畫面更新留給畫面執行緒
         self.root.title("智慧門禁 - 戰情控制中心")
         self._place_window()
         self.root.resizable(True, True)
@@ -362,6 +363,19 @@ class BackendManagerApp:
                              height=24).pack(side="right", padx=(0, 10))
         self.root.after(5000, self._tick_digest)
         self._tick_system_status()
+        self._drain_console_lines()
+
+    def _drain_console_lines(self):
+        """畫面執行緒每 150 毫秒取出服務輸出（人臉辨識、QR 註冊）的新行，顯示到對應的主控台。"""
+        if not self._alive or not self.root.winfo_exists():
+            return
+        for _ in range(200):                      # 一次最多處理 200 行，避免輸出暴增時卡住畫面
+            try:
+                which, line = self._console_lines.get_nowait()
+            except queue.Empty:
+                break
+            console_panel.append_line(getattr(self, which, None), line)
+        self.root.after(150, self._drain_console_lines)
 
     def _tick_link_service(self):
         """每 10 秒確認後台連線服務還在執行，沒有就啟動（網路線剛插好、位址還在分配時會失敗，下一輪再試）。"""
@@ -407,7 +421,7 @@ class BackendManagerApp:
             return
 
         def on_output_line(line):
-            self.root.after(0, lambda: console_panel.append_line(getattr(self, "face_console", None), line))
+            self._console_lines.put(("face_console", line))        # 在讀取執行緒呼叫：只放佇列，不碰 tk
 
         ok, message = service_manager.start_face_service(on_output_line)
         self._update_face_status()
@@ -437,7 +451,7 @@ class BackendManagerApp:
             return
 
         def on_output_line(line):
-            self.root.after(0, lambda: console_panel.append_line(getattr(self, "reg_console", None), line))
+            self._console_lines.put(("reg_console", line))         # 在讀取執行緒呼叫：只放佇列，不碰 tk
 
         ok, message = service_manager.start_reg_service(on_output_line)
         self._update_reg_status()
@@ -920,7 +934,7 @@ class BackendManagerApp:
                     except tk.TclError:
                         pass
 
-        reg_window.bind("<Destroy>", on_destroy, add="+")
+        reg_window.bind("<Destroy>", ui_theme.event_only(on_destroy), add="+")
 
         self.url_label.configure(text="伺服器準備中，請稍候...")
         self._qr_tick = tick                    # 測試用：模擬頁面銷毀後才輪到的那一次刷新

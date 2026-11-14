@@ -108,3 +108,17 @@ def test_notification_bar_shows_unread_merges_popup_and_clears(root, db, tmp_pat
     bar.mark_all_read()
     assert bar.text_var.get() == "🔔 異常 0"
     bar.stop()
+
+
+def test_stopping_the_notification_bar_cancels_its_pending_timer(root, db, tmp_path):
+    """回歸：畫面被銷毀後，輪詢計時器還留著，之後會對已不存在的元件觸發（CI 記錄裡的 invalid command name）。"""
+    from admin import anomaly_notifier, notification_bar
+
+    notifier = anomaly_notifier.AnomalyNotifier(str(tmp_path / "seen.json"))
+    bar = notification_bar.NotificationBar(root, notifier=notifier, poll_ms=60000)
+    bar.frame.pack()
+    pending = bar._after_id
+    assert pending in root.tk.splitlist(root.tk.call("after", "info"))
+    bar.stop()
+    assert pending not in root.tk.splitlist(root.tk.call("after", "info"))
+    bar.frame.destroy()

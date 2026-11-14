@@ -105,7 +105,7 @@ class AssistantWindow(ctk.CTk):
         self.chat = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
         self.chat.grid(row=1, column=0, sticky="nsew", padx=6)
         # 注意：不能綁在 self.chat 上，會蓋掉 CTkScrollableFrame 自己更新捲動範圍的綁定
-        self.chat._parent_canvas.bind("<Configure>", lambda e: self._relayout(), add="+")
+        self.chat._parent_canvas.bind("<Configure>", ui_theme.event_only(lambda _e: self._relayout()), add="+")
         self._build_welcome()
 
         bottom, self.input, self.send_btn = build_input_row(self, self._on_enter, self.send_current)

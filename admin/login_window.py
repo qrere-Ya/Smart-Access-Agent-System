@@ -245,7 +245,7 @@ class LoginWindow(ctk.CTkToplevel):
             args = (self._camera_factory, self._vision_factory, self._guard, stop, self._events)
         self._thread = threading.Thread(target=target, daemon=True, args=args)
         self._thread.start()
-        self.after(POLL_MS, self._poll, self._generation, self._events)
+        self._poll_id = self.after(POLL_MS, self._poll, self._generation, self._events)
 
     # --- 畫面執行緒 ---
 
@@ -286,7 +286,7 @@ class LoginWindow(ctk.CTkToplevel):
         if latest is not None:
             self._handle(latest)
         if not self._closed:
-            self.after(POLL_MS, self._poll, generation, events)
+            self._poll_id = self.after(POLL_MS, self._poll, generation, events)
 
     def _handle(self, event):
         kind = event[0]
@@ -326,6 +326,10 @@ class LoginWindow(ctk.CTkToplevel):
         if self._thread is not None:
             # 背景執行緒先結束再銷毀視窗，Tk 物件才不會被別的執行緒回收而讓程式中止；子行程要多留時間釋放鏡頭
             self._thread.join(timeout=3 + (WORKER_EXIT_WAIT + 2 if self._isolate_vision else 0))
+        pending = getattr(self, "_poll_id", None)
+        if pending is not None:
+            self.after_cancel(pending)        # 登入成功後視窗就銷毀，不留下還會觸發的計時器
+            self._poll_id = None
         self.grab_release()
         self.destroy()
 
