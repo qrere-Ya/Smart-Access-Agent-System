@@ -46,9 +46,9 @@ class Bubble(ctk.CTkFrame):
         self._last_width = 0
         self._link_safe = lambda url: False
         self._link_opener = None            # None 表示點的當下才用 webbrowser.open
-        self.box._textbox.bind("<MouseWheel>", self._on_wheel)
+        self.box._textbox.bind("<MouseWheel>", ui_theme.event_only(self._on_wheel))
         # 視窗真正排版出來、或寬度改變後，換行的行數會變，要重算高度（寬度沒變時略過，避免高度改變又觸發自己）
-        self.box._textbox.bind("<Configure>", self._on_box_configure, add="+")
+        self.box._textbox.bind("<Configure>", ui_theme.event_only(self._on_box_configure), add="+")
         if text:
             self.set_text(text)
 
@@ -95,9 +95,9 @@ class Bubble(ctk.CTkFrame):
                     break
                 start = f"{index}+{len(url)}c"
                 text.tag_add("link", index, start)
-        text.tag_bind("link", "<Button-1>", self._on_link_click)
-        text.tag_bind("link", "<Enter>", lambda e: text.configure(cursor="hand2"))
-        text.tag_bind("link", "<Leave>", lambda e: text.configure(cursor=""))
+        text.tag_bind("link", "<Button-1>", ui_theme.event_only(self._on_link_click))
+        text.tag_bind("link", "<Enter>", ui_theme.event_only(lambda _e: text.configure(cursor="hand2")))
+        text.tag_bind("link", "<Leave>", ui_theme.event_only(lambda _e: text.configure(cursor="")))
 
     def _on_link_click(self, event):
         """點到連結：取出該段文字當網址，再檢查一次才開。"""
@@ -208,7 +208,7 @@ def build_input_row(master, on_enter, on_send):
     box = ctk.CTkTextbox(bottom, height=64, wrap="word", font=ui_theme.font(ui_theme.FONT_SIZE_INPUT),
                          border_width=1, border_spacing=8)
     box.grid(row=0, column=0, sticky="ew")
-    box.bind("<Return>", on_enter)
+    box.bind("<Return>", ui_theme.event_only(on_enter))
     send_btn = ui_theme.primary_button(bottom, "送出", on_send, width=84, height=64, state="disabled")
     send_btn.configure(font=ui_theme.font(15, bold=True))
     send_btn.grid(row=0, column=1, padx=(10, 0))

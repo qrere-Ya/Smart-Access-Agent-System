@@ -236,7 +236,10 @@ def punch_window_open(current_time):
 def log_attendance(name, user_id=None, now=None):
     """考勤核心邏輯：依今天已有的紀錄與目前時間，判斷上班、遲到、早退、下班，
     並寫入或更新紀錄；未給 user_id 時由姓名查（姓名唯一才採用）；now 是事件發生時間（前台離線補送時用），預設現在"""
-    conn_db = sqlite3.connect(DB_PATH)
+    # 數今天幾筆與寫入放在同一個「立即寫入」交易：同一人的兩個事件同時進來（離線補送加本機打卡）時，
+    # 後面的會等前面的寫完再數，不會兩個都看到 0 筆而寫出兩筆「上班」；提早 return 時關閉連線會自動放棄交易
+    conn_db = sqlite3.connect(DB_PATH, timeout=10, isolation_level=None)
+    conn_db.execute("BEGIN IMMEDIATE")
     cursor = conn_db.cursor()
     if user_id is None:
         matches = cursor.execute("SELECT id FROM Users WHERE name=?", (name,)).fetchall()
@@ -299,14 +302,14 @@ def log_attendance(name, user_id=None, now=None):
 
         conn_db.execute("UPDATE Attendance SET timestamp=?, status=? WHERE id=?",
                         (full_timestamp, status, last_record_id))
-        conn_db.commit()
+        conn_db.execute("COMMIT")
         conn_db.close()
         print(f"系統日誌: Updated: {name} ({status}) - 時間: {full_timestamp}")
         return f"Updated: {name} ({status})"
 
     conn_db.execute("INSERT INTO Attendance (name, timestamp, status, user_id) VALUES (?, ?, ?, ?)",
                     (name, full_timestamp, status, user_id))
-    conn_db.commit()
+    conn_db.execute("COMMIT")
     conn_db.close()
     print(f"系統日誌: {msg} - 時間: {full_timestamp}")
     return msg
@@ -567,7 +570,12 @@ def record_anomaly_event(event_type, detail="", make_evidence=None, merge_window
     """
     now = now or datetime.datetime.now()
     now_str = now.strftime(_TS_FORMAT)
-    with closing(sqlite3.connect(DB_PATH, timeout=5)) as conn_db:
+    # 讀最後一筆、決定合併或新增、寫入放在同一個「立即寫入」交易：事件同時進來時，後面的會等前面的寫完，
+    # 才讀到它並合併（原本各自讀到同一筆舊資料，會少算次數或多出重複列）。
+    # make_evidence 只是存一張證據照，交易內呼叫；失敗時放棄交易並把例外往外丟
+    conn_db = sqlite3.connect(DB_PATH, timeout=10, isolation_level=None)
+    try:
+        conn_db.execute("BEGIN IMMEDIATE")
         last = conn_db.execute(
             "SELECT id, timestamp, COALESCE(end_timestamp, timestamp), COALESCE(event_count, 1), detail "
             "FROM AnomalyEvents WHERE event_type = ? ORDER BY COALESCE(end_timestamp, timestamp) DESC, id DESC LIMIT 1",
@@ -582,10 +590,20 @@ def record_anomaly_event(event_type, detail="", make_evidence=None, merge_window
                 conn_db.execute(
                     "UPDATE AnomalyEvents SET end_timestamp = ?, event_count = ?, detail = ? WHERE id = ?",
                     (now_str, count, _merged_detail(detail or last[4], count, last[1], now_str), last[0]))
-                conn_db.commit()
+                conn_db.execute("COMMIT")
                 return last[0], True
-    evidence_path = make_evidence() if make_evidence else None
-    return add_anomaly_event(event_type, evidence_path, detail, timestamp=now_str), False
+        evidence_path = make_evidence() if make_evidence else None
+        cur = conn_db.execute(
+            "INSERT INTO AnomalyEvents (timestamp, event_type, detail, evidence_path) VALUES (?, ?, ?, ?)",
+            (now_str, event_type, detail, evidence_path))
+        conn_db.execute("COMMIT")
+        return cur.lastrowid, False
+    except BaseException:
+        if conn_db.in_transaction:
+            conn_db.execute("ROLLBACK")
+        raise
+    finally:
+        conn_db.close()
 
 
 def list_anomaly_events(start=None, end=None, event_type=None, limit=200):

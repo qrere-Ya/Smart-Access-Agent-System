@@ -30,6 +30,7 @@ class NotificationBar:
         self.notifier = notifier or anomaly_notifier.AnomalyNotifier()
         self.poll_ms = poll_ms
         self._alive = True
+        self._after_id = None         # 下一次輪詢的計時器；畫面被銷毀前要取消，否則會對已不存在的元件觸發
         self._popup = None
         self._popup_label = None
         self.text_var = tk.StringVar(master=master, value="🔔 異常 0")
@@ -50,7 +51,7 @@ class NotificationBar:
         if not self._alive or not self.master.winfo_exists():
             return
         self.refresh()
-        self.master.after(self.poll_ms, self._tick)
+        self._after_id = self.master.after(self.poll_ms, self._tick)
 
     def refresh(self):
         """更新紅點與彈窗。"""
@@ -104,5 +105,11 @@ class NotificationBar:
     def stop(self):
         """停止輪詢並關掉彈窗。"""
         self._alive = False
+        if self._after_id is not None:
+            try:
+                self.master.after_cancel(self._after_id)
+            except Exception:  # noqa: BLE001, S110
+                pass              # 主視窗已銷毀時計時器早就一起清掉了
+            self._after_id = None
         if self._popup is not None and self._popup.winfo_exists():
             self._popup.destroy()

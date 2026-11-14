@@ -2,6 +2,7 @@
 database_mgr 單元測試：考勤時間窗判斷、員工註冊、人臉比對、資料表建立與升級、稽核紀錄寫入。
 使用臨時資料庫，並用 clock fixture 固定目前時間。
 """
+import datetime
 import sqlite3
 
 import numpy as np
@@ -200,3 +201,68 @@ def test_simultaneous_registrations_of_the_same_person_create_exactly_one_user(d
     assert con.execute("SELECT COUNT(*) FROM Users").fetchone()[0] == 1
     con.close()
     assert results.count(True) == 1 and results.count(False) == 7
+
+
+def _run_together(count, work):
+    """讓 count 個執行緒在同一個瞬間開始做 work(i)，回傳各自的結果（例外也收進來，不吞掉）。"""
+    import threading
+
+    start = threading.Barrier(count)
+    results = [None] * count
+
+    def runner(i):
+        start.wait()
+        try:
+            results[i] = work(i)
+        except BaseException as exc:          # noqa: BLE001  收起來讓測試斷言，不吞掉
+            results[i] = exc
+
+    threads = [threading.Thread(target=runner, args=(i,)) for i in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results
+
+
+def test_simultaneous_first_punches_write_exactly_one_clock_in(db, add_user):
+    """回歸：數今天幾筆與寫入之間沒有鎖時，同一人的多個事件同時處理會都看到 0 筆，寫出多筆「上班」。"""
+    add_user("王小明", "E001")
+    now = datetime.datetime(*DAY, 8, 0, 0)
+    results = _run_together(8, lambda i: dbm.log_attendance("王小明", now=now))
+    assert not [r for r in results if isinstance(r, BaseException)], results
+    con = sqlite3.connect(db)
+    rows = con.execute("SELECT status FROM Attendance WHERE name='王小明'").fetchall()
+    con.close()
+    assert rows == [("上班",)]
+    assert results.count("In: 王小明 (上班)") == 1
+
+
+def test_simultaneous_anomaly_events_merge_into_one_row_with_the_right_count(db):
+    """回歸：讀最後一筆與寫入之間沒有鎖時，同時進來的事件會各自新增一列或少算次數。"""
+    now = datetime.datetime(2026, 10, 14, 9, 0, 0)
+    made = []
+
+    def evidence():
+        made.append(1)
+        return "C:/x/tailgate.jpg"
+
+    results = _run_together(8, lambda i: dbm.record_anomaly_event(
+        "tailgate", "畫面有 2 人", make_evidence=evidence, now=now))
+    assert not [r for r in results if isinstance(r, BaseException)], results
+    events = dbm.list_anomaly_events()
+    assert len(events) == 1
+    assert events[0]["event_count"] == 8
+    assert len(made) == 1                                   # 只有第一筆需要證據照
+    assert sum(1 for _id, merged in results if merged) == 7
+
+
+def test_failed_evidence_does_not_leave_a_half_written_event(db):
+    """make_evidence 丟例外時，例外要往外丟，交易放棄，不留半筆，也不鎖住資料庫。"""
+    def boom():
+        raise RuntimeError("存證據照失敗")
+
+    with pytest.raises(RuntimeError):
+        dbm.record_anomaly_event("tailgate", "x", make_evidence=boom, now=datetime.datetime(2026, 10, 14, 9, 0, 0))
+    assert dbm.list_anomaly_events() == []
+    assert dbm.record_anomaly_event("tailgate", "x", now=datetime.datetime(2026, 10, 14, 9, 5, 0))[1] is False

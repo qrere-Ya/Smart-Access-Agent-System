@@ -162,8 +162,8 @@ class ReportView(ctk.CTkFrame):
         for runner in self.runners.values():
             runner.listeners.append(self._on_done)
         self._last_width = 0
-        self.bind("<Configure>", self._on_resize)
-        self.bind("<Destroy>", self._on_destroy)
+        self.bind("<Configure>", ui_theme.event_only(self._on_resize))
+        self.bind("<Destroy>", ui_theme.event_only(self._on_destroy))
         self.show(tab)
 
     def show(self, kind="digest"):

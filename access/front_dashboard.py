@@ -106,7 +106,7 @@ class FrontDashboard:
         self._build()
         self._apply_theme()
         self.refresh()
-        root.bind("<Configure>", self._on_configure, add="+")
+        root.bind("<Configure>", ui_theme.event_only(self._on_configure), add="+")
         root.bind("<F11>", ui_theme.event_only(lambda _e: self.toggle_fullscreen()), add="+")
         root.bind("<Escape>", ui_theme.event_only(lambda _e: self.set_fullscreen(False)), add="+")
         if front_screens.load_pref("dashboard_fullscreen"):         # 上次是全螢幕，這次沿用
@@ -360,7 +360,7 @@ class FrontDashboard:
             for key, _title, width, *_ in columns:
                 tree.column(key, width=max(40, int(event.width * width / total) - 2))
 
-        tree.bind("<Configure>", spread, add="+")
+        tree.bind("<Configure>", ui_theme.event_only(spread), add="+")
         self._trees.append((tree, name))
         return tree
 

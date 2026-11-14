@@ -172,3 +172,36 @@ def test_the_notification_label_ignores_a_call_without_an_event(root, app):
         root.tk.call(name)
     _pump(root, 0.2)
     assert app.errors == [] and app.page_key == "home"
+
+
+def test_service_output_from_a_reader_thread_is_shown_by_the_screen_thread(root, app, monkeypatch):
+    """回歸：輸出讀取執行緒原本直接呼叫 root.after（tk 不保證跨執行緒安全）；現在只放佇列，由畫面執行緒顯示。"""
+    import threading
+
+    from admin import console_panel, service_manager
+
+    callbacks = []
+    monkeypatch.setattr(service_manager, "face_service_running", lambda: False)
+    monkeypatch.setattr(service_manager, "start_face_service", lambda cb: (callbacks.append(cb) or True, "已啟動"))
+    shown = []
+    monkeypatch.setattr(console_panel, "append_line", lambda widget, line: shown.append((threading.get_ident(), line)))
+    after_from_thread = []
+    real_after = root.after
+
+    def watching_after(*args, **kwargs):
+        if threading.get_ident() != main_thread:
+            after_from_thread.append(args)
+        return real_after(*args, **kwargs)
+
+    main_thread = threading.get_ident()
+    monkeypatch.setattr(root, "after", watching_after)
+    app.toggle_face_service()
+    assert callbacks, "沒有把輸出回呼交給服務管理器"
+    worker = threading.Thread(target=lambda: [callbacks[0](f"第 {i} 行") for i in range(50)])
+    worker.start()
+    worker.join()
+    _pump(root, 0.5)
+    assert after_from_thread == [], "讀取執行緒不應該呼叫 root.after"
+    assert [line for _tid, line in shown] == [f"第 {i} 行" for i in range(50)]
+    assert {tid for tid, _line in shown} == {main_thread}, "顯示必須在畫面執行緒"
+    assert app.errors == []

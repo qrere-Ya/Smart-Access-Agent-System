@@ -88,7 +88,7 @@ class ScheduleView(ctk.CTkFrame):
             ui_theme.secondary_button(bottom, "返回主選單", on_close, width=110).pack(side="right")
         for runner in self.runners.values():
             runner.listeners.append(self._on_done)
-        self.bind("<Destroy>", self._on_destroy)
+        self.bind("<Destroy>", ui_theme.event_only(self._on_destroy))
         self._sync_buttons()
 
     def _on_destroy(self, event):
