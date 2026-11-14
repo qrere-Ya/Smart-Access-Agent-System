@@ -3,15 +3,21 @@ preflight.py：展示前的自動健檢（不啟動任何服務、不改任何�
 
 主要功能：
   - 逐項檢查：模型檔案、助理文件、資料庫與管理者、顯卡與記憶體、攝影機、通訊埠、語言模型設定、區網位址
+  - 雙機展示（角色是後台時才檢查，單機略過）：前台｜開頭的項目——後台設定與通行碼、網路線位址、連線服務與防火牆、
+    前台是否在線、人臉辨識是否執行、鏡頭、人臉資料筆數、待補送事件、今日晨報、全本地模式；每個失敗項都附下一步
   - 每項結果分成 通過／注意／失敗，附上白話的處理建議；全部沒有「失敗」才算可以展示
   - 所有外部依賴（檔案位置、顯卡查詢、攝影機、port）都可由參數傳入，測試不需要真的硬體
   - python -m admin.preflight 執行並印出中文結果；結束碼 0＝可以展示，1＝有失敗項
 
 串接模組：
   - paths：模型、文件、資料庫位置
+  - network_check（後台網路檢查，前台區段沿用它的判斷）、front_status（前台心跳狀態）
+  - front_control（後台對前台的辨識開關）
+  - digest_store（今日晨報）、network_policy（全本地模式）、role_config（角色與通行碼）
   - service_manager：port 檢查與區網 IP；llm_settings：語言模型設定與 Ollama 模型清單
   - resource_manager：剩餘顯存與記憶體
 """
+import datetime
 import os
 import shutil
 import sqlite3
@@ -27,6 +33,7 @@ MARK = {OK: "[通過]", WARN: "[注意]", FAIL: "[失敗]"}
 MIN_FREE_VRAM_MB = 3000     # 門禁（人臉＋YOLO）與助理同時使用的大致下限
 MIN_FREE_RAM_MB = 2500
 PORT_REGISTER = 5000
+FRONT = "前台｜"             # 前台區段每個項目名稱的開頭，總結會據此判斷這次有沒有檢查前台
 
 
 @dataclass
@@ -179,6 +186,161 @@ def check_network(get_ip=None):
     return Check("區網位址", OK, f"{ip}（手機要連同一個網路）")
 
 
+# --- 前台（雙機展示）：只在這台是後台角色時檢查 ---
+
+_LEVEL = {"OK": OK, "WARN": WARN, "FAIL": FAIL}
+
+
+def _from_network(name, results):
+    """network_check 回傳 [(等級, 說明)]，轉成這裡的 Check（說明文字裡已經寫了下一步）。"""
+    return [Check(FRONT + name, _LEVEL.get(level, WARN), text) for level, text in results]
+
+
+def count_active_users(db_path=None):
+    """後台資料庫裡啟用中的員工數；讀不到回傳 None。"""
+    path = db_path or paths.DB_PATH
+    try:
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3)) as con:
+            return con.execute("SELECT COUNT(*) FROM Users WHERE is_active = 1 OR is_active IS NULL").fetchone()[0]
+    except sqlite3.Error:
+        return None
+
+
+def check_front_online(state):
+    """前台是否在線（30 秒內有回報心跳）。"""
+    name = FRONT + "連線"
+    if not state["seen"]:
+        return Check(name, FAIL, "後台還沒收到過前台的回報",
+                     "在前台電腦雙擊桌面「啟動前台門禁」；確認網路線接好、後台連線服務有開（後台介面開著就會自動啟動）。")
+    age = int(state["age"] or 0)
+    if not state["online"]:
+        return Check(name, FAIL, f"前台離線（最後收到 {age} 秒前的回報）",
+                     "在前台電腦雙擊桌面「啟動前台門禁」；網路線拔掉或前台關機也會這樣，插回後約 10 秒會自動連上。")
+    return Check(name, OK, f"在線（{age} 秒前回報，來源 {state.get('remote_addr') or '未知'}）")
+
+
+def check_front_recognition(state, enabled):
+    """前台人臉辨識是否執行中；後台停止它時要說明怎麼恢復。"""
+    name = FRONT + "人臉辨識"
+    if not enabled:
+        return Check(name, WARN, "後台已停止前台人臉辨識（前台按鈕會顯示「後台已停止」）",
+                     "後台營運狀態頁「前台連線」卡片按「▶ 恢復前台辨識」，約 10 秒後前台按鈕恢復，"
+                     "再按前台「▶ 啟動人臉辨識」。")
+    if not state["online"]:
+        return Check(name, WARN, "前台不在線，無法得知辨識狀態", "先讓前台連上線。")
+    if not state["status"].get("recognition_running"):
+        return Check(name, WARN, "前台已連線，但人臉辨識還沒啟動",
+                     "按前台儀表板右上角「▶ 啟動人臉辨識」（辨識不會跟著前台一起開）。")
+    return Check(name, OK, "執行中")
+
+
+def check_front_camera(state):
+    """辨識在跑時鏡頭要正常；辨識沒在跑就沒有鏡頭可以看，這一項略過。"""
+    status = state["status"]
+    if not state["online"] or not status.get("recognition_running"):
+        return None
+    if not status.get("camera_ok"):
+        return Check(FRONT + "鏡頭", FAIL, "辨識程式在跑，但前台讀不到鏡頭畫面",
+                     "確認前台鏡頭已接上、沒有被別的程式占用，且 Windows「隱私權與安全性 → 相機」允許桌面應用程式；"
+                     "前台記錄在 runtime\\logs\\terminal_app.log。")
+    return Check(FRONT + "鏡頭", OK, "正常")
+
+
+def check_front_faces(state, users):
+    """前台人臉資料筆數；0 筆就無法辨識任何人，和後台啟用員工數不同要提醒。"""
+    name = FRONT + "人臉資料"
+    if not state["online"]:
+        return None
+    faces = int(state["status"].get("faces", 0) or 0)
+    if faces == 0:
+        if users == 0:
+            return Check(name, FAIL, "前台沒有人臉資料，後台也還沒有員工",
+                         "後台還沒有員工人臉：用手機掃 QR Code 註冊至少一位員工。")
+        return Check(name, FAIL, "前台沒有人臉資料（後台已有員工）",
+                     "前台約 10 秒同步一次，等一下再檢查；仍然是 0 筆就看前台 runtime\\logs\\front_agent.log。")
+    if users is not None and faces != users:
+        return Check(name, WARN, f"前台 {faces} 筆，後台啟用員工 {users} 位",
+                     "有員工剛註冊或剛停用時會暫時不同，約 10 秒後再檢查；一直不同可能是有員工沒有人臉特徵。")
+    return Check(name, OK, f"{faces} 筆（與後台一致）" if users is not None else f"{faces} 筆")
+
+
+def check_front_pending(state):
+    """前台待補送事件（離線時打卡先存在前台，連上後補送）。"""
+    if not state["online"]:
+        return None
+    pending = int(state["status"].get("pending_events", 0) or 0)
+    if pending:
+        return Check(FRONT + "待補送事件", WARN, f"前台還有 {pending} 筆事件沒送到後台",
+                     "網路線正常的話約 10 秒內會自動補送；一直不減少就看前台 runtime\\logs\\front_agent.log。")
+    return Check(FRONT + "待補送事件", OK, "0 筆")
+
+
+def check_front_morning(brief, today):
+    """今天的晨報是否已產生（前台每 10 秒從後台同步，儀表板「早報」看得到才算真的同步）。"""
+    name = FRONT + "今日晨報"
+    if not brief:
+        return Check(name, WARN, "後台還沒有晨報",
+                     "晨報到設定時間會自動產生（預設 08:30，後台開著才會跑）；"
+                     "現在要用就到後台「日報與晨報」視窗按立即產生。")
+    day = str(brief.get("date", ""))
+    if day != today.isoformat():
+        return Check(name, WARN, f"最新晨報是 {day or '未知日期'} 的，不是今天",
+                     "後台「日報與晨報」視窗按立即產生晨報（需要後台連網）。")
+    news = brief.get("news")
+    count = len(news) if isinstance(news, list) else 0
+    if count == 0:
+        return Check(name, WARN, f"今天的晨報沒有新聞：{brief.get('news_problem') or '原因不明'}",
+                     "後台連不上網時會自動重抓（1、2、5 分鐘後每 10 分鐘）；確認後台有網路，或按立即產生。")
+    return Check(name, OK, f"今天的晨報已產生（{count} 則）；前台每 10 秒同步，儀表板「早報」會出現"
+                           "（這裡無法確認前台已收到）")
+
+
+def check_front_online_mode(local_only):
+    """後台全本地模式開著時，日報摘要與晨報都不會連網；這裡只看設定，不真的連網測試。"""
+    name = FRONT + "後台網路模式"
+    if local_only:
+        return Check(name, WARN, "後台是全本地模式：晨報抓不到新聞，日報摘要只用本機模型",
+                     "後台「日報與晨報」視窗關閉全本地模式（並確認環境變數 SMART_ACCESS_LOCAL_ONLY 沒設成 1）。")
+    return Check(name, OK, "全本地模式關閉，晨報可以連網抓新聞（只看設定，沒有實際連網測試）")
+
+
+def check_front(settings=None, network_results=None, state=None, enabled=None, users=None, brief=None,
+                today=None, local_only=None):
+    """雙機展示的前台區段；角色不是後台就整段略過（回傳一行說明，不算失敗）。參數都可由測試傳入。"""
+    from shared import role_config
+    settings = settings if settings is not None else role_config.load()
+    if settings.role != role_config.BACK:
+        return [Check("前台（雙機展示）", OK, f"這台角色是 {settings.role}，不是後台，略過前台檢查")]
+    from admin import front_status, network_check
+    from shared import digest_store, front_control, network_policy
+    results = _from_network("後台設定", network_check.check_role())
+    if network_results is None:
+        details = network_check.lan_discovery.link_local_details()
+        listeners = network_check._safe("監聽埠", network_check.read_listeners)
+        rules = network_check._safe("防火牆規則", network_check.read_firewall_rules)
+        network_results = {
+            "網路": network_check.check_adapter(details, settings),
+            "連線服務": (network_check.check_listeners(listeners, settings.back_port) if listeners is not None
+                         else [("WARN", "讀不到本機監聽埠，略過")]),
+            "防火牆": network_check.check_firewall(rules, settings.back_port),
+        }
+    for name, items in network_results.items():
+        results += _from_network(name, items)
+    state = state if state is not None else front_status.load()
+    enabled = enabled if enabled is not None else front_control.recognition_enabled()
+    users = users if users is not None else count_active_users()
+    brief = brief if brief is not None else digest_store.load_brief()
+    today = today or datetime.date.today()
+    local_only = local_only if local_only is not None else network_policy.local_only() is True
+    results.append(check_front_online(state))
+    results.append(check_front_recognition(state, enabled))
+    results += [c for c in (check_front_camera(state), check_front_faces(state, users),
+                            check_front_pending(state)) if c is not None]
+    results.append(check_front_morning(brief, today))
+    results.append(check_front_online_mode(local_only))
+    return results
+
+
 def run_all():
     """依序執行所有檢查；單項檢查出意外也只算該項失敗，不中斷其他項。"""
     items = [check_models, check_docs, check_database, check_gpu, check_ram, check_camera, check_ports, check_llm,
@@ -189,6 +351,10 @@ def run_all():
             results.append(fn())
         except Exception as e:  # 健檢本身不能當掉
             results.append(Check(fn.__name__.replace("check_", ""), FAIL, f"檢查時出錯：{e}"))
+    try:
+        results += check_front()
+    except Exception as e:  # 前台區段出意外只算一項失敗
+        results.append(Check(FRONT + "檢查", FAIL, f"檢查時出錯：{e}"))
     return results
 
 
@@ -202,12 +368,13 @@ def summarize(results):
     fails = sum(r.status == FAIL for r in results)
     warns = sum(r.status == WARN for r in results)
     lines.append("")
+    scope = "（前台＋後台）" if any(r.name.startswith(FRONT) for r in results) else ""
     if fails:
-        lines.append(f"結論：有 {fails} 項失敗，現在還不能展示，請先處理上面標 [失敗] 的項目。")
+        lines.append(f"結論：有 {fails} 項失敗，現在還不能展示{scope}，請先處理上面標 [失敗] 的項目。")
     elif warns:
-        lines.append(f"結論：可以展示，但有 {warns} 項要留意（標 [注意]）。")
+        lines.append(f"結論：可以展示{scope}，但有 {warns} 項要留意（標 [注意]）。")
     else:
-        lines.append("結論：全部通過，可以展示。")
+        lines.append(f"結論：全部通過，可以展示{scope}。")
     return "\n".join(lines), (1 if fails else 0)
 
 
@@ -215,7 +382,7 @@ def main():
     """命令列入口：印出結果並以結束碼回報。"""
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    print("展示前健檢中，請稍候…（會短暫開一下鏡頭）\n")
+    print("展示前健檢中，請稍候…（會短暫開一下鏡頭；後台角色會一併檢查前台連線）\n")
     text, code = summarize(run_all())
     print(text)
     return code

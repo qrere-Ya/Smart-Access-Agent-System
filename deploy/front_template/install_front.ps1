@@ -178,6 +178,6 @@ $env:SMART_ACCESS_LINK_TOKEN = [Environment]::GetEnvironmentVariable($TokenEnv, 
 & $VenvPy -m access.front_check
 $code = $LASTEXITCODE
 Write-Host ""
-if ($code -eq 0) { Write-Host "安裝完成。後台開好之後，雙擊桌面「啟動前台門禁」；操作方式看資料夾裡的「前台使用說明.txt」。" -ForegroundColor Green }
+if ($code -eq 0) { Write-Host "安裝完成。後台開好之後，雙擊桌面「啟動前台門禁」；操作方式看資料夾裡的「前台使用說明.txt」；展示當天雙擊「展示前台.bat」；驗證當天雙擊「前台驗證.bat」。" -ForegroundColor Green }
 else { Write-Host "安裝已完成，但自我檢查有失敗項目（見上方 FAIL），處理後可雙擊「前台檢查.bat」再檢查。" -ForegroundColor Yellow }
 Read-Host "按 Enter 結束"
