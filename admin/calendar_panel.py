@@ -15,7 +15,7 @@ calendar_panel.py：每日出勤報告、假日、請假與每週休息日的視
   - account_admin：員工清單
   - report_panel：每日出勤報告面板
   - ui_theme：色彩、字型、按鈕、表格、對話框
-  - backend_main：用 open_calendar_window 開啟
+  - backend_main：在主視窗內以頁面顯示
 """
 import datetime
 import sqlite3
@@ -285,13 +285,3 @@ class CalendarPanel(ctk.CTkFrame):
         for var, on in zip(self.rest_vars, calendar_logic.rest_flags(days), strict=True):
             var.set(on)
         self.rest_status.configure(text=f"目前設定：{calendar_logic.describe_rest_days(days)}")
-
-
-def open_calendar_window(root):
-    """開啟出勤報告與假日請假視窗並回傳它。"""
-    win = ctk.CTkToplevel(root)
-    win.title("出勤報告與假日請假")
-    win.geometry("900x700")
-    ui_theme.style_window(win)
-    CalendarPanel(win).pack(fill="both", expand=True)
-    return win

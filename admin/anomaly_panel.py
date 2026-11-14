@@ -145,13 +145,3 @@ class AnomalyPanel(ctk.CTkFrame):
         else:
             self.notifier.mark_all_read()
         self.refresh()
-
-
-def open_anomaly_window(root, notifier=None, on_mark_read=None):
-    """開啟異常事件視窗並回傳它。"""
-    win = ctk.CTkToplevel(root)
-    win.title("異常事件")
-    win.geometry("1180x700")
-    ui_theme.style_window(win)
-    AnomalyPanel(win, notifier, on_mark_read).pack(fill="both", expand=True)
-    return win

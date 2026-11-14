@@ -10,7 +10,7 @@ report_panel.py：每日出勤報告的畫面（CustomTkinter 外框，表格用
 串接模組：
   - attendance_report：查詢與匯出
   - ui_theme：色彩、字型、按鈕、表格樣式、對話框
-  - backend_main：用 open_report_window 開啟
+  - calendar_panel：出勤報告頁內嵌本面板
 """
 import datetime
 import tkinter as tk
@@ -103,13 +103,3 @@ class ReportPanel(ctk.CTkFrame):
             ui_theme.show_message(self.winfo_toplevel(), "每日出勤報告", "匯出失敗，請確認位置可以寫入。", "error")
             return
         ui_theme.show_message(self.winfo_toplevel(), "每日出勤報告", f"已匯出 {count} 筆到\n{path}")
-
-
-def open_report_window(root):
-    """開啟每日出勤報告視窗並回傳它。"""
-    win = ctk.CTkToplevel(root)
-    win.title("每日出勤報告")
-    win.geometry("900x560")
-    ui_theme.style_window(win)
-    ReportPanel(win).pack(fill="both", expand=True)
-    return win

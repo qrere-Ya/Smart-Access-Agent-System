@@ -14,10 +14,14 @@ ui_theme.py：後台與企業知識庫視窗共用的 CustomTkinter 主題（色
   - rag.chat_window、admin.backend_main：後續批次遷移時改用這裡的 token 與元件
   - tests/unit/shared/test_ui_theme.py（純邏輯）、tests/integration/test_ui_theme_widgets.py（真 Tk）
 """
+import json
+import os
 import tkinter as tk
 from tkinter import ttk
 
 import customtkinter as ctk
+
+from shared import paths
 
 FONT_FAMILY = "微軟正黑體"
 FONT_SIZE_SMALL = 12
@@ -85,6 +89,36 @@ def color(name, mode=None):
 def pair(name):
     """取 (亮, 暗) 雙色，直接餵給 customtkinter 的 fg_color／text_color，切換外觀會自動換色。"""
     return (COLORS["light"][name], COLORS["dark"][name])
+
+
+# 使用者在後台右上角選的外觀（淺色／深色／跟隨系統），記在 runtime/ui_mode.json，下次開啟沿用
+MODE_CHOICES = (("light", "☀ 淺色"), ("dark", "🌙 深色"), ("system", "🖥 系統"))
+
+
+def _mode_path():
+    return os.path.join(paths.RUNTIME_DIR, "ui_mode.json")
+
+
+def load_mode(default="system"):
+    """讀上次選的外觀；沒有檔案、壞檔或值不合法都回傳預設值。"""
+    try:
+        with open(_mode_path(), encoding="utf-8") as f:
+            value = json.load(f).get("mode")
+        return value if value in ("light", "dark", "system") else default
+    except (OSError, ValueError, AttributeError):
+        return default
+
+
+def save_mode(mode):
+    """記住外觀選擇；寫不進去也不影響使用。"""
+    if mode not in ("light", "dark", "system"):
+        raise ValueError(f"未知的外觀模式：{mode}")
+    try:
+        os.makedirs(paths.RUNTIME_DIR, exist_ok=True)
+        with open(_mode_path(), "w", encoding="utf-8") as f:
+            json.dump({"mode": mode}, f)
+    except OSError:
+        pass
 
 
 def apply_theme(mode="system", color_theme="blue"):
@@ -167,6 +201,7 @@ class _Dialog(ctk.CTkToplevel):
     """模態對話框：置中於父視窗、grab_set，關閉（含按 X）等同取消。"""
 
     def __init__(self, master, title, message, buttons, kind):
+        master = master.winfo_toplevel() if master is not None else None   # 頁面內的元件也能當父層，掛在所屬視窗上
         super().__init__(master)
         self.result = None
         self.withdraw()

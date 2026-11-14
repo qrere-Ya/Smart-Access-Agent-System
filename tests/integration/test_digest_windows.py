@@ -23,6 +23,22 @@ def settings_files(tmp_path, monkeypatch):
     return digest_store
 
 
+def host_view(root, cls, *args, size="960x860", **kw):
+    """日報頁與排程頁現在是嵌在主視窗的頁面；測試用一個空的頂層視窗當主視窗。"""
+    import customtkinter as ctk
+
+    from shared import ui_theme
+
+    top = ctk.CTkToplevel(root)
+    top.geometry(size)
+    ui_theme.style_window(top)
+    view = cls(top, *args, **kw)
+    view.pack(fill="both", expand=True)
+    view.host = top
+    top.deiconify()
+    return view
+
+
 def pump(root, seconds=0.3):
     end = time.time() + seconds
     while time.time() < end:
@@ -72,14 +88,16 @@ def test_the_main_menu_has_the_new_module_and_the_footer_has_one_button(root, db
     assert "日報與晨報" in texts and "📋 日報" in texts and "📰 日報／晨報" not in texts
     assert not {"🌅 晨報", "⚙ 排程"} & set(texts)
     app.open_schedule()
+    pump(root)
+    assert app.page_key == "schedule" and "📰 日報與晨報" in texts_of(root)      # 直接換頁，不另開視窗
     app.open_report("digest")
     pump(root)
-    assert app.schedule_win.title() == "日報與晨報" and app.report_win.title() == "日報"
-    first = app.report_win
-    app.open_report("morning")                                   # 舊呼叫端傳 morning 也只開日報，且不重複開
-    assert app.report_win is first and app.report_win.tabs.get() == "📋 日報" and "morning" not in first.bubbles
-    app.report_win.destroy()
-    app.schedule_win.destroy()
+    assert app.page_key == "report" and "📋 日報" in texts_of(root)
+    first = app.report_view
+    app.open_report("morning")                                   # 舊呼叫端傳 morning 也只顯示日報，且不重複建
+    assert app.report_view is first and app.report_view.tabs.get() == "📋 日報" and "morning" not in first.bubbles
+    app.show_home()
+    assert app.page_key == "home"
     app.teardown()
 
 
@@ -87,8 +105,8 @@ def test_the_viewer_only_views(root, db, settings_files):
     from admin import digest_window
 
     calls = []
-    win = digest_window.open_report_window(root, fake_runner(root, "日報", settings_files, calls),
-                                           fake_runner(root, "晨報", settings_files, calls), "digest")
+    win = host_view(root, digest_window.ReportView, fake_runner(root, "日報", settings_files, calls),
+                    fake_runner(root, "晨報", settings_files, calls), "digest")
     pump(root)
     labels = texts_of(win)
     assert not any("HH:MM" in t or "儲存" in t or "立即產生" in t for t in labels if isinstance(t, str))
@@ -105,8 +123,8 @@ def test_module_window_saves_both_times_and_refuses_a_bad_one_without_touching_t
     calls = []
     messages = []
     monkeypatch.setattr(ui_theme, "show_message", lambda master, title, message, kind="info": messages.append(message))
-    win = schedule_window.open_schedule_window(root, fake_runner(root, "日報", settings_files, calls),
-                                               fake_runner(root, "晨報", settings_files, calls))
+    win = host_view(root, schedule_window.ScheduleView, fake_runner(root, "日報", settings_files, calls),
+                    fake_runner(root, "晨報", settings_files, calls), size="900x640")
     pump(root)
     assert win.entries["morning"].get() == "08:30" and win.entries["digest"].get() == "18:00"
     win.entries["morning"].delete(0, "end")
@@ -133,8 +151,8 @@ def test_generate_now_updates_the_module_and_an_open_viewer(root, db, settings_f
     morning = fake_runner(root, "晨報", settings_files, calls)
     messages = []
     monkeypatch.setattr(ui_theme, "show_message", lambda master, title, message, kind="info": messages.append(message))
-    viewer = digest_window.open_report_window(root, digest, morning)
-    win = schedule_window.open_schedule_window(root, digest, morning)
+    viewer = host_view(root, digest_window.ReportView, digest, morning)
+    win = host_view(root, schedule_window.ScheduleView, digest, morning, size="900x640")
     win.date_entry.delete(0, "end")
     win.date_entry.insert(0, "亂打")
     win._run_digest()
@@ -166,8 +184,7 @@ def long_digest(settings_files, links=5):
 def open_viewer(root, settings_files):
     from admin import digest_window
 
-    win = digest_window.open_report_window(root, digest_window.digest_runner(root))
-    win.deiconify()
+    win = host_view(root, digest_window.ReportView, digest_window.digest_runner(root))
     pump(root, 0.6)
     return win
 
@@ -224,7 +241,7 @@ def test_the_viewer_is_big_and_the_messages_follow_the_window_width(root, db, se
     assert win.winfo_width() >= 900 and win.winfo_height() >= 800
     bubble = win.bubbles["digest"]
     before = int(bubble.box.cget("width"))
-    win.geometry("1300x860")
+    win.host.geometry("1300x860")
     pump(root, 0.6)
     assert int(bubble.box.cget("width")) > before
     win.destroy()
