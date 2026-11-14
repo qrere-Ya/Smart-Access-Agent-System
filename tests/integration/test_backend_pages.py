@@ -134,3 +134,24 @@ def test_a_digest_finishing_after_the_screen_is_torn_down_does_nothing(root, app
     app._digest_ready({"date": "2026-11-13"})
     _pump(root, 0.1)
     assert app.errors == []
+
+
+def test_a_card_click_handler_survives_being_called_without_an_event(root, app):
+    """回歸：使用者回報過卡片點擊的處理函式「缺 e 參數」（Tcl 以零個參數呼叫它）；處理函式的事件參數必須可省略。"""
+    import re
+
+    wall = next(c for c in app.content.winfo_children() if len(c.winfo_children()) == 6)
+    card = wall.winfo_children()[1]                                   # 員工帳號管理
+    handlers, stack = set(), [card]
+    while stack:
+        widget = stack.pop()
+        stack.extend(widget.winfo_children())
+        for target in (getattr(widget, "_canvas", None), getattr(widget, "_label", None)):
+            if target is not None:
+                handlers.update(name for name in re.findall(r"\[(\S+) %#", target.bind("<Button-1>"))
+                                if "on_click" in name)
+    assert handlers, "找不到卡片的點擊處理函式"
+    for name in handlers:
+        root.tk.call(name)                                            # 等於 Tcl 沒帶任何事件資料就呼叫它
+    _pump(root, 0.3)
+    assert app.errors == [] and app.page_key == "accounts"

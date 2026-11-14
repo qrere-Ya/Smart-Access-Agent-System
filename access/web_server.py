@@ -22,6 +22,7 @@ from shared import database_mgr as db
 from shared import phone_address
 import secrets
 import string
+import threading
 import time
 
 def get_local_ip_offline():
@@ -87,8 +88,16 @@ def index():
                '<p>請重新掃描電腦螢幕上的 QR Code</p></div>', 403
     return render_template('register.html')
 
+_register_lock = threading.Lock()   # 同一時間只處理一個註冊：重複送出的請求排隊，等前一個做完才看到 Token 已作廢
+
+
 @app.route('/api/register', methods=['POST'])
 def api_register():
+    with _register_lock:
+        return _handle_register()
+
+
+def _handle_register():
     """處理手機端註冊請求：驗證 Token、萃取人臉特徵、寫入資料庫，成功後作廢 Token"""
     try:
         # 1. 驗證 Token

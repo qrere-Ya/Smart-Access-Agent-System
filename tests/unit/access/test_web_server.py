@@ -136,3 +136,26 @@ def test_internal_errors_do_not_leak_exception_details(client, fake_face):
     body = reply.get_json()
     assert reply.status_code == 500 and body["status"] == "error"
     assert "模型壞了" not in body["message"] and "RuntimeError" not in body["message"]
+
+
+def test_simultaneous_submissions_with_one_token_register_exactly_one_user(client, fake_face, db):
+    """回歸：同一個 Token 同時送出好幾次（手機連按），只能成功一次，其餘看到「已失效」或「已註冊」，不會多出員工。"""
+    import sqlite3
+    import threading
+
+    token = issue_token(client)
+    statuses = []
+
+    def submit():
+        statuses.append(post_form(client, token).status_code)
+
+    threads = [threading.Thread(target=submit) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert statuses.count(200) == 1 and len(statuses) == 6
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM Users").fetchone()[0] == 1
+    con.close()
+    assert token not in ws.valid_tokens
