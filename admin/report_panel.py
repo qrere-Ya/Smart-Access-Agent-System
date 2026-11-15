@@ -35,7 +35,7 @@ class ReportPanel(ctk.CTkFrame):
         if not embedded:
             ui_theme.section_title(self, "📋 每日出勤報告").pack(anchor="w", padx=pad, pady=(pad, 0))
         ui_theme.muted_label(
-            self, "缺勤＝非假日、非請假且當天完全沒有打卡紀錄；假日與請假資料在隔壁分頁維護。").pack(
+            self, "缺勤＝非休息日且當天完全沒有打卡紀錄；週六日與國定假日自動判斷。").pack(
             anchor="w", padx=pad, pady=(4 if embedded else 2, 10))
 
         bar = ctk.CTkFrame(self, fg_color="transparent", height=1)

@@ -1,10 +1,9 @@
 """
-假日、請假與 Attendance.user_id 的單元測試：輸入驗證、舊資料庫遷移與回填、打卡寫入 user_id、
-出勤報告的假日／請假／同名處理。
+Attendance.user_id 的單元測試：舊資料庫遷移與回填、打卡寫入 user_id、出勤報告的同名處理。
+（假日與請假功能已移除，休息日改由 work_calendar 自動判斷，見 test_work_calendar.py）
 """
 import sqlite3
 
-import pytest
 
 from admin import attendance_report as ar
 from shared import database_mgr
@@ -26,36 +25,6 @@ def _uid(db, name):
         return con.execute("SELECT id FROM Users WHERE name=?", (name,)).fetchone()[0]
     finally:
         con.close()
-
-
-def test_holiday_crud_and_validation(db):
-    database_mgr.add_holiday("2026-10-10", "國慶日")
-    database_mgr.add_holiday("2026-10-10", "雙十")  # 同日期更新名稱
-    assert database_mgr.list_holidays() == [{"date": "2026-10-10", "name": "雙十"}]
-    assert database_mgr.is_holiday("2026-10-10") and not database_mgr.is_holiday("2026-10-11")
-    assert database_mgr.list_holidays(start="2026-10-11") == []
-    for bad in ("2026/10/10", "2026-13-01", "", "x'; DROP TABLE Users;--"):
-        with pytest.raises(ValueError):
-            database_mgr.add_holiday(bad)
-    assert database_mgr.remove_holiday("2026-10-10") is True
-    assert database_mgr.remove_holiday("2026-10-10") is False
-
-
-def test_leave_crud_and_validation(db, add_user):
-    add_user("甲", "1")
-    uid = _uid(db, "甲")
-    lid = database_mgr.add_leave(uid, "2026-10-13", "2026-10-15", "病假", "感冒")
-    assert database_mgr.list_leaves(user_id=uid)[0]["kind"] == "病假"
-    assert len(database_mgr.list_leaves(on_date="2026-10-14")) == 1
-    assert database_mgr.list_leaves(on_date="2026-10-16") == []
-    with pytest.raises(ValueError):
-        database_mgr.add_leave(uid, "2026-10-15", "2026-10-13")  # 起訖顛倒
-    with pytest.raises(ValueError):
-        database_mgr.add_leave(uid, "bad", "2026-10-13")
-    with pytest.raises(ValueError):
-        database_mgr.add_leave(9999, "2026-10-13", "2026-10-13")  # 員工不存在
-    assert database_mgr.remove_leave(lid) is True
-    assert database_mgr.remove_leave(lid) is False
 
 
 def test_migration_adds_column_and_backfills(tmp_path, monkeypatch):
@@ -90,29 +59,6 @@ def test_log_attendance_writes_user_id(db, add_user, clock):
     uid = con.execute("SELECT user_id FROM Attendance WHERE name='乙'").fetchone()[0]
     con.close()
     assert uid == _uid(db, "乙")
-
-
-def test_report_holiday_and_leave(db, add_user):
-    add_user("甲", "1")
-    add_user("乙", "2")
-    database_mgr.add_leave(_uid(db, "乙"), DAY, DAY, "事假")
-    database_mgr.add_holiday(DAY, "補假")
-    rows = {r["name"]: r for r in ar.build_report(DAY)["rows"]}
-    assert rows["甲"]["status"] == ar.STATUS_HOLIDAY and rows["甲"]["note"] == "補假"
-    assert rows["乙"]["status"] == ar.STATUS_HOLIDAY  # 假日優先
-    database_mgr.remove_holiday(DAY)
-    report = ar.build_report(DAY)
-    rows = {r["name"]: r for r in report["rows"]}
-    assert rows["乙"]["status"] == ar.STATUS_LEAVE and "事假" in rows["乙"]["note"]
-    assert rows["甲"]["status"] == ar.STATUS_ABSENT
-    assert report["counts"] == {ar.STATUS_ABSENT: 1, ar.STATUS_LEAVE: 1}
-
-
-def test_report_punch_on_holiday_keeps_actual_status(db, add_user):
-    add_user("甲", "1")
-    database_mgr.add_holiday(DAY, "加班日")
-    _punch(db, "甲", "07:50:00", "上班", user_id=_uid(db, "甲"))
-    assert ar.build_report(DAY)["rows"][0]["status"] == ar.STATUS_NO_CLOCK_OUT
 
 
 def test_report_uses_user_id_over_name(db, add_user):

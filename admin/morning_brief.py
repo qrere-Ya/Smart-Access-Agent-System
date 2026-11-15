@@ -4,7 +4,7 @@ morning_brief.py：每天早上的晨報（科技早報）的產生與排程判�
 主要功能：
   - build_brief：只有科技新聞（news_feed：科技媒體、AI 官方部落格、Hacker News，每則有類別、發生什麼事、
     為什麼重要、可以怎麼用、來源與原文）；早報文字是來源原文加固定句子，不交給語言模型。
-    出勤資料（昨日出勤、今天請假）不在晨報裡，只在後台的日報
+    出勤資料（昨日出勤）不在晨報裡，只在後台的日報
   - generate：產生並存檔今天的晨報；新聞抓不到（例如沒有網路）時照樣存檔並記下失敗原因與已試次數，之後會自動重抓
   - pending_morning：排程判斷——到了設定時間（預設 08:30）且今天要上班、今天還沒有晨報就產生；
     後台比設定時間晚開（例如開機時已經 10:00）也會在開啟後補產今天的晨報，前幾天沒產生的不補；
@@ -12,13 +12,13 @@ morning_brief.py：每天早上的晨報（科技早報）的產生與排程判�
   - retry_wait：新聞抓不到時下一次重抓前要等多久（1、2、5 分鐘，之後每 10 分鐘），試滿上限就不再等
 
 串接模組：
-  - news_feed：新聞；database_mgr：只用來判斷今天是不是上班日；shared.digest_store：存檔與設定
+  - news_feed：新聞；work_calendar：只用來判斷今天是不是上班日；shared.digest_store：存檔與設定
   - admin.digest_window：背景執行、重抓排程與顯示；backend_main：每分鐘判斷
 """
 import datetime
 
 from admin import news_feed
-from shared import database_mgr
+from shared import work_calendar
 from shared import network_policy
 from shared import digest_store
 
@@ -28,7 +28,7 @@ RETRY_MINUTES_AFTER = 10
 
 
 def _default_workday(d):
-    return database_mgr.day_off_reason(d.isoformat()) is None
+    return work_calendar.day_off_reason(d.isoformat()) is None
 
 
 def build_brief(today, fetch=news_feed.fetch_ai_news, now=None, tries=1):

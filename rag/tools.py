@@ -11,7 +11,6 @@ tools.py：企業知識庫的唯讀工具清單（每個工具包一個 queries 
   - answer：解析好人名與日期後呼叫 run
   - router：DATA_TOOLS 取自這裡的工具名稱
 """
-import datetime
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
@@ -19,8 +18,6 @@ from rag import queries
 from shared import event_labels
 
 MAX_LISTED_ROWS = 30
-HOLIDAY_LOOKAHEAD_DAYS = 365
-_WEEKDAY_NAMES = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")
 
 
 @dataclass
@@ -73,11 +70,10 @@ def summary_text(s: dict) -> str:
         return "、".join(f"{p['name']}（{p['timestamp'][11:16]}）" for p in items) or "無"
 
     head = f"{s['date']}　出勤摘要" + (f"（{s['day_off']}，不用上班）" if s.get("day_off") else "")
-    on_leave = f"請假：{'、'.join(s['on_leave'])}\n" if s.get("on_leave") else ""
     note = ("（休息日沒有打卡屬正常）" if s.get("day_off")
-            else "（沒有打卡紀錄不等於缺勤：可能是系統尚未登錄的假日或請假）")
+            else "（上班日沒有打卡紀錄才算缺勤；週六日與國定假日自動判斷，不算缺勤）")
     return (f"{head}\n有打卡人數：{s['punched_count']}\n遲到：{names(s['late'])}\n"
-            f"早退：{names(s['early_leave'])}\n加班：{names(s['overtime'])}\n{on_leave}"
+            f"早退：{names(s['early_leave'])}\n加班：{names(s['overtime'])}\n"
             f"在職但當天沒有打卡紀錄：{'、'.join(s['no_record']) or '無'}\n{note}")
 
 
@@ -128,31 +124,8 @@ def _roster(a: ToolArgs) -> ToolResult:
         f"{p['name']}（{p['employee_id']}）{'' if p['active'] else '　已停用'}" for p in people]))
 
 
-def _leaves(a: ToolArgs) -> ToolResult:
-    start, end = (a.start, a.end) if a.ranged else (a.today, a.today)
-    rows = queries.leaves(start, end, a.person or None)
-    who = f"{a.person}　" if a.person else ""
-    return ToolResult(lines_block(f"{span_text(start, end)}　{who}請假", [
-        f"{r['name']}　{span_text(r['start_date'], r['end_date'])}" + (f"　{r['kind']}" if r["kind"] else "")
-        for r in rows]))
-
-
-def _holidays(a: ToolArgs) -> ToolResult:
-    notes = []
-    if a.ranged:
-        start, end = a.start, a.end
-    else:
-        start = a.today
-        end = (datetime.date.fromisoformat(a.today) + datetime.timedelta(days=HOLIDAY_LOOKAHEAD_DAYS)).isoformat()
-        notes.append("問題沒有指定時間，列出今天起一年內的假日。")
-    rows = queries.holidays(start, end)
-    rest = "、".join(_WEEKDAY_NAMES[d] for d in queries.rest_weekdays()) or "無"
-    text = lines_block(f"{span_text(start, end)}　登錄的假日", [f"{r['date']}　{r['name'] or '假日'}" for r in rows])
-    return ToolResult(f"{text}\n每週固定休息日：{rest}", notes)
-
-
 # 問題沒有時間說法時，預設只看今天的工具（其餘工具沒有時間就看全部期間或最近）
-TODAY_BY_DEFAULT = ("status_list", "leaves", "summary")
+TODAY_BY_DEFAULT = ("status_list", "summary")
 
 TOOLS = {t.name: t for t in (
     Tool("records", "某位員工的打卡紀錄", _records, needs_person=True),
@@ -161,8 +134,6 @@ TOOLS = {t.name: t for t in (
     Tool("summary", "某一天的出勤摘要與誰沒有打卡", _summary),
     Tool("anomalies", "異常事件（尾隨、經過鏡頭未打卡）", _anomalies),
     Tool("roster", "員工名單", _roster),
-    Tool("leaves", "某段時間誰請假（可只看某位員工）", _leaves, optional_person=True),
-    Tool("holidays", "登錄的假日與每週固定休息日", _holidays),
 )}
 
 

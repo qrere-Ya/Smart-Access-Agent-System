@@ -1,5 +1,5 @@
 """
-後台畫面自動截圖：登入、主選單、每日出勤報告、異常通知彈窗、帳號管理、假日與請假，亮暗色各一張，
+後台畫面自動截圖：登入、主選單、每日出勤報告、異常通知彈窗、帳號管理、出勤報告頁，亮暗色各一張，
 存到 runtime/screenshots/ 並檢查不是空白。截圖給人看外觀；測試只負責確認視窗開得起來、有畫出東西、
 視窗高度沒被撐大（CTkFrame 預設高 200）。
 """
@@ -143,29 +143,16 @@ def test_account_page_screenshot(root, db, add_user, add_attendance, screenshot,
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_calendar_pages_screenshot(root, db, add_user, screenshot, appearance, mode):
+def test_attendance_report_page_screenshot(root, db, add_user, add_attendance, screenshot, appearance, mode):
     from admin.backend_main import BackendManagerApp
-    from shared import database_mgr as dbm
 
     appearance(mode)
-    add_user("王小明", "E001")
-    add_user("陳大華", "E002")
-    dbm.add_holiday("2026-12-25", "行憲紀念日")
-    dbm.add_holiday("2027-01-01", "開國紀念日")
-    dbm.add_leave(1, "2026-11-10", "2026-11-12", "特休", "出國旅遊")
+    _seed(add_user, add_attendance)
     root.deiconify()
     app = BackendManagerApp(root)
     root.geometry("1280x820+20+10")
     app.open_calendar()
-    panel = app.calendar_view
-    panel.tabs.set("假日")
-    shots = [screenshot(root, f"後台_假日_{mode}")]
-    panel.tabs.set("請假")
-    panel.refresh_all()
-    shots.append(screenshot(root, f"後台_請假_{mode}"))
-    panel.tabs.set("每週休息日")
-    shots.append(screenshot(root, f"後台_每週休息日_{mode}"))
-    assert all(shots)
+    assert screenshot(root, f"後台_出勤報告_{mode}")
     app.teardown()
 
 
