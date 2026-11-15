@@ -38,6 +38,7 @@ from PIL import Image
 from admin import (
     account_panel,
     anomaly_panel,
+    calendar_fetch,
     calendar_panel,
     console_panel,
     dashboard_stats,
@@ -361,6 +362,7 @@ class BackendManagerApp:
         self.morning_runner = digest_window.morning_runner(self.root, on_new=self._morning_ready)   # 晨報只給前台
         ui_theme.link_button(footer, "⚙ 排程設定", self.open_schedule, width=90,
                              height=24).pack(side="right", padx=(0, 10))
+        self.calendar_refresher = calendar_fetch.CalendarRefresher()
         self.root.after(5000, self._tick_digest)
         self._tick_system_status()
         self._drain_console_lines()
@@ -681,6 +683,7 @@ class BackendManagerApp:
             return
         self.morning_runner.tick()
         self.digest_runner.tick()
+        self.calendar_refresher.tick()          # 國定假日資料到期才在背景更新，其餘時候什麼都不做
         self.root.after(60000, self._tick_digest)
 
     @staticmethod

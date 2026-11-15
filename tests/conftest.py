@@ -38,6 +38,16 @@ def _ignore_real_free_memory(request, monkeypatch):
     monkeypatch.setattr(resource_manager, "_free_vram_mb", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_holiday_download(request, monkeypatch):
+    """後台的假日資料更新每分鐘會 tick 一次，測試中不能真的連網抓；只有 test_calendar_fetch.py 自己控制它。"""
+    if request.node.fspath.basename == "test_calendar_fetch.py":
+        return
+    from admin import calendar_fetch
+
+    monkeypatch.setattr(calendar_fetch.CalendarRefresher, "tick", lambda self: False)
+
+
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     """臨時資料庫（已建立所有資料表），並讓 database_mgr 使用它。"""
