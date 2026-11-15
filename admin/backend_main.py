@@ -202,8 +202,8 @@ class BackendManagerApp:
              self.open_assistant_window),
             ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
              self.open_calendar),
-            ("📰", "出勤日報與科技早報", "設定每天自動產生的時間、立即產生、查看每日出勤日報；科技早報送到前台螢幕",
-             "info", self.open_schedule),
+            ("📰", "出勤日報", "查看每天的出勤明細與 AI 摘要（排程時間在底部「⚙ 排程設定」）", "info",
+             self.open_report),
         ]
         for idx, (icon, title, desc, accent, cmd) in enumerate(modules):
             row, col = divmod(idx, 2)
@@ -359,7 +359,7 @@ class BackendManagerApp:
         self.notification_bar.frame.pack(side="right")
         self.digest_runner = digest_window.digest_runner(self.root, on_new=self._digest_ready)
         self.morning_runner = digest_window.morning_runner(self.root, on_new=self._morning_ready)   # 晨報只給前台
-        ui_theme.link_button(footer, "📋 出勤日報", lambda: self.open_report("digest"), width=90,
+        ui_theme.link_button(footer, "⚙ 排程設定", self.open_schedule, width=90,
                              height=24).pack(side="right", padx=(0, 10))
         self.root.after(5000, self._tick_digest)
         self._tick_system_status()
@@ -695,7 +695,7 @@ class BackendManagerApp:
         if self.page_key == "home":
             self.open_report("digest")
         else:
-            self.notice("新的出勤日報已產生，按底部「📋 出勤日報」查看。")
+            self.notice("新的出勤日報已產生，回主選單按「出勤日報」卡片查看。")
 
     def open_report(self, kind="digest"):
         """切到出勤日報頁（kind 保留給舊呼叫端）；已經在出勤日報頁就只重畫。"""
@@ -712,13 +712,13 @@ class BackendManagerApp:
         self._open_page("report", "📋 出勤日報", build)
 
     def open_schedule(self):
-        """切到「出勤日報與科技早報」模組頁。"""
+        """切到排程設定頁（出勤日報與科技早報的排程時間、立即產生、全本地模式）；入口是底部「⚙ 排程設定」。"""
         def build(body):
             self.schedule_view = schedule_window.ScheduleView(body, self.digest_runner, self.morning_runner,
                                                               self.open_report, on_close=self.show_home)
             self.schedule_view.pack(fill="both", expand=True)
 
-        self._open_page("schedule", "📰 出勤日報與科技早報", build)
+        self._open_page("schedule", "⚙ 排程設定", build)
 
     def open_anomalies(self):
         """切到異常事件頁；在這裡標為已讀會同步清掉通知列的紅點。"""

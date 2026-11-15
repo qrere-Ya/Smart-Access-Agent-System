@@ -9,7 +9,7 @@ digest_window.py：出勤日報與科技早報的背景產生，以及出勤日�
     （AI 摘要標示「數字與人名已核對」，沒有摘要就只顯示明細）；視窗可放大、訊息寬度跟著變，滾輪在訊息上也能捲動；
     文字裡的網址可以點（只有 https 公開網域，用預設瀏覽器開）；排程自動產生新出勤日報時會彈出
   - 科技早報後台不顯示：產生後由前台代理同步、在前台的螢幕上顯示（後台只留排程時間與立即產生）
-  - 產生時間與立即產生不在這裡，在主選單的「出勤日報與科技早報」模組（schedule_window）
+  - 產生時間與立即產生不在這裡，在底部「⚙ 排程設定」頁（schedule_window）
 
 串接模組：
   - daily_digest／morning_brief：產生與排程判斷；shared.digest_store：存檔與設定；ui_theme：外觀
@@ -153,7 +153,7 @@ class ReportView(ctk.CTkFrame):
             frame.pack(fill="both", expand=True)
             self.bubbles[kind] = Bubble(frame, "assistant", "", width=BUBBLE_MIN_WIDTH)
             self.bubbles[kind].pack(anchor="w", pady=4)
-        self.status = ui_theme.muted_label(self, "要設定時間或手動產生，請到主選單的「出勤日報與科技早報」模組。")
+        self.status = ui_theme.muted_label(self, "要設定時間或手動產生，請按底部的「⚙ 排程設定」。")
         self.status.pack(fill="x", padx=pad)
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=pad, pady=(6, pad))

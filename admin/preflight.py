@@ -281,11 +281,11 @@ def check_front_morning(brief, today):
     if not brief:
         return Check(name, WARN, "後台還沒有科技早報",
                      "科技早報到設定時間會自動產生（預設 08:30，後台開著才會跑）；"
-                     "現在要用就到後台「出勤日報與科技早報」視窗按立即產生。")
+                     "現在要用就到後台底部「⚙ 排程設定」頁按立即產生。")
     day = str(brief.get("date", ""))
     if day != today.isoformat():
         return Check(name, WARN, f"最新科技早報是 {day or '未知日期'} 的，不是今天",
-                     "後台「出勤日報與科技早報」視窗按立即產生科技早報（需要後台連網）。")
+                     "後台底部「⚙ 排程設定」頁按立即產生科技早報（需要後台連網）。")
     news = brief.get("news")
     count = len(news) if isinstance(news, list) else 0
     if count == 0:
@@ -300,7 +300,7 @@ def check_front_online_mode(local_only):
     name = FRONT + "後台網路模式"
     if local_only:
         return Check(name, WARN, "後台是全本地模式：科技早報抓不到新聞，出勤日報摘要只用本機模型",
-                     "後台「出勤日報與科技早報」視窗關閉全本地模式"
+                     "後台底部「⚙ 排程設定」頁關閉全本地模式"
                      "（並確認環境變數 SMART_ACCESS_LOCAL_ONLY 沒設成 1）。")
     return Check(name, OK, "全本地模式關閉，科技早報可以連網抓新聞（只看設定，沒有實際連網測試）")
 

@@ -1,5 +1,5 @@
 """
-schedule_window.py：主選單「出勤日報與科技早報」模組的頁面（CustomTkinter，嵌在後台主視窗裡）——排程時間設定與立即產生。
+schedule_window.py：排程設定頁（底部「⚙ 排程設定」進入）（CustomTkinter，嵌在後台主視窗裡）——排程時間設定與立即產生。
 
 主要功能：
   - 兩個時間欄（科技早報預設 08:30、出勤日報預設 18:00，HH:MM 24 小時制），按「儲存」一次存兩個；
@@ -14,7 +14,7 @@ schedule_window.py：主選單「出勤日報與科技早報」模組的頁面�
 
 串接模組：
   - digest_window：DigestRunner（背景產生）；shared.digest_store：讀寫時間設定；attendance_report：日期驗證
-  - ui_theme：外觀；backend_main：主選單的「出勤日報與科技早報」卡片開啟本視窗
+  - ui_theme：外觀；backend_main：底部「⚙ 排程設定」按鈕開啟本頁
 """
 import datetime
 
@@ -32,7 +32,7 @@ EXPLAIN = ("後台開著的時候，每分鐘檢查一次。到了設定的時�
 
 
 class ScheduleView(ctk.CTkFrame):
-    """出勤日報與科技早報模組頁（嵌在後台主視窗裡，不另開視窗）：排程時間、立即產生、查看。"""
+    """排程設定頁（嵌在後台主視窗裡，不另開視窗）：排程時間、立即產生、查看。"""
 
     def __init__(self, master, digest, morning, on_view=None, on_close=None):
         super().__init__(master, fg_color="transparent", height=1)
@@ -121,14 +121,14 @@ class ScheduleView(ctk.CTkFrame):
         names = {"morning": "科技早報", "digest": "出勤日報"}
         bad = [names[k] for k, v in values.items() if not digest_store.valid_time(v)]
         if bad:
-            ui_theme.show_message(self, "出勤日報與科技早報",
+            ui_theme.show_message(self, "排程設定",
                                   f"{'、'.join(bad)}的時間格式需為 HH:MM（24 小時制），例如 08:30。", "warning")
             return
         try:
             digest_store.save_morning_time(values["morning"])
             digest_store.save_time(values["digest"])
         except OSError:
-            ui_theme.show_message(self, "出勤日報與科技早報", "儲存失敗，請確認 runtime 資料夾可以寫入。", "error")
+            ui_theme.show_message(self, "排程設定", "儲存失敗，請確認 runtime 資料夾可以寫入。", "error")
             return
         self.status.configure(text=f"已儲存：科技早報 {values['morning']}、出勤日報 {values['digest']}。")
 
@@ -155,7 +155,7 @@ class ScheduleView(ctk.CTkFrame):
         try:
             day = attendance_report.parse_date(self.date_entry.get())
         except ValueError as e:
-            ui_theme.show_message(self, "出勤日報與科技早報", str(e), "warning")
+            ui_theme.show_message(self, "排程設定", str(e), "warning")
             return
         if self.runners["digest"].start(day):
             self._sync_buttons()
