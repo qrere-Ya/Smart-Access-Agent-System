@@ -7,7 +7,7 @@ backend_main.py：門禁系統管理後台主程式（CustomTkinter，套用 sha
   - 主選單：六張功能卡片
   - 營運狀態與尾隨監控：今日打卡統計、異常件數、人臉辨識終端機開關與即時輸出；
     雙機的後台角色改顯示「前台連線」（燈號、最後回報時間、鏡頭與辨識狀態）與前台事件串流，並自動啟動連線服務
-  - 員工帳號管理（account_panel）、出勤報告與假日請假（calendar_panel，內嵌 report_panel）
+  - 員工帳號管理（account_panel）、出勤報告（calendar_panel，內嵌 report_panel）
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
   - 企業知識庫與出勤查詢：模型很大，另開獨立行程的聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
   - 登入保護：啟動先用人臉登入（login_window），閒置 15 分鐘或按「登出」就回到登入畫面
@@ -200,7 +200,7 @@ class BackendManagerApp:
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", "warning", self.open_qr_registration),
             ("🤖", "企業知識庫與出勤查詢", "用聊天查公司文件與法規、考勤紀錄、異常事件（模型另開獨立視窗）", "primary",
              self.open_assistant_window),
-            ("🗓️", "出勤報告與假日請假", "每日出勤報告（可匯出 CSV）、登錄假日、請假與每週休息日", "success",
+            ("🗓️", "出勤報告", "每日出勤報告（可匯出 CSV）；週六日與國定假日自動判斷", "success",
              self.open_calendar),
             ("📰", "出勤日報", "查看每天的出勤明細與 AI 摘要（排程時間在底部「⚙ 排程設定」）", "info",
              self.open_report),
@@ -668,12 +668,12 @@ class BackendManagerApp:
         self._open_page("accounts", "👤 員工帳號管理", build)
 
     def open_calendar(self):
-        """切到出勤報告與假日請假頁"""
+        """切到出勤報告頁"""
         def build(body):
             self.calendar_view = calendar_panel.CalendarPanel(body)
             self.calendar_view.pack(fill="both", expand=True)
 
-        self._open_page("calendar", "🗓️ 出勤報告與假日請假", build)
+        self._open_page("calendar", "🗓️ 出勤報告", build)
 
     def _tick_digest(self):
         """每分鐘看一次該不該產生科技早報與出勤日報（到時間、當天要上班、還沒有那份才會產生）。"""

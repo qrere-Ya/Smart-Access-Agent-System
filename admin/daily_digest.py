@@ -2,8 +2,7 @@
 daily_digest.py：每日出勤日報的產生與排程判斷（純邏輯，不碰畫面元件）。
 
 主要功能：
-  - build_facts：由 attendance_report 的固定查詢結果組出日報明細（人數、遲到早退缺勤請假名單、異常數）；
-    請假只寫假別，不帶備註（備註可能含病情等私事）
+  - build_facts：由 attendance_report 的固定查詢結果組出日報明細（人數、遲到早退缺勤名單、異常數）
   - narrate：請語言模型把明細寫成兩三句白話摘要；數字（含日期、時間）與人名必須都出現在明細裡，
     用中文數字寫的次數無法核對也不採用；核對不過、模型失敗或沒有雲端模型就沒有摘要，明細仍然完整
   - generate：產生並存檔指定日期的日報（摘要是加分，失敗不影響日報）
@@ -12,38 +11,32 @@ daily_digest.py：每日出勤日報的產生與排程判斷（純邏輯，不�
   - build_ai：只有設定為雲端 API 且有金鑰才回傳語言模型；本機模式一律不用，避免後台行程載入幾 GB 的本機模型
 
 串接模組：
-  - attendance_report：每日出勤的固定查詢；database_mgr：休息日判斷；shared.digest_store：存檔
+  - attendance_report：每日出勤的固定查詢；work_calendar：休息日判斷；shared.digest_store：存檔
   - admin.digest_window：畫面與背景執行緒；backend_main：定時呼叫 pending_day
 """
 import datetime
 import re
 
 from admin import attendance_report as report_mod
-from shared import database_mgr
-from shared import digest_store
+from shared import digest_store, work_calendar
 
 WEEKDAYS = "一二三四五六日"
 _STATUS_ORDER = (report_mod.STATUS_ON_TIME, report_mod.STATUS_LATE, report_mod.STATUS_EARLY_LEAVE,
-                 report_mod.STATUS_NO_CLOCK_OUT, report_mod.STATUS_ABSENT, report_mod.STATUS_LEAVE,
-                 report_mod.STATUS_HOLIDAY)
+                 report_mod.STATUS_NO_CLOCK_OUT, report_mod.STATUS_ABSENT, report_mod.STATUS_HOLIDAY)
 _LISTED = ((report_mod.STATUS_LATE, "遲到"), (report_mod.STATUS_EARLY_LEAVE, "早退"),
-           (report_mod.STATUS_NO_CLOCK_OUT, "未打下班卡"), (report_mod.STATUS_ABSENT, "缺勤"),
-           (report_mod.STATUS_LEAVE, "請假"))
+           (report_mod.STATUS_NO_CLOCK_OUT, "未打下班卡"), (report_mod.STATUS_ABSENT, "缺勤"))
 MAX_NAMES = 10                # 每類最多列幾個名字，其餘寫「等 N 人」
 SEARCH_BACK_DAYS = 14         # 往前找上班日最多找幾天
 _CN_COUNT = re.compile(r"[一二兩三四五六七八九十]+\s*(?:位|人|筆|次|天|件)")
 
 
 def who(row):
-    """名單裡的一個人：遲到與早退附時間，請假只附假別。"""
+    """名單裡的一個人：遲到與早退附時間。"""
     status = row["status"]
     if status == report_mod.STATUS_LATE and row["clock_in"]:
         return f"{row['name']}（{row['clock_in'][:5]}）"
     if status == report_mod.STATUS_EARLY_LEAVE and row["clock_out"]:
         return f"{row['name']}（{row['clock_out'][:5]}）"
-    if status == report_mod.STATUS_LEAVE:
-        kind = (row["note"] or "").split("；")[0]
-        return f"{row['name']}（{kind}）" if kind else row["name"]
     return row["name"]
 
 
@@ -130,7 +123,7 @@ def pending_day(now, hhmm, latest_date, is_workday=None):
     到了 hhmm 就以今天為準，沒到就以昨天為準，再往前找到最近的上班日；已有那天（或更新）的日報就不重做。"""
     if is_workday is None:
         def is_workday(d):
-            return database_mgr.day_off_reason(d.isoformat()) is None
+            return work_calendar.day_off_reason(d.isoformat()) is None
     hour, minute = map(int, hhmm.split(":"))
     day = now.date() if (now.hour, now.minute) >= (hour, minute) else now.date() - datetime.timedelta(days=1)
     for _ in range(SEARCH_BACK_DAYS):

@@ -26,6 +26,7 @@ LLM_SETTINGS_PATH = os.path.join(RUNTIME_DIR, "llm_settings.json")
 SESSION_PATH = os.path.join(RUNTIME_DIR, "session.json")
 LOGIN_LOCK_PATH = os.path.join(RUNTIME_DIR, "login_lock.json")
 ANOMALY_SEEN_PATH = os.path.join(RUNTIME_DIR, "anomaly_seen.json")
+WORK_CALENDAR_DIR = os.path.join(RUNTIME_DIR, "work_calendar")          # 國定假日與補班日的快取（一年一檔）
 DIGEST_PATH = os.path.join(RUNTIME_DIR, "daily_digest.json")
 BRIEF_PATH = os.path.join(RUNTIME_DIR, "morning_brief.json")
 DIGEST_SETTINGS_PATH = os.path.join(RUNTIME_DIR, "digest_settings.json")

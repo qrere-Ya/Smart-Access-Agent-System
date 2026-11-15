@@ -27,14 +27,14 @@ def count(db, table):
 
 def test_add_creates_demo_people_and_their_records(db):
     result = demo_data.add(TODAY)
-    assert result["users"] == 5 and result["attendance"] > 0 and result["leaves"] == 3 and result["anomalies"] == 2
+    assert result["users"] == 5 and result["attendance"] > 0 and result["anomalies"] == 2
     names = [p["name"] for p in queries.roster()]
     assert "測試甲" in names and len(names) == 5
 
 
 def test_add_twice_does_not_duplicate(db):
     demo_data.add(TODAY)
-    assert demo_data.add(TODAY) == {"users": 0, "attendance": 0, "leaves": 0, "anomalies": 0}
+    assert demo_data.add(TODAY) == {"users": 0, "attendance": 0, "anomalies": 0}
     assert count(db, "Users") == 5
 
 
@@ -44,7 +44,7 @@ def test_remove_deletes_only_demo_data(db, add_user, add_attendance):
     demo_data.add(TODAY)
     database_mgr.add_anomaly_event("tailgate", evidence_path="real.jpg", detail="真實事件")
     removed = demo_data.remove()
-    assert removed["users"] == 5 and removed["leaves"] == 3 and removed["anomalies"] == 2
+    assert removed["users"] == 5 and removed["leaves"] == 0 and removed["anomalies"] == 2
     assert count(db, "Users") == 1 and count(db, "Attendance") == 1
     assert count(db, "AnomalyEvents") == 1 and count(db, "Leaves") == 0
 
@@ -79,23 +79,25 @@ def test_no_holidays_are_added_and_only_weekdays_have_attendance(db):
     assert days and all(datetime.date.fromisoformat(d).weekday() < 5 for d in days)
 
 
-def test_nobody_has_attendance_on_a_day_they_are_on_leave(db):
+def test_no_leave_rows_are_added_any_more(db):
+    demo_data.add(TODAY)
+    assert count(db, "Leaves") == 0
+
+
+def test_remove_still_cleans_up_leave_rows_an_older_version_left_behind(db):
     demo_data.add(TODAY)
     con = sqlite3.connect(db)
-    leaves = con.execute(
-        "SELECT u.name, l.start_date, l.end_date FROM Leaves l JOIN Users u ON u.id = l.user_id").fetchall()
-    assert leaves
-    for name, start, end in leaves:
-        clash = con.execute(
-            "SELECT COUNT(*) FROM Attendance WHERE name = ? AND substr(timestamp, 1, 10) BETWEEN ? AND ?",
-            (name, start, end)).fetchone()[0]
-        assert clash == 0, (name, start, end)
+    uid = con.execute("SELECT id FROM Users WHERE employee_id LIKE 'DEMO-%' ORDER BY id LIMIT 1").fetchone()[0]
+    con.execute("INSERT INTO Leaves (user_id, start_date, end_date, kind, note) "
+                "VALUES (?, '2026-11-05', '2026-11-05', '病假', '')", (uid,))
+    con.commit()
     con.close()
+    assert demo_data.remove()["leaves"] == 1 and count(db, "Leaves") == 0
 
 
-def test_extend_fills_the_days_ahead_once_and_skips_leave_days_and_weekends(db):
-    demo_data.add(TODAY)                                   # 2026-11-04（週三）；乙 11-05 請病假
-    first = demo_data.extend(TODAY, days_ahead=3)          # 11-04 已有打卡；11-05 乙請假；11-06 週五；11-07 週六
+def test_extend_fills_the_days_ahead_once_and_skips_weekends(db):
+    demo_data.add(TODAY)                                   # 2026-11-04（週三）
+    first = demo_data.extend(TODAY, days_ahead=3)          # 11-04 已有打卡；11-05 週四；11-06 週五；11-07 週六
     assert first["attendance"] > 0
     assert demo_data.extend(TODAY, days_ahead=3) == {"attendance": 0, "days": 0}
     con = sqlite3.connect(db)
@@ -103,8 +105,7 @@ def test_extend_fills_the_days_ahead_once_and_skips_leave_days_and_weekends(db):
                        "WHERE timestamp >= '2026-11-05'").fetchall()
     con.close()
     days = {d for _, d in rows}
-    assert "2026-11-06" in days and "2026-11-07" not in days
-    assert ("測試乙", "2026-11-05") not in set(rows)
+    assert {"2026-11-05", "2026-11-06"} <= days and "2026-11-07" not in days
 
 
 def test_extend_is_deterministic_per_day_and_removed_with_the_demo_people(db):

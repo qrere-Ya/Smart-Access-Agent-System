@@ -1,5 +1,5 @@
 """
-daily_digest 與 digest_store 的單元測試：明細內容（請假不帶備註）、語言模型摘要的核對（數字、中文數字、
+daily_digest 與 digest_store 的單元測試：明細內容、語言模型摘要的核對（數字、中文數字、
 明細外的人名、模型失敗、沒有模型）、排程判斷（時間前後、休息日、補產、已有就不重做）、存檔與設定的容錯、
 開窗顯示文字（過期不顯示、待處理異常）、本機模式不建語言模型。
 """
@@ -10,7 +10,6 @@ import sqlite3
 import pytest
 
 from admin import daily_digest as dd
-from shared import database_mgr as dbm
 from shared import digest_store
 
 DAY = "2026-10-14"   # 星期三
@@ -30,7 +29,7 @@ def punch(db):
 
 @pytest.fixture
 def office(add_user, punch, db):
-    """甲準時、乙遲到、丙早退、丁請假（備註含私事）、戊缺勤。"""
+    """甲準時、乙遲到、丙早退、丁與戊缺勤。"""
     for n, i in [("甲", "1"), ("乙", "2"), ("丙", "3"), ("丁", "4"), ("戊", "5")]:
         add_user(n, i)
     punch("甲", "07:50:00", "上班")
@@ -39,9 +38,6 @@ def office(add_user, punch, db):
     punch("乙", "18:00:00", "下班")
     punch("丙", "07:50:00", "上班")
     punch("丙", "17:05:00", "早退")
-    with sqlite3.connect(db) as con:
-        uid = con.execute("SELECT id FROM Users WHERE name='丁'").fetchone()[0]
-    dbm.add_leave(uid, DAY, DAY, "病假", "診斷：很私人的備註")
 
 
 class FakeLLM:
@@ -61,13 +57,12 @@ def facts_for(day=DAY):
     return dd.build_facts(ar.build_report(day))
 
 
-def test_facts_list_each_group_and_never_include_leave_notes(office):
+def test_facts_list_each_group_and_have_no_leave_section(office):
     text = facts_for()
     assert "出勤日報 2026-10-14（週三）" in text
-    assert "在職 5 人：準時 1、遲到 1、早退 1、缺勤 1、請假 1" in text
+    assert "在職 5 人：準時 1、遲到 1、早退 1、缺勤 2" in text
     assert "遲到：乙（08:31）" in text and "早退：丙（17:05）" in text
-    assert "缺勤：戊" in text and "請假：丁（病假）" in text
-    assert "診斷" not in text and "私人" not in text
+    assert "缺勤：丁、戊" in text and "請假" not in text
     assert text.endswith("當天異常事件 0 筆。")
 
 
@@ -146,8 +141,18 @@ def test_never_a_workday_means_nothing_to_make():
     assert dd.pending_day(at(2026, 10, 14, 20, 0), "18:00", None, lambda d: False) is None
 
 
-def test_default_workday_check_uses_the_real_calendar(db):
-    dbm.add_holiday("2026-10-14", "測試假日")
+def test_default_workday_check_uses_the_work_calendar(db, tmp_path, monkeypatch):
+    from shared import paths, work_calendar
+
+    monkeypatch.setattr(paths, "WORK_CALENDAR_DIR", str(tmp_path / "wc"))
+    work_calendar._cache.clear()
+    days, day = [], datetime.date(2026, 1, 1)
+    while day.year == 2026:
+        special = day == datetime.date(2026, 10, 14)
+        days.append({"date": day.strftime("%Y%m%d"), "week": "x", "isHoliday": day.weekday() >= 5 or special,
+                     "description": "測試假日" if special else ""})
+        day += datetime.timedelta(days=1)
+    assert work_calendar.save_year(2026, days)
     assert dd.pending_day(at(2026, 10, 14, 20, 0), "18:00", None) == "2026-10-13"
 
 

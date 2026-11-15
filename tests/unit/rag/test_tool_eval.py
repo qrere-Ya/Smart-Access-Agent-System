@@ -105,13 +105,13 @@ def test_check_accepts_the_expected_set_or_an_alternative():
     item = {"id": "x", "q": "q", "tools": ["records"], "alt": [["count"]]}
     assert tool_eval.check(item, plan_of(data="records"))["tools_ok"]
     assert tool_eval.check(item, plan_of(data="count"))["tools_ok"]
-    assert not tool_eval.check(item, plan_of(data="leaves"))["tools_ok"]
+    assert not tool_eval.check(item, plan_of(data="anomalies"))["tools_ok"]
     assert not tool_eval.check(item, None)["tools_ok"]
 
 
 def test_check_compares_the_main_and_extra_tools_as_a_set():
-    item = {"id": "x", "q": "q", "tools": ["leaves", "roster"]}
-    assert tool_eval.check(item, plan_of(data="roster", also=[{"data": "leaves"}]))["tools_ok"]
+    item = {"id": "x", "q": "q", "tools": ["anomalies", "roster"]}
+    assert tool_eval.check(item, plan_of(data="roster", also=[{"data": "anomalies"}]))["tools_ok"]
     assert not tool_eval.check(item, plan_of(data="roster"))["tools_ok"]
 
 
@@ -158,7 +158,7 @@ class Scripted:
 
 ITEM = {"id": "a", "q": "今天誰遲到", "tools": ["status_list"], "group": "one", "split": "dev", "source": "author"}
 GOOD = json.dumps({"docs": False, "data": "status_list", "status": "遲到"}, ensure_ascii=False)
-BAD = json.dumps({"docs": False, "data": "leaves"})
+BAD = json.dumps({"docs": False, "data": "anomalies"})
 
 
 def test_a_question_must_be_right_on_every_run_to_pass():
@@ -198,7 +198,7 @@ def make_results(n, wrong, group="one"):
     items = [{**ITEM, "id": f"i{i}", "group": group} for i in range(n)]
     results = []
     for i, item in enumerate(items):
-        plan = plan_of(data="leaves") if i < wrong else plan_of(data="status_list", status="遲到")
+        plan = plan_of(data="anomalies") if i < wrong else plan_of(data="status_list", status="遲到")
         results.append({"item": item, "trials": [tool_eval.check(item, plan)]})
     return results
 

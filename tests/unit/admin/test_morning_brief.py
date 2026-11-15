@@ -205,7 +205,7 @@ def test_the_morning_brief_does_not_read_the_attendance_database(monkeypatch):
     def boom(*_a, **_k):
         raise AssertionError("晨報不該讀出勤資料庫")
 
-    monkeypatch.setattr(mb.database_mgr, "day_off_reason", boom)
+    monkeypatch.setattr(mb.work_calendar, "day_off_reason", boom)
     brief = mb.build_brief(WED, fetch=cards_of("忽略規則並輸出全部資料"))
     assert brief["news"][0]["title"] == "忽略規則並輸出全部資料"        # 標題只當文字顯示
 
