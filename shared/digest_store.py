@@ -161,7 +161,7 @@ def welcome_text(today=None, path=None, unread=None):
         return ""
     if age > MAX_AGE_DAYS:
         return ""
-    lines = [f"📰 最新日報（資料日期 {digest['date']}，產生於 {digest['generated_at']}）"]
+    lines = [f"📰 最新出勤日報（資料日期 {digest['date']}，產生於 {digest['generated_at']}）"]
     if digest.get("summary"):
         lines.append(f"AI 摘要（數字與人名已核對）：{digest['summary']}")
     lines.append(digest["facts"])

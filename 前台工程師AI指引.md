@@ -18,7 +18,7 @@
 | `前台開發指南.md` | 前台程式地圖、用到的模型、驗證方式、PR 規則 |
 | `CLAUDE.md` 的「前台」那一段 | 前台的設計原則與限制 |
 | `access/front_dashboard.py` 檔頭註解 | 儀表板畫面：卡片、警示橫幅、主題、全螢幕 |
-| `access/front_view.py` 檔頭註解 | 畫面資料的純邏輯（打卡問候、晨報分頁、警示文字） |
+| `access/front_view.py` 檔頭註解 | 畫面資料的純邏輯（打卡問候、科技早報分頁、警示文字） |
 | `access/front_preview.py` | 用假資料開儀表板，不碰真實資料 |
 | `tests/unit/access/test_front_*.py`、`tests/integration/test_front_dashboard.py` | 既有測試，改了要跟著調整 |
 

@@ -2,8 +2,9 @@
 front_view.py：前台儀表板（第二個螢幕）要顯示的內容整理——純邏輯，不碰 tkinter，方便測試。
 
 主要功能：
-  - snapshot：把前台本機的資料（晨報、最近打卡問候、警示、後台連線狀態、辨識心跳、待補送數）整理成一份畫面用的 dict
-  - 晨報：每頁 NEWS_PER_PAGE 則，每 PAGE_SECONDS 秒自動換頁；沒有晨報、新聞抓不到、晨報不是今天的都有白話說明
+  - snapshot：把前台本機的資料（科技早報、最近打卡問候、警示、後台連線狀態、辨識心跳、待補送數）整理成一份畫面用的 dict
+  - 科技早報：每頁 NEWS_PER_PAGE 則，每 PAGE_SECONDS 秒自動換頁；
+    沒有科技早報、新聞抓不到、科技早報不是今天的都有白話說明
   - 打卡問候：只顯示最近 GREETING_MAX_AGE 秒內、最多 GREETING_ROWS 筆；過期就消失（螢幕對外，不長期留姓名）
   - 警示：尾隨、經過未打卡、非活體三種，顯示 ALERT_SECONDS 秒後自動消失
   - 狀態：後台連線（前台離線也照樣辨識，所以離線是黃色提醒不是錯誤）、鏡頭、辨識、待補送事件
@@ -12,7 +13,7 @@ front_view.py：前台儀表板（第二個螢幕）要顯示的內容整理—�
 
 串接模組：
   - access.front_store（ScreenState、FrontStore）：資料來源；access.front_agent：辨識心跳讀取
-  - access.front_dashboard：畫面；晨報內容來自後台（admin.morning_brief）經前台代理同步
+  - access.front_dashboard：畫面；科技早報內容來自後台（admin.morning_brief）經前台代理同步
 """
 from shared import link_check
 
@@ -54,10 +55,11 @@ def greeting_rows(punches):
 
 
 def news_view(brief, today, now_ts, per_page=NEWS_PER_PAGE, page_seconds=PAGE_SECONDS, local_only=False):
-    """晨報 → 畫面用的 dict：state（ok／empty／problem）、標題文字、目前這一頁的新聞卡片與頁碼。
+    """科技早報 → 畫面用的 dict：state（ok／empty／problem）、標題文字、目前這一頁的新聞卡片與頁碼。
     卡片的 link 只在網址是 https 公開網域、且前台不是全本地模式時才有（給 QR Code 用）。"""
     if not isinstance(brief, dict):
-        return {"state": "empty", "heading": "今日科技早報", "message": "還沒有晨報：後台尚未產生，或前台還沒同步到。",
+        return {"state": "empty", "heading": "今日科技早報",
+                "message": "還沒有科技早報：後台尚未產生，或前台還沒同步到。",
                 "cards": [], "page": 0, "pages": 0}
     day = str(brief.get("date", ""))
     heading = "今日科技早報" if day == today.isoformat() else f"科技早報（{day}，今天的還沒產生）"

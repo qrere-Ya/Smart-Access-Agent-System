@@ -1,6 +1,7 @@
 """
-日報與晨報的真 Tk 測試：主選單多一張「日報與晨報」卡片（設定與立即產生都在裡面）、底部只有一顆「日報」按鈕、
-查看視窗只看日報不設定（晨報在前台螢幕顯示，後台不看）、時間不合法不儲存且不動到另一個、
+出勤日報與科技早報的真 Tk 測試：主選單多一張「出勤日報與科技早報」卡片（設定與立即產生都在裡面）、
+底部只有一顆「出勤日報」按鈕、
+查看視窗只看出勤日報不設定（科技早報在前台螢幕顯示，後台不看）、時間不合法不儲存且不動到另一個、
 立即產生會更新畫面與查看視窗、日期欄不合法不產生。
 """
 import datetime
@@ -24,7 +25,7 @@ def settings_files(tmp_path, monkeypatch):
 
 
 def host_view(root, cls, *args, size="960x860", **kw):
-    """日報頁與排程頁現在是嵌在主視窗的頁面；測試用一個空的頂層視窗當主視窗。"""
+    """出勤日報頁與排程頁現在是嵌在主視窗的頁面；測試用一個空的頂層視窗當主視窗。"""
     import customtkinter as ctk
 
     from shared import ui_theme
@@ -63,7 +64,7 @@ def fake_runner(root, name, settings_files, calls):
     def generate(day, llm):
         calls.append((name, day))
         digest = {"date": day, "generated_at": "2026-11-05 19:00", "facts": f"出勤日報 {day}", "summary": ""}
-        if name == "晨報":
+        if name == "科技早報":
             from admin import news_feed
 
             card = news_feed._to_card({"title": f"測試新聞 {day}", "summary": "", "link": "", "time": None}, "來源")
@@ -85,17 +86,17 @@ def test_the_main_menu_has_the_new_module_and_the_footer_has_one_button(root, db
     app = BackendManagerApp(root)
     pump(root)
     texts = texts_of(root)
-    assert "日報與晨報" in texts and "📋 日報" in texts and "📰 日報／晨報" not in texts
-    assert not {"🌅 晨報", "⚙ 排程"} & set(texts)
+    assert "出勤日報與科技早報" in texts and "📋 出勤日報" in texts and "📰 出勤日報／科技早報" not in texts
+    assert not {"🌅 科技早報", "⚙ 排程"} & set(texts)
     app.open_schedule()
     pump(root)
-    assert app.page_key == "schedule" and "📰 日報與晨報" in texts_of(root)      # 直接換頁，不另開視窗
+    assert app.page_key == "schedule" and "📰 出勤日報與科技早報" in texts_of(root)      # 直接換頁，不另開視窗
     app.open_report("digest")
     pump(root)
-    assert app.page_key == "report" and "📋 日報" in texts_of(root)
+    assert app.page_key == "report" and "📋 出勤日報" in texts_of(root)
     first = app.report_view
     app.open_report("morning")                                   # 舊呼叫端傳 morning 也只顯示日報，且不重複建
-    assert app.report_view is first and app.report_view.tabs.get() == "📋 日報" and "morning" not in first.bubbles
+    assert app.report_view is first and app.report_view.tabs.get() == "📋 出勤日報" and "morning" not in first.bubbles
     app.show_home()
     assert app.page_key == "home"
     app.teardown()
@@ -105,12 +106,12 @@ def test_the_viewer_only_views(root, db, settings_files):
     from admin import digest_window
 
     calls = []
-    win = host_view(root, digest_window.ReportView, fake_runner(root, "日報", settings_files, calls),
-                    fake_runner(root, "晨報", settings_files, calls), "digest")
+    win = host_view(root, digest_window.ReportView, fake_runner(root, "出勤日報", settings_files, calls),
+                    fake_runner(root, "科技早報", settings_files, calls), "digest")
     pump(root)
     labels = texts_of(win)
     assert not any("HH:MM" in t or "儲存" in t or "立即產生" in t for t in labels if isinstance(t, str))
-    assert win.tabs.get() == "📋 日報" and "還沒有日報" in win.bubbles["digest"].get_text()
+    assert win.tabs.get() == "📋 出勤日報" and "還沒有出勤日報" in win.bubbles["digest"].get_text()
     assert list(win.bubbles) == ["digest"]                        # 晨報不在後台看
     win.destroy()
 
@@ -123,14 +124,14 @@ def test_module_window_saves_both_times_and_refuses_a_bad_one_without_touching_t
     calls = []
     messages = []
     monkeypatch.setattr(ui_theme, "show_message", lambda master, title, message, kind="info": messages.append(message))
-    win = host_view(root, schedule_window.ScheduleView, fake_runner(root, "日報", settings_files, calls),
-                    fake_runner(root, "晨報", settings_files, calls), size="900x640")
+    win = host_view(root, schedule_window.ScheduleView, fake_runner(root, "出勤日報", settings_files, calls),
+                    fake_runner(root, "科技早報", settings_files, calls), size="900x640")
     pump(root)
     assert win.entries["morning"].get() == "08:30" and win.entries["digest"].get() == "18:00"
     win.entries["morning"].delete(0, "end")
     win.entries["morning"].insert(0, "7:5")
     win.save()
-    assert messages and "晨報" in messages[0] and "日報" not in messages[0]
+    assert messages and "科技早報" in messages[0] and "出勤日報" not in messages[0]
     assert settings_files.load_morning_time() == "08:30"
     win.entries["morning"].delete(0, "end")
     win.entries["morning"].insert(0, "07:15")
@@ -147,8 +148,8 @@ def test_generate_now_updates_the_module_and_an_open_viewer(root, db, settings_f
     from shared import ui_theme
 
     calls = []
-    digest = fake_runner(root, "日報", settings_files, calls)
-    morning = fake_runner(root, "晨報", settings_files, calls)
+    digest = fake_runner(root, "出勤日報", settings_files, calls)
+    morning = fake_runner(root, "科技早報", settings_files, calls)
     messages = []
     monkeypatch.setattr(ui_theme, "show_message", lambda master, title, message, kind="info": messages.append(message))
     viewer = host_view(root, digest_window.ReportView, digest, morning)
@@ -163,9 +164,9 @@ def test_generate_now_updates_the_module_and_an_open_viewer(root, db, settings_f
     assert str(win.digest_button.cget("state")) == "disabled"            # 產生中不能重複按
     win._run_morning()
     end = time.time() + 5
-    while time.time() < end and not (any(n == "晨報" for n, _ in calls) and "前台" in win.status.cget("text")):
+    while time.time() < end and not (any(n == "科技早報" for n, _ in calls) and "前台" in win.status.cget("text")):
         pump(root, 0.1)
-    assert ("日報", "2026-11-03") in calls and any(n == "晨報" for n, _ in calls)
+    assert ("出勤日報", "2026-11-03") in calls and any(n == "科技早報" for n, _ in calls)
     assert "出勤日報 2026-11-03" in viewer.bubbles["digest"].get_text()
     assert "前台" in win.status.cget("text") and str(win.digest_button.cget("state")) == "normal"
     assert "測試新聞" in settings_files.load_brief()["news"][0]["title"]       # 晨報有存檔（給前台同步），後台不顯示
@@ -174,7 +175,7 @@ def test_generate_now_updates_the_module_and_an_open_viewer(root, db, settings_f
 
 
 def long_digest(settings_files, links=5):
-    """一份很長、內含網址的日報（日報明細裡可能有文件連結）。"""
+    """一份很長、內含網址的出勤日報（出勤日報明細裡可能有文件連結）。"""
     lines = [f"第 {i} 段 " + "明細。" * 30 + f" 參考 https://example.com/n/{i}" for i in range(links)]
     lines += ["補充說明。" * 20] * 24                                      # 夠長才需要捲動
     settings_files.save({"date": "2026-11-06", "generated_at": "2026-11-05 19:00", "facts": "\n".join(lines),
@@ -253,7 +254,7 @@ def test_a_brief_without_news_is_retried_later_and_pops_up_only_once_it_has_news
     popped, started = [], []
     now = [datetime.datetime(2026, 10, 14, 8, 40)]
     runner = digest_window.DigestRunner(root, lambda _n: "2026-10-14", lambda d, _l: None, on_new=popped.append,
-                                        clock=lambda: now[0], make_ai=lambda: None, name="晨報",
+                                        clock=lambda: now[0], make_ai=lambda: None, name="科技早報",
                                         retry_wait=morning_brief.retry_wait)
     runner.start = lambda day, announce=False: started.append(day) or True
     failed = {"date": "2026-10-14", "news": [], "news_problem": "x：連線失敗", "news_tries": 1}
