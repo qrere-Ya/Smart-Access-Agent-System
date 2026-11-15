@@ -1,6 +1,6 @@
 """
-出勤日報與科技早報的真 Tk 測試：主選單多一張「出勤日報與科技早報」卡片（設定與立即產生都在裡面）、
-底部只有一顆「出勤日報」按鈕、
+出勤日報與科技早報的真 Tk 測試：主選單的「出勤日報」卡片直接看出勤日報、底部「⚙ 排程設定」進排程
+（設定與立即產生都在裡面）、兩頁互相跳轉不另開視窗、
 查看視窗只看出勤日報不設定（科技早報在前台螢幕顯示，後台不看）、時間不合法不儲存且不動到另一個、
 立即產生會更新畫面與查看視窗、日期欄不合法不產生。
 """
@@ -77,7 +77,7 @@ def fake_runner(root, name, settings_files, calls):
     return digest_window.DigestRunner(root, lambda now: None, generate, make_ai=lambda: None, name=name)
 
 
-def test_the_main_menu_has_the_new_module_and_the_footer_has_one_button(root, db, settings_files, monkeypatch):
+def test_the_card_opens_the_digest_and_the_footer_button_opens_the_schedule(root, db, settings_files, monkeypatch):
     from admin import digest_window
     from admin.backend_main import BackendManagerApp
 
@@ -86,19 +86,67 @@ def test_the_main_menu_has_the_new_module_and_the_footer_has_one_button(root, db
     app = BackendManagerApp(root)
     pump(root)
     texts = texts_of(root)
-    assert "出勤日報與科技早報" in texts and "📋 出勤日報" in texts and "📰 出勤日報／科技早報" not in texts
+    assert "出勤日報" in texts and "⚙ 排程設定" in texts
+    assert "出勤日報與科技早報" not in texts and "📋 出勤日報" not in texts       # 舊的卡片名稱與底部按鈕不見了
     assert not {"🌅 科技早報", "⚙ 排程"} & set(texts)
-    app.open_schedule()
-    pump(root)
-    assert app.page_key == "schedule" and "📰 出勤日報與科技早報" in texts_of(root)      # 直接換頁，不另開視窗
-    app.open_report("digest")
+    app.open_report("digest")                                    # 卡片的點擊目標：直接看出勤日報
     pump(root)
     assert app.page_key == "report" and "📋 出勤日報" in texts_of(root)
     first = app.report_view
     app.open_report("morning")                                   # 舊呼叫端傳 morning 也只顯示日報，且不重複建
     assert app.report_view is first and app.report_view.tabs.get() == "📋 出勤日報" and "morning" not in first.bubbles
+    app.open_schedule()                                          # 底部按鈕的點擊目標：排程設定
+    pump(root)
+    assert app.page_key == "schedule" and "⚙ 排程設定" in texts_of(root) and "📰 出勤日報與科技早報" in texts_of(root)
     app.show_home()
     assert app.page_key == "home"
+    assert not [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]      # 全程不另開視窗
+    app.teardown()
+
+
+def _find(widget, text):
+    """找出文字等於 text 的元件（按鈕、標籤）。"""
+    for child in widget.winfo_children():
+        try:
+            if child.cget("text") == text:
+                return child
+        except Exception:  # noqa: BLE001, S112
+            pass
+        found = _find(child, text)
+        if found is not None:
+            return found
+    return None
+
+
+def test_the_real_card_and_footer_button_navigate_between_the_two_pages(root, db, settings_files, monkeypatch):
+    """用真的點擊：按卡片到出勤日報、按底部按鈕到排程、排程的「查看出勤日報」回到日報、兩頁都能返回主選單。"""
+    from admin import digest_window
+    from admin.backend_main import BackendManagerApp
+
+    monkeypatch.setattr(digest_window.DigestRunner, "tick", lambda self: None)
+    root.deiconify()
+    app = BackendManagerApp(root)
+    pump(root)
+    card_title = _find(root, "出勤日報")
+    assert card_title is not None
+    getattr(card_title, "_label", card_title).event_generate("<Button-1>", x=4, y=4)      # CTk 的點擊綁在內部標籤上
+    pump(root, 0.5)
+    assert app.page_key == "report"
+    _find(root, "返回主選單").invoke()
+    pump(root)
+    assert app.page_key == "home"
+    _find(root, "⚙ 排程設定").invoke()
+    pump(root)
+    assert app.page_key == "schedule"
+    _find(root, "查看出勤日報").invoke()
+    pump(root)
+    assert app.page_key == "report"
+    app.open_schedule()
+    pump(root)
+    _find(root, "返回主選單").invoke()
+    pump(root)
+    assert app.page_key == "home"
+    assert not [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
     app.teardown()
 
 
