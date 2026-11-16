@@ -60,6 +60,11 @@ WINDOW_MIN = (1000, 640)
 NOTICE_SECONDS = 8            # 底部提示訊息顯示幾秒
 
 
+CHAT_OPEN_WARNING = ("開放後，前台的任何人（沒有登入）都可以用實體鍵盤問 data/docs 資料夾裡「所有」文件的內容，"
+                     "不能查出缺勤與員工資料。\n\n請先確認資料夾裡沒有不想讓前台使用者看到的文件。"
+                     "每一題都會記進對話紀錄（前台不會顯示這件事）。\n\n確定要開放嗎？")
+
+
 class BackendManagerApp:
     """管理後台主視窗：建立主選單並開啟各功能視窗。"""
 
@@ -574,6 +579,15 @@ class BackendManagerApp:
         self.face_control_btn = ui_theme.secondary_button(control, "", self._press_face_control, width=170)
         self.face_control_btn.pack(side="right")
         self._refresh_face_control()
+        # 前台知識庫問答的開放與關閉：預設關閉，開放前要看過警告（前台是公開的螢幕與鍵盤，沒有登入）
+        chat_row = ctk.CTkFrame(box, fg_color="transparent")
+        chat_row.pack(fill="x", padx=15, pady=(0, 12))
+        self.chat_control_label = ui_theme.muted_label(chat_row, "")
+        self.chat_control_label.configure(anchor="w", justify="left", wraplength=520)
+        self.chat_control_label.pack(side="left", fill="x", expand=True)
+        self.chat_control_btn = ui_theme.secondary_button(chat_row, "", self._press_chat_control, width=170)
+        self.chat_control_btn.pack(side="right")
+        self._refresh_chat_control()
 
     def _refresh_face_control(self):
         """依後台目前的設定更新「停止／恢復前台辨識」按鈕與說明（按下去要在卡片內再確認一次）。"""
@@ -602,6 +616,25 @@ class BackendManagerApp:
             self.face_control_confirming = False
             front_control.set_recognition_enabled(not front_control.recognition_enabled())
         self._refresh_face_control()
+
+    def _refresh_chat_control(self):
+        """依後台目前的設定更新「開放／關閉前台知識庫問答」按鈕與說明。"""
+        if front_control.chat_enabled():
+            self.chat_control_btn.configure(text="⏸ 關閉前台問答")
+            self.chat_control_label.configure(
+                text="前台知識庫問答：已開放（前台使用者可以問 data/docs 裡的所有文件；問答會記進"
+                     "「出勤報告」的對話紀錄，最慢約 10 秒套用）")
+        else:
+            self.chat_control_btn.configure(text="▶ 開放前台問答")
+            self.chat_control_label.configure(text="前台知識庫問答：未開放（預設關閉；開放前會先提醒文件範圍）")
+
+    def _press_chat_control(self):
+        """開放前先確認警告（所有文件都會讓前台使用者問到）；關閉不用確認。"""
+        if front_control.chat_enabled():
+            front_control.set_chat_enabled(False)
+        elif ui_theme.confirm(self.root, "開放前台知識庫問答", CHAT_OPEN_WARNING, ok_text="開放", danger=True):
+            front_control.set_chat_enabled(True)
+        self._refresh_chat_control()
 
     def _cancel_face_control(self):
         self.face_control_confirming = False

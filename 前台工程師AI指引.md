@@ -38,7 +38,7 @@
 | `admin/`、`rag/` | 後台與知識庫，不是前台 |
 | `deploy/`、`dist/`、`requirements/`、`.github/`、`pyproject.toml`、`*.bat`、`.gitattributes` | 打包、安裝、CI、依賴；由專案負責人處理（`.bat` 必須維持 CRLF） |
 | `models/`、`data/`、`runtime/` | 模型、資料、執行期資料，不進版控，也不要讀寫或「修」裡面的檔案（語音資料夾裡的 `tokens.txt` 一個位元組都不能動） |
-| `access/front_agent.py`、`shared/link_protocol.py`、`shared/link_tls.py`、`shared/role_config.py`、`shared/lan_discovery.py`、`shared/network_policy.py` | 前後台連線與網路規則；前後台要一起改，不能只改一邊 |
+| `access/front_agent.py`、`access/front_chat.py`（知識庫問答的送出與取結果；前台不保存任何對話、只收布林開關與純文字回答）、`shared/link_protocol.py`、`shared/link_tls.py`、`shared/role_config.py`、`shared/lan_discovery.py`、`shared/network_policy.py` | 前後台連線與網路規則；前後台要一起改，不能只改一邊 |
 | `access/terminal_app.py`、`terminal_backend.py`、`vision_core.py`、`pose.py`、`security.py`、`pass_through.py`、`punch_state.py` | 辨識、活體、尾隨、打卡；牽涉安全與準確度，沒有被明確指派就不要動 |
 | `shared/ui_theme.py` | 前後台**共用**，改了會同時改變後台畫面；一定要動時先問，並附後台截圖 |
 | `shared/database_mgr.py`、`front_store.py` 的資料表結構 | 改了會讓既有資料或另一台電腦壞掉 |

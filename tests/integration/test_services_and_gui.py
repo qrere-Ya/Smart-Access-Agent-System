@@ -165,6 +165,40 @@ def test_the_back_card_stops_and_resumes_the_front_recognition_with_a_confirmati
     app.teardown()
 
 
+def test_the_back_card_opens_front_chat_only_after_the_warning_and_closes_it_without_asking(
+        root, db, monkeypatch, tmp_path):
+    """雙機後台：前台知識庫問答預設關閉；開放前要先看警告（取消就不開）；關閉不用確認；不影響前台辨識的開關。"""
+    from admin import backend_main
+    from admin import service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import front_control, paths, ui_theme
+
+    monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    asked = []
+    answers = [False, True]
+    monkeypatch.setattr(ui_theme, "confirm",
+                        lambda master, title, message, **kw: asked.append(message) or answers.pop(0))
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_page.update()
+    assert front_control.chat_enabled() is False and "開放前台問答" in app.chat_control_btn.cget("text")
+    assert "未開放" in app.chat_control_label.cget("text")
+    app.chat_control_btn.invoke()                                                   # 看到警告後取消：沒有開
+    assert asked == [backend_main.CHAT_OPEN_WARNING] and front_control.chat_enabled() is False
+    assert "data/docs" in asked[0] and "所有" in asked[0] and "不能查出缺勤" in asked[0]
+    app.chat_control_btn.invoke()                                                   # 確定：開
+    assert front_control.chat_enabled() is True and "關閉前台問答" in app.chat_control_btn.cget("text")
+    assert "已開放" in app.chat_control_label.cget("text") and front_control.recognition_enabled() is True
+    app.chat_control_btn.invoke()                                                   # 關閉：不再問
+    assert front_control.chat_enabled() is False and len(asked) == 2
+    app.teardown()
+
+
 def test_the_single_machine_dashboard_has_no_front_recognition_button(root, db, monkeypatch):
     from admin import service_manager as sm
     from admin.backend_main import BackendManagerApp

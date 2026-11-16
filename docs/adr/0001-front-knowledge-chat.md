@@ -112,3 +112,28 @@
 
 ## 5. 不做的事
 後台不主動連前台；前台不放模型、向量庫、雲端金鑰；前台沒有設定與管理員功能；不讓這條路徑查出缺勤或員工資料。
+
+## 6. 實作與驗證紀錄（#57、#58）
+
+實作與設計的差異與補強：
+- **單題逾時改成真的會生效**：原本只在每段輸出之間檢查時間，語言模型呼叫卡住時整個工作執行緒會跟著卡住（真模型端到端測試第一次跑就遇到，前台輪詢 7 分鐘都沒結果）。現在每題在輔助執行緒裡跑，逾時 180 秒就放棄那一題、丟掉那份模型（等卡住的呼叫結束才釋放，下一題重新載入），並把語言模型每次讀取的逾時從 600 秒降到 90 秒。
+- 回答與問題的控制字元用 Unicode 分類過濾（Cc、Cf、Zl、Zp），不只是幾個範圍。
+- 後台連線服務啟動時把標準輸出改成遇到不能編碼的字元就換字，不讓 emoji 讓問答失敗。
+- 前台儀表板與前台代理是不同的行程：代理把目前連線的後台位址與憑證指紋記在本機（`back_target`，不是祕密），儀表板的問答用它找到後台；問答本身不寫任何東西。
+
+威脅與對策的驗證（測試檔）：
+
+| 威脅 | 測試 |
+|---|---|
+| 透過問題取得出缺勤、員工名單 | `tests/unit/rag/test_ask_documents.py`（資料庫有資料、工具與查詢函式被呼叫就丟例外）；真模型：`tests/integration/test_front_chat_e2e.py::test_3`、`test_front_chat_real_processes.py::test_6` |
+| 預設關閉、開關即時生效 | `tests/unit/admin/test_link_server_chat.py`；真行程：`test_front_chat_real_processes.py::test_1`、`test_7` |
+| 提示注入、夾帶指令 | `test_ask_documents.py`（被拒絕、不呼叫模型）；`test_front_chat_e2e.py::test_4` |
+| 回應洩漏路徑、例外、金鑰 | `tests/unit/admin/test_chat_service.py`（固定說明、日誌只有例外型別）；`tests/unit/access/test_front_chat.py`（前台只顯示自己的固定文字） |
+| 狂送問題、卡住的模型拖垮後台 | `test_chat_service.py`（3 題上限、3 秒間隔、逾時後下一題照常、延遲回應不覆蓋逾時）；`test_front_chat_e2e.py::test_5` |
+| 猜 job_id | `test_link_server_chat.py`（格式不合一律 404）、`test_chat_service.py`（隨機、10 分鐘後刪除） |
+| 後台離線、網路線拔掉 | `test_front_chat.py`（離線、逾時、放棄後丟掉遲到的結果）；`tests/integration/test_front_chat_panel.py`（各狀態畫面） |
+| 新舊版本混用 | `test_front_chat.py`（舊後台沒有欄位、404 都是未開放）；`test_link_server_chat.py`（沒有服務一律 403） |
+| 對話被留在前台 | `test_front_chat.py::test_nothing_of_the_conversation_is_ever_saved_on_the_front`（掃資料庫與所有檔案、標準輸出）；`test_front_chat_e2e.py::test_7`；`test_front_chat_panel.py`（面板不寫資料庫） |
+| 通行碼、憑證指紋 | `test_front_chat_real_processes.py::test_5`、`test_front_chat_e2e.py::test_8` |
+
+端到端（`tests/integration/test_front_chat_real_processes.py`）：後台是獨立行程（`python -m admin.link_server`，真設定檔、真 HTTPS 與自簽憑證、真 bge-m3 與重排模型、本機 Ollama、真的 `data/docs`），前台是測試行程裡真的 `FrontChat` 與 `BackClient`，兩邊只靠網路連線溝通；連跑三輪全過。

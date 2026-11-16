@@ -26,6 +26,7 @@ class FakeClient:
         self.sent, self.script, self.server_time, self.fail_ping = [], [], NOW, None
         self.heartbeats, self.heartbeat_error = [], None
         self.morning_body = None
+        self.host, self.port, self.fingerprint = "169.254.10.2", 8770, "ab" * 32     # 同步時會記下目前連線的後台位址
 
     def ping(self):
         if self.fail_ping:

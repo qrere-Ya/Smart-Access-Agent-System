@@ -106,8 +106,12 @@ TILE_SUMMARY_MAX = 26
 _TONE_RANK = {"success": 0, "warning": 1, "danger": 2}
 
 
-def module_tiles(news, greetings, status):
-    """主畫面的功能模組卡片 → [{key, icon, title, desc, accent, summary}]；summary 是即時預覽。"""
+CHAT_TILE_SUMMARY = {"closed": "目前未開放", "offline": "後台未連線", "idle": "用鍵盤問公司文件的內容"}
+
+
+def module_tiles(news, greetings, status, chat_state=None):
+    """主畫面的功能模組卡片 → [{key, icon, title, desc, accent, summary}]；summary 是即時預覽。
+    chat_state 是知識庫問答目前能不能問（closed、offline、idle）；沒給就不放這張卡片。"""
     if news["state"] == "ok":
         news_summary = _cut(news["cards"][0]["title"], TILE_SUMMARY_MAX)
     else:
@@ -121,7 +125,7 @@ def module_tiles(news, greetings, status):
     healthy = _TONE_RANK.get(worst[2], 0) == 0
     status_summary = "全部正常" if healthy else f"{worst[0]}：{worst[1]}"
     status_accent = worst[2] if worst[2] in _TONE_RANK else "success"
-    return [
+    tiles = [
         {"key": "news", "icon": "📰", "title": "今日科技早報", "desc": "後台每天整理的科技新聞，自動換頁",
          "accent": "info", "summary": news_summary},
         {"key": "greetings", "icon": "👋", "title": "剛剛打卡", "desc": "最近 10 分鐘辨識成功的人與問候",
@@ -129,6 +133,11 @@ def module_tiles(news, greetings, status):
         {"key": "status", "icon": "📡", "title": "系統狀態", "desc": "後台連線、鏡頭、人臉辨識與人臉資料",
          "accent": status_accent, "summary": _cut(status_summary, TILE_SUMMARY_MAX)},
     ]
+    if chat_state is not None:
+        tiles.append({"key": "chat", "icon": "💬", "title": "知識庫問答", "desc": "用鍵盤問公司文件，後台回答",
+                      "accent": "info" if chat_state == "idle" else "warning",
+                      "summary": CHAT_TILE_SUMMARY.get(chat_state, "目前未開放")})
+    return tiles
 
 
 def load_tone(percent):
@@ -143,8 +152,9 @@ def speed_text(arrow, kbps):
     return f"{arrow} {kbps / 1024:.1f} MB/s" if kbps >= 1024 else f"{arrow} {kbps:.1f} KB/s"
 
 
-def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_only=False):
-    """整理一份畫面內容。store 是 FrontStore，screen 是 ScreenState，read_heartbeat() 回傳辨識心跳。"""
+def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_only=False, chat_state=None):
+    """整理一份畫面內容。store 是 FrontStore，screen 是 ScreenState，read_heartbeat() 回傳辨識心跳；
+    chat_state 是知識庫問答能不能問（closed、offline、idle），沒給就沒有那張模組卡片。"""
     time_text, date_text = clock_texts(now)
     pending = store.pending_count() if pending is None else pending
     link_online = store.link_online(now=lambda: now_ts)
@@ -157,7 +167,7 @@ def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_onl
         "link": link_view(link_online, pending),
         "alert": alert_view(screen.current_alert(ALERT_SECONDS, now=lambda: now_ts)),
         "greetings": greetings, "news": news, "status": status,
-        "tiles": module_tiles(news, greetings, status),
+        "tiles": module_tiles(news, greetings, status, chat_state),
         "theme": screen.theme(),
     }
 
