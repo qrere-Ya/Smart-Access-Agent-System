@@ -288,7 +288,12 @@ def test_shrinking_after_a_large_window_still_fits(root, seeded):
         root.update()
         for key in (None, "news", "status"):
             app.go_home() if key is None else app.open_module(key)
-            root.update()
+            for _ in range(8):                     # CI 的虛擬螢幕較慢：版面要幾輪重排才會穩定，等它穩定再量
+                root.update()
+                fits_h = root.winfo_reqheight() <= root.winfo_height() + 2
+                if fits_h and root.winfo_reqwidth() <= root.winfo_width() + 2:
+                    break
+                time.sleep(0.05)
             assert root.winfo_reqwidth() <= root.winfo_width() + 2, (size, key, root.winfo_reqwidth())
             need, have = root.winfo_reqheight(), root.winfo_height()
             assert need <= have + 2, (size, key, need, have)
