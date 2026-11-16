@@ -115,7 +115,8 @@ def evaluate(complete: Callable[[str], str], questions: List[dict], multi: bool 
                 if router.guard.screen(item["q"]):   # 和正式流程相同：先過 guard，被擋下就不問語言模型
                     plan = router.Plan(docs=False, source="guard", refused="blocked")
                 else:
-                    plan = router.parse_plan(_complete_with_retry(complete, prompt, pause))
+                    plan = router.parse_plan(_complete_with_retry(complete, prompt, pause),
+                                             has_history=bool(item.get("history", "").strip()))
             except Exception as e:
                 print(f"[tool_eval] {item['id']} 呼叫失敗：{type(e).__name__}")
                 plan, error = None, True

@@ -1,11 +1,12 @@
 """
-chat_window.py：企業知識庫與出勤查詢的聊天視窗入口與組裝（CustomTkinter，深色現代風格）。
+chat_window.py：出缺勤查詢的聊天視窗入口與組裝（CustomTkinter，深色現代風格）；文件問答已移到前台。
 
 主要功能：
   - 氣泡式對話：你的問題靠右、助理的回答靠左，回答逐字串流顯示；文字可以選取複製
   - 開啟時在背景載入模型並顯示進度（本機 Ollama 沒開會自動啟動）；載入完成前可以先看畫面
   - 歡迎畫面顯示最新日報與待處理異常（shared.digest_store 讀後台產生的日報，沒有日報就不顯示）
-  - 範例問題按鈕、Enter 送出（Shift+Enter 換行）、新對話、重新整理文件、語言模型設定（本機／雲端）
+  - 範例問題按鈕、Enter 送出（Shift+Enter 換行）、新對話、語言模型設定（本機／雲端）
+  - 只查出缺勤：不載入知識庫模型；問到文件的問題會說明請到前台使用（文件問答在前台，見 docs/adr/0001）
   - 關閉視窗時釋放顯存上的模型；後台登出或閒置逾時時跟著關閉
   畫面只負責組裝與事件迴圈；問答、模型組裝、對話控制都在 rag 套件，這裡不放邏輯。
 
@@ -48,7 +49,7 @@ class AssistantWindow(ctk.CTk):
         self.title(APP_TITLE)
         self.geometry("920x760")
         self.minsize(640, 520)
-        self._runtime_factory = runtime_factory or bootstrap.create_runtime
+        self._runtime_factory = runtime_factory or bootstrap.create_attendance_runtime
         self._auto_start_ollama = auto_start_ollama
         self._runtime = None
         self._controller = None
@@ -96,11 +97,10 @@ class AssistantWindow(ctk.CTk):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        header = StatusBar(self, self._new_chat, self._refresh_docs, self._open_settings)
+        header = StatusBar(self, self._new_chat, self._open_settings)
         header.grid(row=0, column=0, sticky="ew")
         self._header = header
-        self.settings_btn, self.docs_btn, self.new_btn, self.status = (
-            header.settings_btn, header.docs_btn, header.new_btn, header.status)
+        self.settings_btn, self.new_btn, self.status = header.settings_btn, header.new_btn, header.status
 
         self.chat = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
         self.chat.grid(row=1, column=0, sticky="nsew", padx=6)
@@ -158,19 +158,15 @@ class AssistantWindow(ctk.CTk):
         for chip in self.chips:
             chip.configure(state="normal")
         self.send_btn.configure(state="normal")
-        self.docs_btn.configure(state="normal")
         if "，已改用" in runtime.llm_note:
             self._add_note("ℹ️ " + runtime.llm_note.split("助理使用")[0].strip())
-        failed = runtime.sync.failed
-        if failed:
-            self._add_note("⚠️ 這些文件讀不出內容，沒有收錄：" + "；".join(f"{n}（{why}）" for n, why in failed.items()))
         self.input.focus_set()
 
     def _set_ready_status(self):
-        """狀態列顯示目前模型與文件數量。"""
+        """狀態列顯示目前使用的語言模型。"""
         r = self._runtime
         model = r.llm_note.split("助理使用")[-1].split("，")[0]  # 只留模型名稱；備援原因另外用提示列出
-        self.status.configure(text=f"🟢 {model}　·　文件 {len(r.store.documents)} 份（{len(r.store)} 段）")
+        self.status.configure(text=f"🟢 {model}　·　出缺勤查詢")
 
     # --- 事件迴圈 ---
 
@@ -187,18 +183,14 @@ class AssistantWindow(ctk.CTk):
                     self._on_ready(payload)
                 elif kind == "failed":
                     self.status.configure(text="🔴 啟動失敗")
-                    self._add_note(f"🛑 無法啟動助理：{payload}\n請確認 Ollama 已安裝、models 資料夾內有 bge-m3，"
-                                   "並關掉不用的程式釋放記憶體，然後按右上角「重新載入」再試一次（不用關掉視窗）；"
+                    self._add_note(f"🛑 無法啟動助理：{payload}\n請確認 Ollama 已安裝並在執行（或雲端金鑰可用），"
+                                   "然後按右上角「重新載入」再試一次（不用關掉視窗）；"
                                    "也可以按 ⚙️ 檢查語言模型設定。")
                     self._header.show_retry(self._retry_load)
                 elif kind == "settings_applied":
                     show, note = payload
                     show(note)
                     self._set_ready_status()
-                elif kind == "docs":
-                    self._add_note(payload)
-                    self._set_ready_status()
-                    self.docs_btn.configure(state="normal")
         except queue.Empty:
             pass
         if self._controller is not None:
@@ -278,14 +270,6 @@ class AssistantWindow(ctk.CTk):
             for chip in self.chips:
                 chip.configure(state="normal" if self._controller else "disabled")
 
-    def _refresh_docs(self):
-        """在背景重新掃描文件。"""
-        if self._runtime is None:
-            return
-        self.docs_btn.configure(state="disabled")
-        self.status.configure(text="⏳ 重新掃描文件…")
-        chat_worker.start_refresh_docs(self._runtime, self._events)
-
     def _open_settings(self):
         """開啟語言模型設定對話框。"""
         SettingsDialog(self, self._apply_settings)
@@ -317,8 +301,8 @@ def main():
     if auth.verify_token(token) is None:
         root = ctk.CTk()
         root.attributes("-alpha", 0)       # 不用 withdraw：被隱藏的主視窗會連帶藏起它的對話框
-        ui_theme.show_message(root, "需要登入", "企業知識庫只能從管理後台開啟。" + chr(10)
-                              + "請先執行 python -m admin.backend_main 登入，再按「企業知識庫與出勤查詢」。", "error")
+        ui_theme.show_message(root, "需要登入", "出缺勤查詢只能從管理後台開啟。" + chr(10)
+                              + "請先執行 python -m admin.backend_main 登入，再按「出缺勤查詢」。", "error")
         root.destroy()
         sys.exit(2)
     AssistantWindow(session_token=token).mainloop()

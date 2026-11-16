@@ -19,10 +19,10 @@ import customtkinter as ctk
 
 from shared import ui_theme
 
-APP_TITLE = "企業知識庫與出勤查詢"
+APP_TITLE = "出缺勤查詢"
 FONT_FAMILY = ui_theme.FONT_FAMILY
-SAMPLE_QUESTIONS = ["特別休假的規定是什麼？", "今天誰遲到？", "最近有沒有尾隨事件？", "這週的出勤狀況",
-                    "颱風天公司要放假嗎？", "加班費怎麼計算？"]
+SAMPLE_QUESTIONS = ["今天誰遲到？", "這週誰早退？", "最近有沒有尾隨事件？", "今天的出勤狀況",
+                    "這個月誰遲到？", "列出員工名單"]
 META_PREFIXES = ("📎", "🗂️", "ℹ️", "⚠️")
 META_BLOCK_PREFIXES = ("📎", "🗂️")
 USER_COLOR = ui_theme.pair("primary")
@@ -174,7 +174,7 @@ def build_welcome(chat, on_pick, digest_text=""):
     welcome = ctk.CTkFrame(chat, fg_color="transparent")
     welcome.pack(pady=(48, 8))
     ctk.CTkLabel(welcome, text="有什麼想查的？", font=ui_theme.font(ui_theme.FONT_SIZE_HERO, bold=True)).pack()
-    ctk.CTkLabel(welcome, text="問公司文件與法規，或查考勤與異常紀錄", text_color=META_COLOR,
+    ctk.CTkLabel(welcome, text="查考勤與異常紀錄（文件與法規的問答已移到前台）", text_color=META_COLOR,
                  font=ui_theme.font(14)).pack(pady=(4, 18))
     if digest_text:
         card = ctk.CTkFrame(welcome, fg_color=BOT_COLOR, corner_radius=12)

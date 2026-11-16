@@ -370,3 +370,79 @@ def test_loading_is_refused_while_the_previous_models_are_still_being_released(d
     finally:
         gate.set()
         service.close()
+
+
+# --- 文件管理：後台按「重新掃描」 ---
+
+def test_a_rescan_request_rescans_the_loaded_knowledge_base_and_writes_the_result(make, monkeypatch, tmp_path):
+    from rag import bootstrap, chat_worker
+    from shared import docs_control, paths
+
+    monkeypatch.setattr(paths, "DOCS_REFRESH_PATH", str(tmp_path / "refresh.json"))
+    monkeypatch.setattr(paths, "DOCS_STATUS_PATH", str(tmp_path / "status.json"))
+    scanned = []
+
+    class Report:
+        added, updated, removed, failed = ["新文件.txt"], [], [], {}
+
+    monkeypatch.setattr(bootstrap, "refresh_documents", lambda runtime: scanned.append(runtime) or Report())
+    monkeypatch.setattr(chat_worker, "WORKER_POLL_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(cs, "WORKER_POLL_SECONDS", 0.05)
+    service = make()
+    wait_for(service, service.submit("先載入知識庫"))
+    docs_control.request_refresh(now=time.time() + 1)
+    end = time.time() + 5
+    while docs_control.read_status() is None and time.time() < end:
+        time.sleep(0.05)
+    assert scanned == [service._runtime] and "新增：新文件.txt" in docs_control.read_status()["text"]
+
+
+def test_a_rescan_request_before_the_first_question_just_says_it_will_happen_then(make, monkeypatch, tmp_path):
+    from shared import docs_control, paths
+
+    monkeypatch.setattr(paths, "DOCS_REFRESH_PATH", str(tmp_path / "refresh.json"))
+    monkeypatch.setattr(paths, "DOCS_STATUS_PATH", str(tmp_path / "status.json"))
+    monkeypatch.setattr(cs, "WORKER_POLL_SECONDS", 0.05)
+    service = make()
+    service._ensure_worker()
+    docs_control.request_refresh(now=time.time() + 1)
+    end = time.time() + 5
+    while docs_control.read_status() is None and time.time() < end:
+        time.sleep(0.05)
+    assert "下一次前台提問時會自動掃描" in docs_control.read_status()["text"] and service.loads == []
+
+
+def test_a_failing_rescan_writes_a_plain_message_without_details(make, monkeypatch, tmp_path, capsys):
+    from rag import bootstrap
+    from shared import docs_control, paths
+
+    monkeypatch.setattr(paths, "DOCS_REFRESH_PATH", str(tmp_path / "refresh.json"))
+    monkeypatch.setattr(paths, "DOCS_STATUS_PATH", str(tmp_path / "status.json"))
+    monkeypatch.setattr(cs, "WORKER_POLL_SECONDS", 0.05)
+
+    def boom(runtime):
+        raise OSError("C:/secret/docs/機密.pdf 被占用")
+
+    monkeypatch.setattr(bootstrap, "refresh_documents", boom)
+    service = make()
+    wait_for(service, service.submit("先載入"))
+    docs_control.request_refresh(now=time.time() + 1)
+    end = time.time() + 5
+    while docs_control.read_status() is None and time.time() < end:
+        time.sleep(0.05)
+    text = docs_control.read_status()["text"]
+    assert "重新掃描失敗" in text and "secret" not in text and "機密" not in text
+    assert "OSError" in capsys.readouterr().out
+
+
+def test_an_old_request_from_before_the_service_started_is_not_replayed(make, monkeypatch, tmp_path):
+    from shared import docs_control, paths
+
+    monkeypatch.setattr(paths, "DOCS_REFRESH_PATH", str(tmp_path / "refresh.json"))
+    monkeypatch.setattr(paths, "DOCS_STATUS_PATH", str(tmp_path / "status.json"))
+    docs_control.request_refresh(now=time.time() - 3600)
+    monkeypatch.setattr(cs, "WORKER_POLL_SECONDS", 0.05)
+    service = make()
+    service._ensure_worker()
+    time.sleep(0.4)
+    assert docs_control.read_status() is None

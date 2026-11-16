@@ -76,9 +76,10 @@ def pump(win, until, seconds=8.0):
 def test_window_becomes_ready_and_shows_a_short_status(window):
     assert pump(window, lambda: window._controller is not None)
     status = window.status.cget("text")
-    assert "本機模型（qwen2:7b）" in status and "文件 2 份" in status and "12 段" in status
+    assert "本機模型（qwen2:7b）" in status and "出缺勤查詢" in status
+    assert "文件" not in status and "段" not in status                # 後台聊天視窗不再顯示文件數量
     assert "無法使用" not in status  # 備援原因改成提示，不擠在狀態列
-    assert window.send_btn.cget("state") == "normal" and window.docs_btn.cget("state") == "normal"
+    assert window.send_btn.cget("state") == "normal" and not hasattr(window, "docs_btn")
 
 
 def test_buttons_are_disabled_until_the_models_are_loaded(window):
@@ -118,14 +119,44 @@ def test_welcome_screen_disappears_after_the_first_question_and_returns_with_a_n
 
 def test_sample_question_buttons_send_their_text(window):
     assert pump(window, lambda: window._controller is not None)
+    from rag.chat_view import SAMPLE_QUESTIONS
+
     window.chips[1].invoke()
-    assert pump(window, lambda: window.runtime.assistant.questions == ["今天誰遲到？"])
+    assert pump(window, lambda: window.runtime.assistant.questions == [SAMPLE_QUESTIONS[1]])
 
 
-def test_unreadable_documents_and_the_fallback_reason_are_shown_as_notes(window):
+def test_the_sample_questions_and_texts_are_about_attendance_only():
+    from rag.chat_view import APP_TITLE, SAMPLE_QUESTIONS
+
+    assert APP_TITLE == "出缺勤查詢" and len(SAMPLE_QUESTIONS) == 6
+    for question in SAMPLE_QUESTIONS:
+        assert not any(w in question for w in ("特別休假", "加班費", "颱風", "規定", "法規", "辦法", "文件"))
+
+
+def test_the_fallback_reason_is_shown_as_a_note_and_document_scanning_is_gone(window):
     assert pump(window, lambda: window._controller is not None)
     shown = " ".join(w.cget("text") for w in window._notes_widgets)
-    assert "壞檔.pdf" in shown and "雲端 API 目前無法使用" in shown
+    assert "雲端 API 目前無法使用" in shown and "壞檔.pdf" not in shown and "文件" not in shown
+
+
+def test_the_window_has_no_document_button_and_says_documents_are_in_the_front(window):
+    from rag.chat_status_bar import build_footer_hint
+
+    assert not hasattr(window, "docs_btn") and window.title() == "出缺勤查詢"
+    texts = []
+
+    def walk(widget):
+        for child in widget.winfo_children():
+            try:
+                texts.append(child.cget("text"))
+            except Exception:  # noqa: BLE001, S110  不是每種元件都有 text
+                pass
+            walk(child)
+
+    walk(window)
+    joined = " ".join(t for t in texts if isinstance(t, str))
+    assert "🔄 文件" not in joined and "文件與法規的問答已移到前台" in joined and "文件問答請到前台" in joined
+    assert build_footer_hint is not None
 
 
 def test_closing_the_window_releases_the_models(window):
@@ -221,19 +252,6 @@ def test_a_saved_name_without_a_tag_matches_the_installed_latest_model(settings_
     settings_dialog.local_model.set("llama3")
     settings_dialog._fill_model_names(["llama3:latest", "qwen3:8b"])
     assert settings_dialog.local_model.get() == "llama3:latest"
-
-
-def test_a_failed_document_rescan_is_reported_and_the_button_comes_back(window):
-    assert pump(window, lambda: window._controller is not None)
-
-    def broken():
-        raise RuntimeError("顯存不足")
-
-    window.runtime.store.sync = broken
-    window._refresh_docs()
-    assert window.docs_btn.cget("state") == "disabled"
-    assert pump(window, lambda: window.docs_btn.cget("state") == "normal")
-    assert any("重新掃描失敗" in w.cget("text") and "顯存不足" in w.cget("text") for w in window._notes_widgets)
 
 
 def test_closing_the_settings_dialog_cancels_its_pending_timers(window, settings_dialog):

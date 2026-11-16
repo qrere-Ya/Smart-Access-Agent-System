@@ -199,6 +199,79 @@ def test_the_back_card_opens_front_chat_only_after_the_warning_and_closes_it_wit
     app.teardown()
 
 
+def test_the_back_card_manages_the_knowledge_documents_folder_and_the_rescan(root, db, monkeypatch, tmp_path):
+    """雙機後台：前台連線卡片顯示文件份數與最近一次掃描結果，能開啟資料夾、通知知識庫服務重新掃描。"""
+    import os
+
+    from admin import service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import docs_control, front_control, paths
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "規定.txt").write_text("x", encoding="utf-8")
+    (docs / "手冊.pdf").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(paths, "DOCS_DIR", str(docs))
+    monkeypatch.setattr(paths, "DOCS_REFRESH_PATH", str(tmp_path / "refresh.json"))
+    monkeypatch.setattr(paths, "DOCS_STATUS_PATH", str(tmp_path / "status.json"))
+    monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    opened = []
+    monkeypatch.setattr(os, "startfile", lambda folder: opened.append(folder), raising=False)
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_page.update()
+    assert "有 2 份" in app.docs_label.cget("text") and "最近一次掃描" not in app.docs_label.cget("text")
+    app.docs_open_btn.invoke()
+    assert opened == [str(docs)]
+    app.docs_scan_btn.invoke()
+    assert docs_control.pending(0.0) is not None and "已通知知識庫服務" in app.notice_var.get()
+    docs_control.write_status("📚 文件已重新掃描　新增：新文件.txt")
+    (docs / "新文件.txt").write_text("y", encoding="utf-8")
+    app._refresh_link_card()
+    text = app.docs_label.cget("text")
+    assert "有 3 份" in text and "最近一次掃描" in text and "新增：新文件.txt" in text
+    assert front_control.chat_enabled() is False                    # 重新掃描不會動到前台問答的開關
+    app.teardown()
+
+
+def test_opening_a_missing_documents_folder_creates_it_and_a_failure_is_explained(root, db, monkeypatch, tmp_path):
+    import os
+
+    from admin import service_manager as sm
+    from admin.backend_main import BackendManagerApp
+    from shared import paths, ui_theme
+
+    docs = tmp_path / "not_yet"
+    monkeypatch.setattr(paths, "DOCS_DIR", str(docs))
+    monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
+    monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
+    monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
+    monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
+    shown = []
+    monkeypatch.setattr(ui_theme, "show_message", lambda master, title, text, kind="info": shown.append((kind, text)))
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.withdraw()
+    app.open_dashboard()
+    app.dash_page.update()
+    monkeypatch.setattr(os, "startfile", lambda folder: None, raising=False)
+    app.docs_open_btn.invoke()
+    assert docs.is_dir() and shown == []
+
+    def broken(folder):
+        raise OSError("C:/secret/路徑 無法開啟")
+
+    monkeypatch.setattr(os, "startfile", broken, raising=False)
+    app.docs_open_btn.invoke()
+    assert shown == [("warning", "無法開啟文件資料夾。")]
+    app.teardown()
+
+
 def test_the_single_machine_dashboard_has_no_front_recognition_button(root, db, monkeypatch):
     from admin import service_manager as sm
     from admin.backend_main import BackendManagerApp

@@ -7,6 +7,7 @@
 """
 import json
 import os
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -31,9 +32,11 @@ def _free_port():
 def back(tmp_path_factory):
     from shared import front_control, paths, role_config
 
-    docs = os.path.join(paths.PROJECT_ROOT, "data", "docs")
-    if not os.path.isdir(docs) or not os.listdir(docs):
+    real_docs = os.path.join(paths.PROJECT_ROOT, "data", "docs")
+    if not os.path.isdir(real_docs) or not os.listdir(real_docs):
         pytest.skip("沒有 data/docs 文件")
+    docs = str(tmp_path_factory.mktemp("docs_copy") / "docs")
+    shutil.copytree(real_docs, docs)                     # 用複本：測試要新增文件，不能動到真的資料夾
     runtime = tmp_path_factory.mktemp("back_runtime")
     port = _free_port()
     token = role_config.new_token()
@@ -62,8 +65,11 @@ def back(tmp_path_factory):
         pytest.fail("後台連線服務沒有啟動：\n" + "\n".join(lines[-15:]))
     patch = pytest.MonkeyPatch()
     patch.setattr(paths, "FRONT_CONTROL_PATH", str(runtime / "front_control.json"))   # 後台行程讀的就是這個檔
+    patch.setattr(paths, "DOCS_REFRESH_PATH", str(runtime / "docs_refresh_request.json"))
+    patch.setattr(paths, "DOCS_STATUS_PATH", str(runtime / "docs_status.json"))
     patch.setenv(role_config.TOKEN_ENV, token)
-    yield {"runtime": runtime, "port": port, "token": token, "fingerprint": fingerprint["value"], "proc": proc,
+    yield {"runtime": runtime, "docs": docs, "port": port, "token": token, "fingerprint": fingerprint["value"],
+           "proc": proc,
            "lines": lines, "front_control": front_control}
     proc.terminate()
     try:
@@ -186,3 +192,34 @@ def test_7_closing_the_switch_on_the_back_stops_answers_at_once(back, front):
     assert chat.submit(QUESTION) is True
     view = wait_for(chat, ("closed", "answer", "error"))
     assert view["state"] == "closed"
+
+
+def test_8_a_document_added_later_is_found_after_the_admin_presses_rescan(back, front):
+    from shared import docs_control
+
+    back["front_control"].set_chat_enabled(True)
+    time.sleep(3.2)
+    chat = front["chat"]
+    chat.clear()
+    question = "公司的午休時間是幾分鐘？"
+    assert chat.submit(question) is True                              # 新文件還不存在：問不到
+    before = wait_for(chat, ("answer", "error", "closed"))
+    assert "47" not in before["answer"]
+    new_doc = os.path.join(back["docs"], "臨時作息規定.txt")
+    with open(new_doc, "w", encoding="utf-8") as f:
+        f.write("臨時作息規定\n\n第1條\n公司的午休時間一律為 47 分鐘，不得延長。\n")
+    stamp = docs_control.request_refresh()                             # 後台管理者按「重新掃描」
+    deadline = time.time() + 120
+    status = None
+    while time.time() < deadline:
+        status = docs_control.read_status()
+        if status and status["time"] >= time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stamp)):
+            break
+        time.sleep(0.5)
+    assert status and "臨時作息規定.txt" in status["text"], status
+    time.sleep(3.2)
+    chat.clear()
+    assert chat.submit(question) is True
+    after = wait_for(chat, ("answer", "error", "closed"))
+    assert after["state"] == "answer" and "47" in after["answer"], after
+    assert any("臨時作息規定" in name for name in after["sources"]), after["sources"]

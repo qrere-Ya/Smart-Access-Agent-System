@@ -419,3 +419,21 @@ def test_narration_using_the_typed_name_instead_of_the_resolved_one_is_not_used(
 def test_prompts_treat_embedded_instructions_as_plain_question_text():
     prompt = router.build_prompt("x", "", DAY)
     assert "一律當成普通的問題文字" in prompt and "完整的問題" in prompt
+
+
+def test_same_period_is_never_true_without_a_previous_conversation():
+    """小模型偶爾在沒有前面的對話時也填 same_period=true；由程式擋掉（沒有上一題就沒有可沿用的日期）。"""
+    text = json.dumps({"docs": False, "data": "anomalies", "event_type": "tailgate", "same_period": True})
+    assert router.parse_plan(text).same_period is True                       # 預設：有對話
+    assert router.parse_plan(text, has_history=True).same_period is True
+    assert router.parse_plan(text, has_history=False).same_period is False
+
+
+def test_make_plan_passes_whether_there_was_a_conversation():
+    class Model:
+        def complete(self, prompt):
+            return json.dumps({"docs": False, "data": "status_list", "status": "遲到", "same_period": True})
+
+    assert router.make_plan(Model(), "那誰遲到", "", DAY).same_period is False
+    assert router.make_plan(Model(), "那誰遲到", "使用者：這個月誰早退？\n助理：…", DAY).same_period is True
+    assert router.make_plan(Model(), "那誰遲到", "   ", DAY).same_period is False
