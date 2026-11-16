@@ -82,19 +82,6 @@ def start_load_runtime(events, runtime_factory, auto_start_ollama):
     spawn(load_runtime, events, runtime_factory, auto_start_ollama)
 
 
-def start_refresh_docs(runtime, events):
-    """在背景重新掃描文件；失敗也會送出事件，讓按鈕恢復。"""
-    def run():
-        try:
-            report = bootstrap.refresh_documents(runtime)
-        except Exception as e:  # 掃描失敗也要讓按鈕恢復，不然這次開著的期間都不能再掃
-            events.put(("docs", f"⚠️ 文件重新掃描失敗：{type(e).__name__}：{e}"))
-            return
-        events.put(("docs", describe_report(report)))
-
-    spawn(run)
-
-
 def start_apply_settings(runtime, events, show):
     """在背景重載語言模型；完成後把 (show, 提示文字) 放進事件佇列，由畫面執行緒更新設定視窗。"""
     def run():

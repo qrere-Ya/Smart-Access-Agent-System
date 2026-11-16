@@ -37,6 +37,11 @@ MAX_LISTED_ROWS = tools.MAX_LISTED_ROWS
 _WEEKDAYS = "一二三四五六日"
 
 DOCS_ONLY_REFUSAL = "這個要求我不會執行。這裡只能查詢公司文件的內容，請換個問法。"
+DOCS_MOVED_TEXT = ("📚 文件與法規的問答已經移到前台，請到前台的「知識庫問答」使用。\n"
+                   "後台這裡只查考勤與異常資料（例如：今天誰遲到？王小明這個月遲到幾次？最近有尾隨事件嗎？）。")
+DOCS_MOVED_NOTE = "ℹ️ 問題裡有關文件與法規的部分，請到前台的「知識庫問答」查詢；這裡只回答考勤與異常資料。"
+ATTENDANCE_HELP_TEXT = ("我可以回答考勤與異常資料（例如：王小明這個月遲到幾次？今天誰遲到？最近有尾隨事件嗎？）。\n"
+                        "文件與法規的問答請到前台的「知識庫問答」使用。")
 HELP_TEXT = ("我可以回答兩類問題：\n"
              "1. 公司文件與法規（例如：特別休假有幾天？加班費怎麼算？）\n"
              "2. 考勤與異常資料（例如：王小明這個月遲到幾次？今天誰遲到？最近有尾隨事件嗎？）")
@@ -77,8 +82,10 @@ class Trace:
 
 
 class Assistant:
-    def __init__(self, store, reranker, llm, resolver, router_llm=None, today=datetime.date.today):
+    def __init__(self, store, reranker, llm, resolver, router_llm=None, today=datetime.date.today,
+                 docs_enabled=True):
         self.store, self.reranker, self.llm, self.resolver = store, reranker, llm, resolver
+        self.docs_enabled = docs_enabled   # False＝只查出缺勤（後台聊天視窗）：不檢索文件，問到文件時說明請到前台使用
         self.router_llm = router_llm if router_llm is not None else llm
         self._today = today
         self._history: List[tuple] = []
@@ -107,7 +114,7 @@ class Assistant:
         self.last = Trace()
         if not question:
             self.last.outcome = "help"
-            yield "請輸入問題。\n\n" + HELP_TEXT
+            yield "請輸入問題。\n\n" + self._help_text()
             return
         collected: List[str] = []
         for piece in self._answer(question):
@@ -187,6 +194,9 @@ class Assistant:
 
     # --- 內部 ---
 
+    def _help_text(self) -> str:
+        return HELP_TEXT if self.docs_enabled else ATTENDANCE_HELP_TEXT
+
     def _history_text(self) -> str:
         return "\n".join(f"使用者：{q}\n助理：{a}" for q, a in self._history[-HISTORY_TURNS:])
 
@@ -210,7 +220,7 @@ class Assistant:
         if plan.refused:   # 惡意或越權的要求：不查、不問語言模型，也不記進對話（否則會被帶進之後的提示詞）
             self.last.plan, self.last.outcome, self.last.note = plan, "refused", plan.refused
             self._pending = None
-            yield guard.REFUSAL + HELP_TEXT
+            yield guard.REFUSAL + self._help_text()
             return
         pending, self._pending, self._confirmed_person = self._pending, None, ""
         if pending is not None and self._is_reply_to(pending, question, plan, today):
@@ -220,6 +230,9 @@ class Assistant:
             if name:
                 question, plan = pending
                 self._confirmed_person = name
+        docs_moved = False
+        if plan.docs and not self.docs_enabled:    # 只查出缺勤：文件的部分不處理，請使用者到前台
+            plan.docs, docs_moved = False, True
         self.last.plan = plan
         rng = dates.find_range(question, today)
         inherited = (rng is None and plan.same_period and plan.data not in (None, "roster")
@@ -251,6 +264,12 @@ class Assistant:
         if plan.docs:
             hits = self._search_documents(question)
             self.last.hits = hits
+        if docs_moved and not plan.data:
+            self.last.outcome = "docs_moved"
+            yield DOCS_MOVED_TEXT
+            return
+        if docs_moved:
+            notes = notes + [DOCS_MOVED_NOTE.removeprefix("ℹ️ ")]
         if not plan.docs and not plan.data:
             if plan.person:   # 問題裡有人名但沒有要查的東西：名單裡沒有這個人就直說，不要只丟一段功能說明
                 name, message = self._resolve_person(plan, question)
@@ -259,7 +278,7 @@ class Assistant:
                     yield message
                     return
             self.last.outcome = "help"
-            yield HELP_TEXT
+            yield self._help_text()
             return
 
         top = max((h.rerank or 0.0 for h in hits), default=0.0)

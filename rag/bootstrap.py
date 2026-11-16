@@ -1,8 +1,12 @@
 """
-bootstrap.py：把助理需要的所有零件組起來（文件向量庫、重排、LLM、人名比對），給聊天視窗啟動時用。
+bootstrap.py：把助理需要的零件組起來（LLM、人名比對，以及知識庫才有的文件向量庫與重排），給各個入口啟動時用。
 
 主要功能：
-  - create_runtime：載入 bge-m3、同步文件資料夾、載入重排模型、取得 LLM、讀員工名單，組成 Assistant
+  - create_attendance_runtime：**後台聊天視窗用**——只查出缺勤：取得 LLM、讀員工名單（姓名比對用不載模型的雜湊向量），
+    **不載入 bge-m3、重排模型與文件索引**，也不匯入它們的套件，所以啟動快、不占顯存與大量記憶體；
+    問到文件的問題會明確說明「文件問答請到前台使用」
+  - create_runtime：知識庫完整版（前台問答服務 admin.chat_service 與遠端測試入口用）：載入 bge-m3、同步文件資料夾、
+    載入重排模型、取得 LLM、讀員工名單，組成 Assistant
   - 每一步回報進度文字，讓視窗顯示「正在載入…」；零件工廠可以抽換，測試時不需要真的模型
   - refresh_documents：重新掃描文件資料夾（新增、修改、刪除的文件各自處理）
   - reload_llm：設定改過之後重新取得 LLM；close：釋放顯存上的模型
@@ -18,20 +22,29 @@ from typing import Callable, List, Optional
 
 
 from rag import answer, llm as llm_mod, queries
-from rag.doc_store import DocStore, SyncReport
 from rag.entity_resolver import NameResolver
-from rag.rerank import Reranker
+from rag.name_embed import hash_embed
 from shared import paths
 
 Progress = Callable[[str], None]
+DocStore = None     # 知識庫完整版才匯入（faiss、jieba 等套件很重）；第一次用到時才載入，測試可以換成假的
+
+
+def _doc_store_class():
+    global DocStore
+    if DocStore is None:
+        from rag.doc_store import DocStore as real
+
+        DocStore = real
+    return DocStore
 
 
 @dataclass
 class Runtime:
     assistant: answer.Assistant
-    store: DocStore
+    store: Optional[object]            # DocStore；只查出缺勤的 runtime 是 None
     llm_note: str
-    sync: SyncReport
+    sync: Optional[object]             # SyncReport；只查出缺勤的 runtime 是 None
     closers: List[Callable[[], None]] = field(default_factory=list)
 
     def close(self):
@@ -56,6 +69,8 @@ def _default_embedder():
 
 
 def _default_reranker():
+    from rag.rerank import Reranker
+
     reranker = Reranker.from_model_dir(os.path.join(paths.MODELS_DIR, "bge-reranker-v2-m3"))
     return reranker, reranker.release
 
@@ -79,7 +94,7 @@ def create_runtime(progress: Progress = print, docs_dir: Optional[str] = None, s
         closers.append(release_embed)
 
         progress("掃描文件資料夾並建立索引…")
-        store = DocStore(docs_dir, store_dir, embed)
+        store = _doc_store_class()(docs_dir, store_dir, embed)
         sync = store.sync()
 
         progress("載入重排模型…")
@@ -107,7 +122,23 @@ def create_runtime(progress: Progress = print, docs_dir: Optional[str] = None, s
         raise
 
 
-def refresh_documents(runtime: Runtime) -> SyncReport:
+def create_attendance_runtime(progress: Progress = print, settings: Optional[dict] = None, llm_builder=None,
+                              roster=roster_names) -> Runtime:
+    """後台聊天視窗用：只有語言模型與出缺勤查詢，不載入任何知識庫模型。失敗丟出例外，由呼叫端顯示原因。"""
+    progress("連接語言模型…")
+    builder = llm_builder or llm_mod.build_llm
+    model, note = builder(settings)
+    router_model, _ = builder(settings, max_tokens=200)
+    if model is None:
+        raise RuntimeError(note)
+    resolver = NameResolver(roster(), hash_embed)
+    assistant = answer.Assistant(None, None, model, resolver, router_llm=router_model, docs_enabled=False)
+    assistant.roster_provider = roster
+    progress("準備完成")
+    return Runtime(assistant, None, note, None, [])
+
+
+def refresh_documents(runtime: Runtime):
     """重新掃描文件資料夾，回傳這次的新增、修改、刪除與失敗清單。"""
     runtime.sync = runtime.store.sync()
     return runtime.sync

@@ -9,7 +9,7 @@ backend_main.py：門禁系統管理後台主程式（CustomTkinter，套用 sha
     雙機的後台角色改顯示「前台連線」（燈號、最後回報時間、鏡頭與辨識狀態）與前台事件串流，並自動啟動連線服務
   - 員工帳號管理（account_panel）、出勤報告（calendar_panel，內嵌 report_panel）
   - 遠端 QR Code 註冊：註冊伺服器開關，每 5 秒刷新動態 QR Code
-  - 企業知識庫與出勤查詢：模型很大，另開獨立行程的聊天視窗（rag.chat_window），查公司文件與考勤、異常紀錄
+  - 出缺勤查詢：另開獨立行程的聊天視窗（rag.chat_window），只查考勤與異常紀錄（不載入知識庫模型；文件問答在前台）
   - 登入保護：啟動先用人臉登入（login_window），閒置 15 分鐘或按「登出」就回到登入畫面
   整個行程只建立一個主視窗，登入畫面與主畫面共用。只負責畫面，實際工作轉發給其他模組。
 
@@ -50,7 +50,7 @@ from admin import (
     schedule_window,
     service_manager,
 )
-from shared import auth, front_control, paths, phone_address, ui_theme
+from shared import auth, docs_control, front_control, paths, phone_address, ui_theme
 from shared import database_mgr as db
 
 ANOMALY_DIR = paths.ANOMALY_DIR
@@ -205,7 +205,7 @@ class BackendManagerApp:
             ("📊", "營運狀態與尾隨監控", "今日打卡統計、安全警報、人臉辨識即時輸出", "success", self.open_dashboard),
             ("👤", "員工帳號管理", "列出、停用、啟用、刪除員工帳號與角色", "info", self.open_account_admin),
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", "warning", self.open_qr_registration),
-            ("🤖", "企業知識庫與出勤查詢", "用聊天查公司文件與法規、考勤紀錄、異常事件（模型另開獨立視窗）", "primary",
+            ("🤖", "出缺勤查詢", "用聊天查考勤紀錄與異常事件（文件問答在前台；視窗另開獨立行程）", "primary",
              self.open_assistant_window),
             ("🗓️", "出勤報告", "每日出勤報告（可匯出 CSV）、AI 對話紀錄（審查有沒有答錯或幻覺）", "success",
              self.open_calendar),
@@ -588,6 +588,17 @@ class BackendManagerApp:
         self.chat_control_btn = ui_theme.secondary_button(chat_row, "", self._press_chat_control, width=170)
         self.chat_control_btn.pack(side="right")
         self._refresh_chat_control()
+        # 知識庫文件管理：文件問答搬到前台之後，管理者在這裡放文件與重新掃描（文件放在 data/docs）
+        docs_row = ctk.CTkFrame(box, fg_color="transparent")
+        docs_row.pack(fill="x", padx=15, pady=(0, 12))
+        self.docs_label = ui_theme.muted_label(docs_row, "")
+        self.docs_label.configure(anchor="w", justify="left", wraplength=420)
+        self.docs_label.pack(side="left", fill="x", expand=True)
+        self.docs_scan_btn = ui_theme.secondary_button(docs_row, "🔄 重新掃描", self._request_docs_refresh, width=110)
+        self.docs_scan_btn.pack(side="right")
+        self.docs_open_btn = ui_theme.secondary_button(docs_row, "📂 開啟資料夾", self._open_docs_folder, width=120)
+        self.docs_open_btn.pack(side="right", padx=(0, 8))
+        self._refresh_docs_label()
 
     def _refresh_face_control(self):
         """依後台目前的設定更新「停止／恢復前台辨識」按鈕與說明（按下去要在卡片內再確認一次）。"""
@@ -616,6 +627,34 @@ class BackendManagerApp:
             self.face_control_confirming = False
             front_control.set_recognition_enabled(not front_control.recognition_enabled())
         self._refresh_face_control()
+
+    def _refresh_docs_label(self):
+        """顯示文件資料夾裡的文件數與最近一次重新掃描的結果。"""
+        count, _folder = docs_control.folder_summary()
+        status = docs_control.read_status()
+        last = f"\n最近一次掃描（{status['time']}）：{status['text']}" if status else ""
+        self.docs_label.configure(text=f"知識庫文件：資料夾 data/docs 有 {count} 份（PDF、Word、txt、md）；"
+                                       f"放新文件後按「重新掃描」{last}")
+
+    def _open_docs_folder(self):
+        """用檔案總管開啟放文件的資料夾（不存在就先建立）。"""
+        _count, folder = docs_control.folder_summary()
+        try:
+            os.makedirs(folder, exist_ok=True)
+            os.startfile(folder)  # noqa: S606  # nosec B606  只開固定的文件資料夾，不含任何使用者輸入
+        except OSError as e:
+            print(f"[後台] 開啟文件資料夾失敗：{type(e).__name__}")
+            ui_theme.show_message(self.root, "知識庫文件", "無法開啟文件資料夾。", "warning")
+
+    def _request_docs_refresh(self):
+        """通知知識庫服務重新掃描文件（服務約 1 秒內開始，結果顯示在旁邊）。"""
+        try:
+            docs_control.request_refresh()
+        except OSError as e:
+            print(f"[後台] 寫入重新掃描請求失敗：{type(e).__name__}")
+            ui_theme.show_message(self.root, "知識庫文件", "無法通知知識庫服務，請稍後再試。", "warning")
+            return
+        self.notice("已通知知識庫服務重新掃描文件，結果會顯示在「前台連線」卡片。")
 
     def _refresh_chat_control(self):
         """依後台目前的設定更新「開放／關閉前台知識庫問答」按鈕與說明。"""
@@ -661,6 +700,8 @@ class BackendManagerApp:
             reason = f"：{self.link_note}" if self.link_note else "（正在嘗試啟動）"
             self.link_service_label.configure(text=f"🔴 後台連線服務未執行{reason}")
         self._refresh_face_control()
+        self._refresh_chat_control()
+        self._refresh_docs_label()
         events = dashboard_stats.get_recent_events(limit=30)
         if events is not None:
             ui_theme.fill_table(self.event_tree, [(ts[5:], text) for ts, text in events])
@@ -770,15 +811,15 @@ class BackendManagerApp:
 
         self._open_page("anomaly", "🔔 異常事件", build)
 
-    # --- 企業知識庫與出勤查詢（模型要另開行程載入，所以是獨立的聊天視窗） ---
+    # --- 出缺勤查詢（獨立行程的聊天視窗） ---
     def open_assistant_window(self):
-        """開啟企業知識庫聊天視窗；模型在那個行程裡載入，這裡只負責啟動與提示。"""
+        """開啟出缺勤查詢聊天視窗（只查考勤與異常，不載入知識庫模型）；在另一個行程裡執行，這裡只負責啟動與提示。"""
         token = self.session.token if self.session is not None else None
-        ok, message = service_manager.start_assistant_window(lambda line: print(f"[企業知識庫] {line}"), token)
+        ok, message = service_manager.start_assistant_window(lambda line: print(f"[出缺勤查詢] {line}"), token)
         if ok:
             self.notice(message, seconds=12)
         else:
-            ui_theme.show_message(self.root, "企業知識庫與出勤查詢", message, "warning")
+            ui_theme.show_message(self.root, "出缺勤查詢", message, "warning")
 
     # --- 頁面 4：手機遠端 QR Code 註冊 ---
     @staticmethod

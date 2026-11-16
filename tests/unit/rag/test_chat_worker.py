@@ -88,14 +88,3 @@ def test_a_permanent_failure_is_not_retried():
 
     chat_worker.load_runtime(events, factory, auto_start_ollama=False, retries=3, delay=0, sleep=lambda s: None)
     assert len(calls) == 1 and events.get_nowait()[0] == "failed"
-
-
-def test_refresh_failure_still_posts_a_docs_event(monkeypatch):
-    def boom(runtime):
-        raise RuntimeError("顯存不足")
-
-    monkeypatch.setattr(chat_worker.bootstrap, "refresh_documents", boom)
-    events = queue.Queue()
-    chat_worker.start_refresh_docs(object(), events)
-    kind, text = events.get(timeout=5)
-    assert kind == "docs" and "重新掃描失敗" in text and "顯存不足" in text

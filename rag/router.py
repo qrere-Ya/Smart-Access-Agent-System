@@ -78,8 +78,10 @@ _EXAMPLES = """範例：
 {"docs": false, "data": "anomalies", "person": "", "status": "", "event_type": "tailgate"}
 問題：公司有哪些員工？
 {"docs": false, "data": "roster", "person": "", "status": "", "event_type": ""}
-問題：特休可以請幾天？
-{"docs": true, "data": "none", "person": "", "status": "", "event_type": ""}
+問題：上週五的出勤摘要
+{"docs": false, "data": "summary", "person": "", "status": "", "event_type": ""}
+問題：這週有沒有異常事件？
+{"docs": false, "data": "anomalies", "person": "", "status": "", "event_type": ""}
 問題：陳志遠這個月遲到五次，公司可以怎麼處理？
 {"docs": true, "data": "count", "person": "陳志遠", "status": "遲到", "event_type": ""}
 問題：你好
@@ -91,10 +93,10 @@ _FOLLOWUP_EXAMPLE = """前面的對話：使用者：這個月誰早退？
 {"docs": false, "data": "status_list", "person": "", "status": "遲到", "event_type": "", "same_period": true}"""
 
 
-_MULTI_EXAMPLES = """問題：今天誰遲到，順便列出員工名單
-{"docs": false, "data": "status_list", "person": "", "status": "遲到", "event_type": "", "also": [{"data": "roster", "person": "", "status": "", "event_type": ""}]}
-問題：最近有沒有尾隨事件，以及李大華這個月的打卡紀錄
-{"docs": false, "data": "anomalies", "person": "", "status": "", "event_type": "tailgate", "also": [{"data": "records", "person": "李大華", "status": "", "event_type": ""}]}"""  # noqa: E501
+_MULTI_EXAMPLES = """問題：明天誰早退，順便列出員工名單
+{"docs": false, "data": "status_list", "person": "", "status": "早退", "event_type": "", "also": [{"data": "roster", "person": "", "status": "", "event_type": ""}]}
+問題：這個月的出勤狀況，以及李大華這個月的打卡紀錄
+{"docs": false, "data": "summary", "person": "", "status": "", "event_type": "", "also": [{"data": "records", "person": "李大華", "status": "", "event_type": ""}]}"""  # noqa: E501
 
 
 def build_prompt(question: str, history: str, today: datetime.date, multi: bool = True) -> str:
@@ -165,8 +167,10 @@ def _parse_steps(raw_steps, main) -> List[Step]:
     return steps if len(steps) <= MAX_STEPS - 1 else []
 
 
-def parse_plan(text: str) -> Optional[Plan]:
-    """從 LLM 輸出取出 JSON 並驗證；格式不對或欄位不合法回傳 None。"""
+def parse_plan(text: str, has_history: bool = True) -> Optional[Plan]:
+    """從 LLM 輸出取出 JSON 並驗證；格式不對或欄位不合法回傳 None。
+    has_history＝False（沒有前面的對話）時，same_period 一律是 False：沒有上一題就沒有可沿用的日期，
+    小模型偶爾會在沒有對話時也填 true，由程式擋掉，不靠提示詞。"""
     start = (text or "").find("{")
     if start < 0:
         return None
@@ -182,7 +186,7 @@ def parse_plan(text: str) -> Optional[Plan]:
     data, person, status, event_type = call
     steps = _parse_steps(raw.get("also"), call) if data else []
     return Plan(docs=raw["docs"], data=data, person=person, status=status, event_type=event_type, steps=steps,
-                same_period=bool(data) and raw.get("same_period") is True)
+                same_period=has_history and bool(data) and raw.get("same_period") is True)
 
 
 def heuristic_plan(question: str) -> Plan:
@@ -215,7 +219,7 @@ def make_plan(llm, question: str, history: str, today: datetime.date) -> Plan:
         return Plan(docs=False, source="guard", refused=reason)
     if llm is not None:
         try:
-            plan = parse_plan(llm.complete(build_prompt(question, history, today)))
+            plan = parse_plan(llm.complete(build_prompt(question, history, today)), has_history=bool(history.strip()))
         except Exception as e:
             print(f"[router] 意圖判斷失敗，改用關鍵字備案：{type(e).__name__}")
             plan = None

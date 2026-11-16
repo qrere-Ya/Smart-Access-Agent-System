@@ -11,6 +11,8 @@ chat_service.py：後台替前台提供的知識庫問答服務（只准文件�
   - 任何失敗（模型載入失敗、語言模型連不上、逾時）只回固定錯誤碼與固定說明文字，不含例外內容、路徑或金鑰設定，
     例外型別只印在後台的日誌
   - 每一題（成功或失敗）都記進對話紀錄（來源 front_knowledge，由 Assistant.on_finished 寫入）
+  - 文件管理：後台畫面按「重新掃描」會寫請求檔（shared.docs_control），工作執行緒每秒看一次，已載入知識庫就重新掃描
+    data/docs 並把結果寫成一行說明；還沒載入就略過（第一次有前台提問時載入就會掃描最新的文件）
   - 頻率：兩次送出至少相隔 3 秒（太快回 slow_down）；排隊加處理中最多 3 題（再多回 busy）
 
 串接模組：
@@ -25,7 +27,7 @@ import time
 import unicodedata
 
 from rag import chat_logging
-from shared import chat_log, link_protocol as lp
+from shared import chat_log, docs_control, link_protocol as lp
 
 MIN_INTERVAL_SECONDS = 3.0            # 兩次送出的最短間隔
 MAX_OPEN_JOBS = 3                     # 排隊加處理中的上限（1 題處理中、2 題等待）
@@ -99,6 +101,7 @@ class ChatService:
         self._last_submit = None
         self._runtime, self._last_used = None, clock()
         self._releasing = None            # 逾時丟棄的舊模型正在釋放的執行緒
+        self._docs_seen = time.time()     # 只處理服務啟動之後才送來的重新掃描請求
         self._worker = None
         self._stop = threading.Event()
 
@@ -166,6 +169,7 @@ class ChatService:
             try:
                 job = self._queue.get(timeout=WORKER_POLL_SECONDS)
             except queue.Empty:
+                self._handle_docs_request()
                 if self._runtime is not None and self._clock() - self._last_used >= self._idle_release:
                     print("[chat_service] 知識庫閒置太久，釋放模型")
                     self._release()
@@ -176,6 +180,29 @@ class ChatService:
                 print(f"[chat_service] 處理失敗：{type(e).__name__}")
                 self._finish(job, FAILED, error="unavailable")
             self._last_used = self._clock()
+
+    def _handle_docs_request(self):
+        """後台畫面要求重新掃描文件：已載入知識庫就掃描並寫下結果，還沒載入就說明下一次提問時會自動掃描。"""
+        stamp = docs_control.pending(self._docs_seen)
+        if stamp is None:
+            return
+        self._docs_seen = stamp
+        runtime = self._runtime
+        try:
+            if runtime is None:
+                text = "知識庫還沒載入，下一次前台提問時會自動掃描最新的文件"
+            else:
+                from rag import bootstrap, chat_worker
+
+                text = chat_worker.describe_report(bootstrap.refresh_documents(runtime))
+        except Exception as e:  # noqa: BLE001  掃描失敗只說明型別，不外洩路徑或例外內容
+            print(f"[chat_service] 重新掃描文件失敗：{type(e).__name__}")
+            text = "⚠️ 文件重新掃描失敗，請確認文件檔案沒有被其他程式開啟，稍後再試"
+        try:
+            docs_control.write_status(text)
+        except OSError as e:
+            print(f"[chat_service] 寫入掃描結果失敗：{type(e).__name__}")
+        self._last_used = self._clock()
 
     def _finish(self, job, status, answer="", sources=(), error=""):
         with self._lock:
