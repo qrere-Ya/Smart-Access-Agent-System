@@ -36,6 +36,16 @@ def describe_report(report):
     return "📚 文件已重新掃描　" + ("　".join(parts) if parts else "沒有變動")
 
 
+def _attach_chat_log(runtime):
+    """後台聊天視窗的每一題都記進對話紀錄（來源 back_attendance）；沒有助理的假 runtime 略過。"""
+    assistant = getattr(runtime, "assistant", None)
+    if assistant is not None:
+        from rag import chat_logging
+        from shared import chat_log
+
+        assistant.on_finished = chat_logging.recorder(chat_log.SOURCE_BACK)
+
+
 def load_runtime(events, runtime_factory, auto_start_ollama, retries=None, delay=None, sleep=time.sleep):
     """背景載入模型與助理（本機 Ollama 沒開會自動啟動），進度與結果放進事件佇列；暫時性失敗會自動重試。"""
     retries = LOAD_RETRIES if retries is None else retries
@@ -53,6 +63,7 @@ def load_runtime(events, runtime_factory, auto_start_ollama, retries=None, delay
     for attempt in range(retries + 1):
         try:
             runtime = runtime_factory(progress=lambda text: events.put(("status", text)))
+            _attach_chat_log(runtime)
             events.put(("ready", runtime))
             return
         except RuntimeError as e:         # 資源暫時不足（ResourceDenied 也是）或語言模型服務還沒就緒：等一下再試

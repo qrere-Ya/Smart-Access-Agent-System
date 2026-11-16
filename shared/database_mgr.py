@@ -124,6 +124,19 @@ def init_db():
                     event_time TEXT NOT NULL,
                     event_title TEXT NOT NULL)""")
 
+    # 對話紀錄表（後台出缺勤與前台知識庫的問答，保存 1 個月，含人工審查欄位；見 shared/chat_log）
+    conn_db.execute("""CREATE TABLE IF NOT EXISTS ChatLogs
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    answer TEXT NOT NULL,
+                    citations TEXT NOT NULL DEFAULT '[]',
+                    review TEXT NOT NULL DEFAULT 'unreviewed',
+                    reviewed_at TEXT,
+                    reviewer TEXT)""")
+    conn_db.execute("CREATE INDEX IF NOT EXISTS idx_chatlogs_ts ON ChatLogs(ts)")
+
     # 異常事件表（尾隨等）：只存證據照片的路徑
     anomaly_table_existed = conn_db.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='AnomalyEvents'").fetchone() is not None
