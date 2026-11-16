@@ -251,3 +251,31 @@ def test_back_role_dashboard_window_screenshot(root, db, add_user, add_attendanc
     root.geometry("1280x820+20+10")
     assert screenshot(root, f"後台_營運狀態_雙機_{mode}")
     app.teardown()
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_chat_log_tab_screenshot(root, db, screenshot, appearance, mode):
+    from admin.backend_main import BackendManagerApp
+    from shared import chat_log
+
+    appearance(mode)
+    now = __import__("datetime").datetime.now()
+    first = chat_log.record(chat_log.SOURCE_FRONT, "特別休假有幾天？", "工作滿一年每年七天 [1]。", [
+        {"title": "勞動基準法", "label": "勞動基準法 第38條", "score": 0.93,
+         "text": "勞工在同一雇主工作滿一年者，特別休假七日。"}],
+        now=now)
+    second = chat_log.record(chat_log.SOURCE_BACK, "測試甲這個月遲到幾次", "遲到兩次。", [
+        {"title": "出缺勤查詢：count", "label": "查詢結果", "score": None, "text": "遲到：2 次"}], now=now)
+    chat_log.record(chat_log.SOURCE_FRONT, "公司有幾個員工？", "文件中沒有提到。", [], now=now)
+    chat_log.set_review(second, chat_log.REVIEW_CORRECT, "管理者甲")
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.geometry("1280x820+20+10")
+    app.open_calendar()
+    app.calendar_view.tabs.set("對話紀錄")
+    app.calendar_view._on_tab_change()
+    panel = app.calendar_view.chat_log_panel
+    panel.tree.selection_set(str(first))
+    panel.show_selected()
+    assert screenshot(root, f"後台_對話紀錄_{mode}")
+    app.teardown()
