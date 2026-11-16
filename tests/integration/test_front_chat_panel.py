@@ -179,7 +179,7 @@ def test_typing_counts_as_someone_being_there(root, seeded):
     now = [app._chat_touched]
     app._clock = lambda: now[0]
     now[0] += 50
-    app._on_chat_key()                                               # 按鍵事件的處理函式（CI 的虛擬螢幕沒有焦點，直接呼叫）
+    app._on_chat_key()                                               # 按鍵的處理函式（虛擬螢幕沒有焦點，直接呼叫）
     now[0] += 50                                                     # 距離上次打字只有 50 秒
     app.refresh()
     assert chat.cleared == 0
