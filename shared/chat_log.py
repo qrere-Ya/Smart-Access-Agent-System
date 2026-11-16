@@ -112,33 +112,27 @@ def _row(r, full):
     return out
 
 
-_COLUMNS = "id, ts, source, question, answer, citations, review, reviewed_at, reviewer"
+def _filters(source, review, start, end):
+    """篩選條件檢查並整理成固定查詢用的參數（沒給的條件是 None，查詢裡用 IS NULL 略過，不用字串組 SQL）。"""
+    if source is not None and source not in SOURCES:
+        raise ValueError("來源不合格")
+    if review is not None and review not in REVIEWS:
+        raise ValueError("審查結果不合格")
+    first = _day(start) + " 00:00:00" if start else None
+    last = _day(end) + " 23:59:59" if end else None
+    return (source or None, source or None, review or None, review or None, first, first, last, last)
 
 
 def list_logs(source=None, review=None, start=None, end=None, limit=LIST_LIMIT):
     """列表（新的在前，只有摘要）；start、end 是 YYYY-MM-DD，含頭尾整天。條件不合格丟 ValueError。"""
-    clauses, params = [], []
-    if source:
-        if source not in SOURCES:
-            raise ValueError("來源不合格")
-        clauses.append("source = ?")
-        params.append(source)
-    if review:
-        if review not in REVIEWS:
-            raise ValueError("審查結果不合格")
-        clauses.append("review = ?")
-        params.append(review)
-    if start:
-        clauses.append("ts >= ?")
-        params.append(_day(start) + " 00:00:00")
-    if end:
-        clauses.append("ts <= ?")
-        params.append(_day(end) + " 23:59:59")
-    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params = _filters(source, review, start, end)
     limit = max(1, min(int(limit), MAX_LIMIT))
     with closing(_connect()) as conn:
-        rows = conn.execute(f"SELECT {_COLUMNS} FROM ChatLogs{where} ORDER BY ts DESC, id DESC LIMIT ?",  # noqa: S608
-                            (*params, limit)).fetchall()
+        rows = conn.execute(
+            "SELECT id, ts, source, question, answer, citations, review, reviewed_at, reviewer FROM ChatLogs "
+            "WHERE (? IS NULL OR source = ?) AND (? IS NULL OR review = ?) "
+            "AND (? IS NULL OR ts >= ?) AND (? IS NULL OR ts <= ?) ORDER BY ts DESC, id DESC LIMIT ?",
+            (*params, limit)).fetchall()
     return [_row(r, full=False) for r in rows]
 
 
@@ -152,7 +146,9 @@ def _day(text):
 def get_log(log_id):
     """一筆的全文與引用；找不到回傳 None。"""
     with closing(_connect()) as conn:
-        r = conn.execute(f"SELECT {_COLUMNS} FROM ChatLogs WHERE id = ?", (int(log_id),)).fetchone()  # noqa: S608
+        r = conn.execute(
+            "SELECT id, ts, source, question, answer, citations, review, reviewed_at, reviewer FROM ChatLogs "
+            "WHERE id = ?", (int(log_id),)).fetchone()
     return None if r is None else _row(r, full=True)
 
 
@@ -170,20 +166,12 @@ def set_review(log_id, review, reviewer="", now=None):
 
 
 def review_counts(source=None, start=None, end=None):
-    """{"total", "unreviewed", "correct", "wrong", "hallucination"}（同一組篩選條件）。"""
-    clauses, params = [], []
-    if source:
-        clauses.append("source = ?")
-        params.append(source)
-    if start:
-        clauses.append("ts >= ?")
-        params.append(_day(start) + " 00:00:00")
-    if end:
-        clauses.append("ts <= ?")
-        params.append(_day(end) + " 23:59:59")
-    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    """{"total", "unreviewed", "correct", "wrong", "hallucination"}（同一組篩選條件，數全部，不受列表上限影響）。"""
+    params = _filters(source, None, start, end)
     with closing(_connect()) as conn:
-        rows = conn.execute(f"SELECT review, COUNT(*) FROM ChatLogs{where} GROUP BY review", params).fetchall()  # noqa: S608
+        rows = conn.execute(
+            "SELECT review, COUNT(*) FROM ChatLogs WHERE (? IS NULL OR source = ?) AND (? IS NULL OR review = ?) "
+            "AND (? IS NULL OR ts >= ?) AND (? IS NULL OR ts <= ?) GROUP BY review", params).fetchall()
     counts = dict.fromkeys(REVIEWS, 0) | {r: n for r, n in rows if r in REVIEWS}
     counts["total"] = sum(counts[r] for r in REVIEWS)
     return counts
