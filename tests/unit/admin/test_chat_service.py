@@ -314,6 +314,7 @@ def test_a_hung_model_call_times_out_and_the_next_question_still_gets_answered(d
         while runtimes[0].closed == 0 and time.time() < end:
             time.sleep(0.02)
         assert runtimes[0].closed == 1
+        service._timeout = 10.0                              # 第二題含重新載入，不要被前面故意設得很短的逾時影響
         second = service.submit("下一題")
         assert wait_for(service, second)["answer"] == "新的回答。" and len(runtimes) == 2
     finally:

@@ -179,7 +179,7 @@ def test_typing_counts_as_someone_being_there(root, seeded):
     now = [app._chat_touched]
     app._clock = lambda: now[0]
     now[0] += 50
-    app.chat_entry.event_generate("<Key>", keysym="a")
+    app._on_chat_key()                                               # 按鍵事件的處理函式（CI 的虛擬螢幕沒有焦點，直接呼叫）
     now[0] += 50                                                     # 距離上次打字只有 50 秒
     app.refresh()
     assert chat.cleared == 0
@@ -203,7 +203,7 @@ def test_a_question_longer_than_the_limit_is_cut_in_the_box(root, seeded):
     from shared import link_protocol as lp
     app = open_chat(root, seeded, FakeChat())
     app.chat_entry.insert(0, "字" * (lp.MAX_CHAT_QUESTION + 50))
-    app.chat_entry.event_generate("<KeyRelease>", keysym="a")
+    app._limit_chat_input()                                          # 放開按鍵時的處理函式（直接呼叫，不靠視窗焦點）
     root.update()
     assert len(app.chat_entry.get()) == lp.MAX_CHAT_QUESTION
 
