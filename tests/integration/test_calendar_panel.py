@@ -121,3 +121,18 @@ def test_the_backend_ticks_the_holiday_refresher_every_minute(root, db, monkeypa
     app._tick_digest()
     assert ticks, "後台每分鐘的排程沒有呼叫假日資料更新"
     app.teardown()
+
+
+def test_the_backend_ticks_the_chat_log_cleanup_every_minute(root, db, monkeypatch):
+    from admin import chat_log_maintenance, digest_window
+    from admin.backend_main import BackendManagerApp
+
+    monkeypatch.setattr(digest_window.DigestRunner, "tick", lambda self: None)
+    ticks = []
+    monkeypatch.setattr(chat_log_maintenance.ChatLogMaintenance, "tick", lambda self: ticks.append(1) or False)
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.update()
+    app._tick_digest()
+    assert ticks, "後台每分鐘的排程沒有呼叫對話紀錄清理"
+    app.teardown()

@@ -40,6 +40,7 @@ from admin import (
     anomaly_panel,
     calendar_fetch,
     calendar_panel,
+    chat_log_maintenance,
     console_panel,
     dashboard_stats,
     digest_window,
@@ -363,6 +364,7 @@ class BackendManagerApp:
         ui_theme.link_button(footer, "⚙ 排程設定", self.open_schedule, width=90,
                              height=24).pack(side="right", padx=(0, 10))
         self.calendar_refresher = calendar_fetch.CalendarRefresher()
+        self.chat_log_maintenance = chat_log_maintenance.ChatLogMaintenance()
         self.root.after(5000, self._tick_digest)
         self._tick_system_status()
         self._drain_console_lines()
@@ -684,6 +686,7 @@ class BackendManagerApp:
         self.morning_runner.tick()
         self.digest_runner.tick()
         self.calendar_refresher.tick()          # 國定假日資料到期才在背景更新，其餘時候什麼都不做
+        self.chat_log_maintenance.tick()        # 對話紀錄超過 30 天的每天清一次
         self.root.after(60000, self._tick_digest)
 
     @staticmethod

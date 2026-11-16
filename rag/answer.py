@@ -89,6 +89,7 @@ class Assistant:
         self.roster_provider = None  # 可選：回傳目前員工姓名清單，每題開始前更新人名比對
         self.show_evidence_paths = True  # 異常事件的回答是否附上證據照片的存放路徑；遠端入口關閉
         self.show_internal_details = True  # 語言模型出錯時是否說明模型名稱、位址與設定提示；遠端入口關閉
+        self.on_finished = None  # 可選：每題結束後呼叫 fn(問題, 完整回答, Trace)，對話紀錄用（失敗不影響問答）
         self.last = Trace()
 
     # --- 對外 ---
@@ -113,6 +114,16 @@ class Assistant:
         if self.last.outcome != "refused":   # 被擋下的要求不改變對話狀態
             self._last_range = self.last.date_range if self.last.tools else None   # 只有上一題才算，文件題之後就不沿用
             self._remember(question, "".join(collected))
+        self._notify_finished(question, "".join(collected))
+
+    def _notify_finished(self, question, answer_text):
+        """通知對話紀錄（若有掛）；任何錯誤只印型別，不能讓問答失敗。"""
+        if self.on_finished is None:
+            return
+        try:
+            self.on_finished(question, answer_text, self.last)
+        except Exception as e:  # noqa: BLE001
+            print(f"[answer] 對話紀錄失敗（略過）：{type(e).__name__}")
 
     # --- 內部 ---
 
