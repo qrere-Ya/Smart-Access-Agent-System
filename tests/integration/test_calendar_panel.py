@@ -91,3 +91,33 @@ def test_main_menu_card_switches_to_the_report_page(root, db):
     assert app.page_key == "calendar" and app.calendar_view.winfo_exists()      # 直接換頁，沒有另開視窗
     assert not [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"]
     app.teardown()
+
+
+def test_the_page_shows_why_the_last_update_failed(panel):
+    from admin import calendar_fetch
+
+    calendar_fetch._set_problem("2026 年假日資料連線失敗（ConnectionError）")
+    try:
+        panel.refresh_all()
+        text = panel.source_label.cget("text")
+        assert "尚未取得 2026 年" in text and "⚠ 2026 年假日資料連線失敗" in text
+        calendar_fetch._set_problem("")
+        panel.refresh_all()
+        assert "⚠" not in panel.source_label.cget("text")
+    finally:
+        calendar_fetch._set_problem("")
+
+
+def test_the_backend_ticks_the_holiday_refresher_every_minute(root, db, monkeypatch):
+    from admin import calendar_fetch, digest_window
+    from admin.backend_main import BackendManagerApp
+
+    monkeypatch.setattr(digest_window.DigestRunner, "tick", lambda self: None)
+    ticks = []
+    monkeypatch.setattr(calendar_fetch.CalendarRefresher, "tick", lambda self: ticks.append(1) or False)
+    root.deiconify()
+    app = BackendManagerApp(root)
+    root.update()
+    app._tick_digest()
+    assert ticks, "後台每分鐘的排程沒有呼叫假日資料更新"
+    app.teardown()
