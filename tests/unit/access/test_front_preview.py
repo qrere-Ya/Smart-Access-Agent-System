@@ -1,6 +1,8 @@
 """前台畫面預覽的假資料：只寫進傳進來的資料庫，內容要夠讓畫面各區塊都有東西可看；假的人臉辨識不啟動任何程式。"""
 import time
 
+import pytest
+
 from access import front_preview
 from access.front_store import FrontStore, ScreenState
 
@@ -38,3 +40,31 @@ def test_the_preview_never_touches_the_real_runtime_folder():
 
     source = inspect.getsource(front_preview)
     assert "tempfile.TemporaryDirectory" in source and "paths.RUNTIME_DIR" not in source
+
+
+def test_the_preview_chat_answers_after_a_delay_and_follows_the_scenario():
+    now = [0.0]
+    chat = front_preview.PreviewChat("open", clock=lambda: now[0])
+    assert chat.view()["state"] == "idle" and chat.submit("   ") is False
+    assert chat.submit("問題") is True and chat.submit("再問") is False
+    assert chat.view()["state"] == "asking" and chat.view()["can_ask"] is False
+    now[0] += front_preview.PreviewChat.DELAY + 0.1
+    view = chat.view()
+    assert view["state"] == "answer" and view["answer"].startswith("（預覽用的假回答）") and view["sources"]
+    chat.clear()
+    assert chat.view()["state"] == "idle"
+
+
+@pytest.mark.parametrize("mode, state", [("busy", "busy"), ("error", "error")])
+def test_the_preview_chat_can_show_busy_and_failure(mode, state):
+    now = [0.0]
+    chat = front_preview.PreviewChat(mode, clock=lambda: now[0])
+    chat.submit("問題")
+    now[0] += 2
+    assert chat.view()["state"] == state and chat.view()["can_ask"] is True
+
+
+@pytest.mark.parametrize("mode", ["closed", "offline"])
+def test_the_preview_chat_closed_or_offline_hides_the_input_and_refuses_questions(mode):
+    chat = front_preview.PreviewChat(mode)
+    assert chat.availability() == mode and chat.view()["can_ask"] is False and chat.submit("問題") is False

@@ -36,6 +36,7 @@ HISTORY_ANSWER_CHARS = 300
 MAX_LISTED_ROWS = tools.MAX_LISTED_ROWS
 _WEEKDAYS = "一二三四五六日"
 
+DOCS_ONLY_REFUSAL = "這個要求我不會執行。這裡只能查詢公司文件的內容，請換個問法。"
 HELP_TEXT = ("我可以回答兩類問題：\n"
              "1. 公司文件與法規（例如：特別休假有幾天？加班費怎麼算？）\n"
              "2. 考勤與異常資料（例如：王小明這個月遲到幾次？今天誰遲到？最近有尾隨事件嗎？）")
@@ -72,6 +73,7 @@ class Trace:
     tools: list = field(default_factory=list)   # 本題實際執行的工具名稱（依序）
     outcome: str = ""   # answered、clarify、no_basis、help、refused、error
     note: str = ""      # 內部提示，例如 LLM 的說明因為數字對不上而沒有採用
+    sources: list = field(default_factory=list)   # ask_documents：回答引用到的文件名稱（不含資料夾）
 
 
 class Assistant:
@@ -124,6 +126,64 @@ class Assistant:
             self.on_finished(question, answer_text, self.last)
         except Exception as e:  # noqa: BLE001
             print(f"[answer] 對話紀錄失敗（略過）：{type(e).__name__}")
+
+    def ask_documents(self, question: str) -> Iterator[str]:
+        """
+        只查文件的問答（前台知識庫用，見 docs/adr/0001-front-knowledge-chat.md）：不經過意圖判斷、沒有任何出缺勤工具、
+        不讀資料庫、不用員工名單、不保留也不使用對話記憶（每題獨立）；整個過程不丟例外，錯誤會變成一段說明。
+        回答不含出處段落，引用到的文件名稱放在 self.last.sources（前台另外顯示）。
+        """
+        question = (question or "").strip()[:MAX_QUESTION_CHARS]
+        self.last = Trace()
+        if not question:
+            self.last.outcome = "help"
+            yield "請輸入問題。"
+            return
+        collected: List[str] = []
+        for piece in self._answer_documents(question):
+            collected.append(piece)
+            yield piece
+        self._notify_finished(question, "".join(collected))
+
+    def _answer_documents(self, question: str) -> Iterator[str]:
+        today = self._today()
+        reason = guard.screen(question)
+        if reason:   # 夾帶指令、SQL、要求洩漏的問題：不查、不問語言模型
+            self.last.plan = router.Plan(docs=False, source="heuristic", refused=reason)
+            self.last.outcome, self.last.note = "refused", reason
+            yield DOCS_ONLY_REFUSAL
+            return
+        self.last.plan = router.Plan(docs=True, source="heuristic")
+        try:
+            hits = self._search_documents(question)
+        except Exception as e:  # noqa: BLE001
+            print(f"[answer] 文件檢索失敗：{type(e).__name__}")
+            self.last.outcome = "error"
+            yield "⚠️ 查詢文件時出了問題，請稍後再試。"
+            return
+        self.last.hits = hits
+        top = max((h.rerank or 0.0 for h in hits), default=0.0)
+        if top < NO_BASIS:
+            self.last.outcome = "no_basis"
+            yield "📭 目前的文件裡找不到和這個問題相關的依據，所以我不亂回答。可以換個說法再問。"
+            return
+        usable = self._relevant(hits, PROMPT_RATIO)
+        prompt = self._build_prompt(question, today, usable, "", low=top < LOW_CONFIDENCE, use_history=False)
+        allowed = self._numbers_in(question, today.isoformat(), _WEEKDAYS[today.weekday()],
+                                   *(f"{h.label}\n{h.chunk['body']}" for h in usable), chinese=True)
+        collected = []
+        for piece in self._stream(prompt):
+            collected.append(piece)
+            yield piece
+        if self.last.outcome == "error":
+            return
+        text = "".join(collected)
+        unsupported = self._unsupported_numbers(text, allowed)
+        if unsupported:
+            yield f"\n\n⚠️ 上面回答裡的數字（{'、'.join(unsupported)}）沒有出現在提供的資料中，請以文件原文為準。"
+        shown = self._cited(usable, text) or self._overlapping(usable, text) or self._relevant(usable, SOURCE_RATIO)
+        self.last.sources = list(dict.fromkeys(h.chunk.get("title", "") for h in shown if h.chunk.get("title")))
+        self.last.outcome = "answered"
 
     # --- 內部 ---
 
@@ -373,9 +433,9 @@ class Assistant:
             return ""
         return f"說明裡的時間「{said.phrase}」超出實際查詢的範圍（{queried[0]} 至 {queried[1]}）"
 
-    def _build_prompt(self, question, today, hits, data_text, low, data_only=False) -> str:
+    def _build_prompt(self, question, today, hits, data_text, low, data_only=False, use_history=True) -> str:
         weekday = _WEEKDAYS[today.weekday()]
-        history = self._history_text()
+        history = self._history_text() if use_history else ""
         if data_only:
             return (
                 "你是公司門禁與人資系統的管理者助理。下面的「查詢結果」是資料庫查到的完整答案。"

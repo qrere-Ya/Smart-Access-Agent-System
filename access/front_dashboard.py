@@ -32,7 +32,7 @@ from tkinter import ttk
 
 import customtkinter as ctk
 
-from access import front_agent, front_launcher, front_resources, front_screens, front_view
+from access import front_agent, front_chat, front_launcher, front_resources, front_screens, front_view
 from access.front_store import FrontStore, ScreenState
 from PIL import ImageTk
 
@@ -41,7 +41,8 @@ from shared import network_policy, paths, ui_theme
 
 REFRESH_MS = 1000
 DETAIL_IDLE_SECONDS = 90.0            # 在模組全版畫面沒人操作這麼久，自動回主畫面
-MODULE_KEYS = ("news", "greetings", "status")
+MODULE_KEYS = ("news", "greetings", "status", "chat")
+CHAT_IDLE_SECONDS = 60.0              # 知識庫問答閒置這麼久，自動清除輸入與回答（前台不保存任何對話）
 THEME_LABELS = {"dark": "🌙 深色藍", "frosted": "☀ 半透明白"}
 FROSTED_ALPHA = 0.97                  # 半透明白：只讓桌面微弱透出，不影響閱讀
 DESIGN_WIDTH, DESIGN_HEIGHT = 1920, 1080
@@ -72,8 +73,11 @@ def window_scale(width, height, dpi=1.0):
 
 class FrontDashboard:
     def __init__(self, root, store, now=datetime.datetime.now, clock=time.time, read_heartbeat=None,
-                 read_resources=None, recognition=None, monitors=None):
+                 read_resources=None, recognition=None, monitors=None, chat=None):
         self.recognition = recognition                       # front_launcher.ManagedProcess；None 就不顯示辨識開關
+        self.chat = chat or front_chat.FrontChat(store)        # 知識庫問答的對話控制（只在記憶體）
+        self._chat_touched = clock()
+        self._chat_question = ""
         self.root, self.store, self._now, self._clock = root, store, now, clock
         self.screen = ScreenState(store)
         self._read_heartbeat = read_heartbeat or front_agent.read_terminal_heartbeat
@@ -328,8 +332,91 @@ class FrontDashboard:
         self.panels["news"].bind("<Configure>", self._wrap_news, add="+")
         self.greet_table = self._table(self.panels["greetings"], GREET_COLUMNS, height=4)
         self.status_table = self._table(self.panels["status"], STATUS_COLUMNS, height=4)
+        self._build_chat_panel(self.panels["chat"])
         for panel in self.panels.values():
             self._hide(panel)
+
+    def _build_chat_panel(self, panel):
+        """知識庫問答：上方狀態文字、中間回答（純文字、只能看）、下方輸入列（實體鍵盤輸入，Enter 送出）。"""
+        panel.grid_columnconfigure(0, weight=1)
+        panel.grid_rowconfigure(1, weight=1)
+        self.chat_status = ctk.CTkLabel(panel, text="", font=_font(26), text_color=ui_theme.pair("text_muted"),
+                                        anchor="w", justify="left", wraplength=1500)
+        self.chat_status.grid(row=0, column=0, sticky="ew", padx=28, pady=(18, 6))
+        self.chat_answer = ctk.CTkTextbox(panel, wrap="word", font=_font(28), fg_color=ui_theme.pair("bg"),
+                                          text_color=ui_theme.pair("text"), border_width=1,
+                                          border_color=ui_theme.pair("border"))
+        self.chat_answer.grid(row=1, column=0, sticky="nsew", padx=28, pady=6)
+        self.chat_answer.configure(state="disabled")
+        self.chat_input_row = ctk.CTkFrame(panel, fg_color="transparent")
+        self.chat_input_row.grid(row=2, column=0, sticky="ew", padx=28, pady=(6, 18))
+        self.chat_input_row.grid_columnconfigure(0, weight=1)
+        self.chat_entry = ctk.CTkEntry(self.chat_input_row, font=_font(28), height=64, fg_color=ui_theme.pair("bg"),
+                                       text_color=ui_theme.pair("text"), border_color=ui_theme.pair("border"),
+                                       placeholder_text="用鍵盤輸入問題，按 Enter 送出")
+        self.chat_entry.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+        self.chat_send = ui_theme.primary_button(self.chat_input_row, "送出", self._send_chat, width=150, height=64)
+        self.chat_send.configure(font=_font(26, bold=True))
+        self.chat_send.grid(row=0, column=1)
+        self.chat_entry.bind("<Return>", ui_theme.event_only(lambda _e: self._send_chat()))
+        self.chat_entry.bind("<Key>", ui_theme.event_only(lambda _e: self._on_chat_key()))
+        self.chat_entry.bind("<KeyRelease>", ui_theme.event_only(lambda _e: self._limit_chat_input()))
+
+    def _on_chat_key(self):
+        """打字也算有人在操作（不然輸入一半就被閒置清掉）。"""
+        self._touched = self._chat_touched = self._clock()
+
+    def _limit_chat_input(self):
+        """問題長度上限（超過的部分直接截掉，不送出被後台拒絕）。"""
+        limit = front_chat.lp.MAX_CHAT_QUESTION
+        if len(self.chat_entry.get()) > limit:
+            self.chat_entry.delete(limit, "end")
+
+    def _send_chat(self):
+        """送出輸入框裡的問題；處理中、後台沒開放或空白時什麼都不做。"""
+        question = self.chat_entry.get().strip()
+        if self.chat.submit(question):
+            self._chat_question = question
+            self.chat_entry.delete(0, "end")
+            self._chat_touched = self._touched = self._clock()
+        self._render_chat()
+
+    def _clear_chat(self):
+        """清掉輸入、問題與回答，並放棄還在進行的那一題；前台不保存任何對話。"""
+        self.chat.clear()
+        self._chat_question = ""
+        self.chat_entry.delete(0, "end")
+        self._signatures.pop("chat", None)
+        self._render_chat()
+
+    def _render_chat(self):
+        """依知識庫問答目前的狀態更新面板：不能問就藏起輸入，處理中輸入暫停，回答與來源只當純文字顯示。"""
+        view = self.chat.view()
+        state = view["state"]
+        asking = state in ("asking", "preparing")
+        text = ""
+        if self._chat_question and state != "closed":
+            text = "你問：" + self._chat_question + "\n\n"
+        if view["answer"]:
+            text += view["answer"]
+            if view["sources"]:
+                text += "\n\n來源文件：" + "、".join(view["sources"])
+        elif view["message"] and state in ("error", "busy"):
+            text += view["message"]
+        signature = (state, view["message"], text, view["can_ask"])
+        if not self._changed("chat", signature):
+            return
+        self.chat_status.configure(text="" if state in ("answer", "idle") else view["message"])
+        self.chat_answer.configure(state="normal")
+        self.chat_answer.delete("1.0", "end")
+        self.chat_answer.insert("1.0", text)
+        self.chat_answer.configure(state="disabled")
+        if state in ("closed", "offline"):
+            self._hide(self.chat_input_row)
+        else:
+            self._show(self.chat_input_row)
+        self.chat_entry.configure(state="disabled" if asking else "normal")
+        self.chat_send.configure(state="disabled" if asking else "normal")
 
     def _hide(self, widget):
         """藏起一個 grid 元件。不用 grid_remove：CustomTkinter 縮放時會照記住的 grid 呼叫把它重新放回來，
@@ -400,9 +487,23 @@ class FrontDashboard:
         self.detail_title.configure(text=self._titles.get(key, ""))
         self._hide(self.home)
         self._show(self.detail)
+        if key == "chat":
+            self._chat_touched = self._clock()
+            self._render_chat()
+            self.root.after(80, self._focus_chat)
+
+    def _focus_chat(self):
+        """進入知識庫問答時把鍵盤焦點放在輸入框（全螢幕與雙螢幕下也要能直接打字）。"""
+        try:
+            if self.current == "chat" and self.chat_entry.winfo_exists():
+                self.chat_entry.focus_force()
+        except tk.TclError:
+            pass
 
     def go_home(self):
-        """回到主畫面。"""
+        """回到主畫面（離開知識庫問答時一併清掉輸入與回答）。"""
+        if self.current == "chat":
+            self._clear_chat()
         self.current = None
         self._hide(self.detail)
         self._show(self.home)
@@ -504,7 +605,7 @@ class FrontDashboard:
     def refresh(self):
         """讀一次本機資料並更新畫面；內容沒變的區塊不重畫。"""
         view = front_view.snapshot(self.store, self.screen, self._read_heartbeat, self._now(), self._clock(),
-                                   local_only=self.local_only())
+                                   local_only=self.local_only(), chat_state=self.chat.availability())
         self._last_view = view
         self.time_label.configure(text=view["time"])
         self.date_label.configure(text=view["date"])
@@ -518,6 +619,11 @@ class FrontDashboard:
         self._render_status(view["status"])
         self._render_resources()
         self._render_footer()
+        if self.current == "chat":
+            self._render_chat()
+            if self._clock() - self._chat_touched > CHAT_IDLE_SECONDS:
+                self._clear_chat()                               # 閒置自動清除輸入與回答（留在問答畫面）
+                self._chat_touched = self._clock()
         if self.current is not None and self._clock() - self._touched > DETAIL_IDLE_SECONDS:
             self.go_home()
 

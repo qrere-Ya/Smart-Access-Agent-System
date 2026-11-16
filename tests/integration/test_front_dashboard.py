@@ -110,7 +110,8 @@ def test_home_shows_module_cards_with_live_previews_and_cards_open_modules(root,
     store, _screen = seeded
     app = build(root, store)
     assert app.current is None and app.home.winfo_ismapped() and not app.detail.winfo_ismapped()
-    assert set(app.tiles) == {"news", "greetings", "status"}
+    assert set(app.tiles) == {"news", "greetings", "status", "chat"}
+    assert app.tiles["chat"]["summary"].cget("text") == "目前未開放"                  # 後台還沒開放知識庫問答
     assert app.tiles["greetings"]["summary"].cget("text") == "陳大華 早安"       # 最新一位
     assert "全部正常" in app.tiles["status"]["summary"].cget("text")
     app.tiles["news"]["title"]._label.event_generate("<Button-1>")                    # 點卡片裡的標題也要開
@@ -237,7 +238,7 @@ def test_dashboard_screenshot(root, seeded, screenshot, theme):
     root.geometry("1920x1000+0+0")                                   # 扣掉工作列的可用高度
     assert screenshot(root, f"前台儀表板_{theme}")                      # 主畫面（模組卡片牆）
     assert app.theme == theme
-    for key in ("news", "greetings", "status"):
+    for key in ("news", "greetings", "status", "chat"):
         app.open_module(key)
         root.update()
         assert screenshot(root, f"前台儀表板_{theme}_{key}")
@@ -253,7 +254,7 @@ def test_content_fits_the_window_at_any_size_on_home_and_every_module(root, seed
     root.update()
     app._rescale()
     root.update()
-    for key in (None, "news", "greetings", "status"):
+    for key in (None, "news", "greetings", "status", "chat"):
         app.go_home() if key is None else app.open_module(key)
         root.update()
         need, have = root.winfo_reqheight(), root.winfo_height()

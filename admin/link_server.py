@@ -7,6 +7,10 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
                        帶 ?have=版本 且沒變時只回 unchanged，不重送
   - GET  /v1/morning ：最新晨報（只有科技新聞；日報與出勤資料不會從這裡出去），
     並附後台的全本地開關（布林，前台據此決定是否顯示 QR）
+  - POST /v1/chat    ：前台知識庫問答——送出問題，得到工作編號（202）；只准文件檢索（見 admin.chat_service），
+                       後台設定頁沒開放（chat_enabled 預設關閉）回 403，排隊已滿或送太快回 429
+  - GET  /v1/chat/<編號>：取結果（queued／preparing／running／done／failed；完成時有回答與來源文件名稱，
+                       失敗只有固定說明）
   - POST /v1/heartbeat：前台每個同步週期回報的狀態（鏡頭、辨識、待補送數、時鐘差）；只留最新一份給後台視窗顯示，
                        不拿來做任何安全或打卡判斷。後台從不主動連前台，狀態都由前台送來
   - POST /v1/events  ：前台送來的打卡、尾隨、經過未打卡事件（證據照片用 base64 的 JPEG）
@@ -14,8 +18,8 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
       · event_id 已經收過就回 duplicate，不再寫入，所以前台可以放心重送
   - 安全：每個請求都要 Authorization: Bearer 通行碼（常數時間比對，錯誤一律回 401 不透露原因）、請求大小上限、
     欄位驗證（link_protocol）、證據照片只收 JPEG 並由後台決定檔名；服務只綁設定裡的內網位址、不接受 0.0.0.0
-  - 回應碼：200 成功或重複；400 欄位不合格（永久，不要重送）；401 通行碼不對；413 太大；422 找不到這位員工
-    （永久）；5xx 暫時錯誤（可以重送）
+  - 回應碼：200 成功或重複；202 問題已收下；400 欄位不合格（永久，不要重送）；401 通行碼不對；403 功能沒開放；
+    413 太大；422 找不到這位員工（永久）；429 忙碌或太頻繁；5xx 暫時錯誤（可以重送）
 
 串接模組：
   - shared.link_protocol：驗證與編碼；shared.role_config：角色、位址、通行碼
@@ -36,14 +40,15 @@ from flask import Flask, jsonify, request
 from access import pass_through
 from shared import database_mgr as db
 from admin import front_status, link_cert
+from admin import chat_service as chat_service_mod
 from shared import (digest_store, front_control, lan_discovery, link_protocol as lp, link_tls, network_policy, paths,
                     role_config)
 
 _EVIDENCE_PREFIX = {"tailgate": "tailgate", pass_through.EVENT_TYPE: pass_through.EVENT_TYPE}
 
 
-def create_app(now=datetime.datetime.now, token_matches=role_config.token_matches):
-    """建立 Flask 應用；now 與 token_matches 可以換成假的方便測試。"""
+def create_app(now=datetime.datetime.now, token_matches=role_config.token_matches, chat_service=None):
+    """建立 Flask 應用；now 與 token_matches 可以換成假的方便測試；chat_service 是前台知識庫問答服務，None 就不提供"""
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = lp.MAX_BODY_BYTES
 
@@ -88,12 +93,36 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
     @app.get(lp.API_PREFIX + "/morning")
     def morning():
         local = network_policy.local_only() is True          # 後台的全本地開關，前台同步時一起取得（只有布林）
-        control = {"local_only": local, "recognition_enabled": front_control.recognition_enabled() is True}
+        control = {"local_only": local, "recognition_enabled": front_control.recognition_enabled() is True,
+                   "chat_enabled": front_control.chat_enabled() is True and chat_service is not None}
         brief = digest_store.load_brief()
         if not brief:
             return reply({"ok": True, "brief": None, **control})
         keep = ("date", "generated_at", "news", "news_problem")
         return reply({"ok": True, "brief": {k: brief.get(k) for k in keep}, **control})
+
+    @app.post(lp.API_PREFIX + "/chat")
+    def chat_submit():
+        if chat_service is None or not front_control.chat_enabled():
+            return reply({"ok": False, "error": "chat_disabled"}, 403)
+        try:
+            question = lp.validate_chat_question(request.get_json(silent=True))
+        except lp.ProtocolError as e:
+            return reply({"ok": False, "error": "invalid", "message": str(e)}, 400)
+        try:
+            job_id = chat_service.submit(question)
+        except chat_service_mod.ChatError as e:
+            return reply({"ok": False, "error": e.code}, 429)
+        return reply({"ok": True, "job_id": job_id, "status": "queued"}, 202)
+
+    @app.get(lp.API_PREFIX + "/chat/<job_id>")
+    def chat_result(job_id):
+        if chat_service is None or not front_control.chat_enabled():
+            return reply({"ok": False, "error": "chat_disabled"}, 403)
+        result = chat_service.get(job_id) if lp.valid_job_id(job_id) else None
+        if result is None:
+            return reply({"ok": False, "error": "not_found"}, 404)
+        return reply({"ok": True, **result})
 
     @app.post(lp.API_PREFIX + "/heartbeat")
     def heartbeat():
@@ -157,7 +186,7 @@ def _apply(event, user):
     return "merged" if merged else "recorded"
 
 
-def make_server(settings=None):
+def make_server(settings=None, chat_service=None):
     """依角色設定建立 werkzeug 伺服器（只綁設定的內網位址）；不是後台角色或沒有通行碼就丟 ConfigError。"""
     from werkzeug.serving import make_server as werkzeug_make_server
     settings = settings or role_config.load()
@@ -167,13 +196,18 @@ def make_server(settings=None):
     role_config.require_token()
     host = lan_discovery.resolve(settings.bind_host)     # 填 auto 就用網路線那張網卡的 169.254.x.x
     cert_path, key_path = link_cert.ensure_certificate()
-    server = werkzeug_make_server(host, settings.back_port, create_app(), threaded=True,
+    chat_service = chat_service or chat_service_mod.ChatService()      # 第一次有前台問題才載入知識庫模型
+    server = werkzeug_make_server(host, settings.back_port, create_app(chat_service=chat_service), threaded=True,
                                   ssl_context=link_tls.server_context(cert_path, key_path))
+    server.chat_service = chat_service
     server.fingerprint = link_tls.fingerprint_of_pem(cert_path)    # 前台信任的憑證指紋（自動尋找時一併回報）
     return server
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):          # 命令列啟動的主控台是 cp950，印 emoji 會出錯，改成換字不讓問答失敗
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     db.init_db()
     try:
         server = make_server()
@@ -195,6 +229,7 @@ def main():
     finally:
         if responder:
             responder.stop()
+        server.chat_service.close()
         server.server_close()
     return 0
 

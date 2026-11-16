@@ -18,6 +18,7 @@ import base64
 import datetime
 import hashlib
 import re
+import unicodedata
 import uuid
 
 import numpy as np
@@ -193,3 +194,33 @@ def validate_heartbeat(data):
         raise ProtocolError("faces_version 要是十六進位字串")
     status["faces_version"] = version
     return status
+
+
+# --- 前台知識庫問答（前台→後台送問題、之後取結果；見 docs/adr/0001-front-knowledge-chat.md）---
+
+MAX_CHAT_QUESTION = 300                    # 前台問題的字數上限（只收純文字）
+MAX_CHAT_ANSWER = 4000                     # 回答的字數上限
+CHAT_PATH = "/chat"
+_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def validate_chat_question(data):
+    """後台：驗證前台送來的問題，回傳整理過的問題文字；欄位不合格丟 ProtocolError。
+    只收一個字串欄位 question（其他欄位一律丟棄）；去掉控制字元與頭尾空白，不能是空的，長度有上限。"""
+    if not isinstance(data, dict):
+        raise ProtocolError("問題要是 JSON 物件")
+    question = data.get("question")
+    if not isinstance(question, str):
+        raise ProtocolError("question 要是文字")
+    question = "".join(" " if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") and c not in "\t"
+                       else c for c in question).strip()
+    if not question:
+        raise ProtocolError("問題不能是空的")
+    if len(question) > MAX_CHAT_QUESTION:
+        raise ProtocolError(f"問題最多 {MAX_CHAT_QUESTION} 字")
+    return question
+
+
+def valid_job_id(job_id):
+    """工作編號是 32 位小寫十六進位（secrets.token_hex(16)）。"""
+    return isinstance(job_id, str) and bool(_JOB_ID.match(job_id))

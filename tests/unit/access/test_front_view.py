@@ -154,7 +154,7 @@ def test_module_tiles_preview_the_news_the_last_punch_and_the_worst_status():
     news = {"state": "ok", "cards": [{"title": "某則新聞標題"}], "message": ""}
     ok_status = [("後台連線", "後台連線中", "success"), ("鏡頭", "正常", "success")]
     tiles = fv.module_tiles(news, [("08:03", "陳大華", "早安"), ("08:01", "王小明", "早安")], ok_status)
-    assert [t["key"] for t in tiles] == ["news", "greetings", "status"]
+    assert [t["key"] for t in tiles] == ["news", "greetings", "status"]          # 沒給 chat_state 就沒有問答卡片
     assert tiles[0]["summary"] == "某則新聞標題" and tiles[1]["summary"] == "陳大華 早安"
     assert tiles[2]["summary"] == "全部正常" and tiles[2]["accent"] == "success"
 

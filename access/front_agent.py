@@ -36,6 +36,8 @@ from shared import lan_discovery, link_protocol as lp, link_tls, paths, role_con
 SYNC_SECONDS = 10
 BACK_RECOGNITION_KEY = "back_recognition_enabled"   # 後台是否允許人臉辨識（同步時取得，離線沿用最後一次的值；預設允許）
 BACK_LOCAL_ONLY_KEY = "back_local_only"      # 後台的全本地開關（同步時取得，離線沿用最後一次的值）
+BACK_CHAT_KEY = "back_chat_enabled"          # 後台是否開放前台知識庫問答（同步取得，離線沿用最後的值；預設未開放）
+BACK_TARGET_KEY = "back_target"              # 目前連線的後台位址與憑證指紋（代理寫，儀表板的問答讀；都不是祕密）
 MAX_BACKOFF_SECONDS = 60
 MAX_CLOCK_SKEW_SECONDS = 30
 HEARTBEAT_STALE_SECONDS = 15
@@ -54,6 +56,18 @@ class BackRejected(Exception):
 
 class BackAuthError(Exception):
     """通行碼不對（兩台電腦的 SMART_ACCESS_LINK_TOKEN 要一樣）。"""
+
+
+class ChatClosed(Exception):
+    """後台沒有開放知識庫問答，或是舊版後台沒有這個介面（前台一律顯示「未開放」，不報錯）。"""
+
+
+class ChatBusy(Exception):
+    """後台忙碌（busy）或前台送太快（slow_down）；code 是後台回的固定代碼。"""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
 
 
 class BackCertError(BackAuthError):
@@ -102,7 +116,8 @@ class BackClient:
     def target(self):
         return (self.host, self.port, self.fingerprint)
 
-    def _call(self, method, path, **kwargs):
+    def _call(self, method, path, accept=(200,), chat=False, **kwargs):
+        """chat=True 是知識庫問答的呼叫：403、404 表示未開放（含舊版後台）、429 表示忙碌；accept 是成功的狀態碼。"""
         try:
             response = self.session.request(method, self.base + path, headers=self.headers, timeout=self.timeout,
                                             allow_redirects=False, **kwargs)
@@ -112,9 +127,14 @@ class BackClient:
             raise BackOffline(type(e).__name__) from None
         if response.status_code == 401:
             raise BackAuthError("通行碼不被後台接受")
+        if chat and response.status_code in (403, 404):
+            raise ChatClosed(f"HTTP {response.status_code}")
+        if chat and response.status_code == 429:
+            code = self._error_of(response).split(" ")[0]
+            raise ChatBusy(code if code in ("busy", "slow_down") else "busy")
         if response.status_code in (400, 413, 422):
             raise BackRejected(f"{response.status_code} {self._error_of(response)}")
-        if response.status_code != 200:
+        if response.status_code not in accept:
             raise BackOffline(f"HTTP {response.status_code}")
         try:
             body = response.json()
@@ -146,6 +166,16 @@ class BackClient:
 
     def heartbeat(self, status):
         return self._call("POST", lp.API_PREFIX + "/heartbeat", json=status)
+
+    def chat_submit(self, question):
+        """送出知識庫問題（只有這一個欄位）；回傳後台的回應（含 job_id）。"""
+        return self._call("POST", lp.API_PREFIX + lp.CHAT_PATH, accept=(202,), chat=True, json={"question": question})
+
+    def chat_result(self, job_id):
+        """取知識庫問答的結果；編號不合格直接拒絕，不送出請求。"""
+        if not lp.valid_job_id(job_id):
+            raise BackRejected("工作編號不合格")
+        return self._call("GET", lp.API_PREFIX + lp.CHAT_PATH + "/" + job_id, chat=True)
 
 
 class FrontAgent:
@@ -235,6 +265,11 @@ class FrontAgent:
             self.store.set_meta(BACK_LOCAL_ONLY_KEY, body["local_only"])
         if isinstance(body.get("recognition_enabled"), bool):  # 同上：只收布林
             self.store.set_meta(BACK_RECOGNITION_KEY, body["recognition_enabled"])
+        if isinstance(body.get("chat_enabled"), bool):         # 同上：只收布林；舊後台沒有這欄位就維持上次的值
+            self.store.set_meta(BACK_CHAT_KEY, body["chat_enabled"])
+        target = {"host": self.client.host, "port": self.client.port, "fingerprint": self.client.fingerprint}
+        if self.store.get_meta(BACK_TARGET_KEY) != target:     # 位址沒變就不重寫；儀表板的問答用它找到後台
+            self.store.set_meta(BACK_TARGET_KEY, target)
 
     def heartbeat_payload(self):
         """要回報給後台的狀態（只有數字與開關，不含人臉、姓名或事件內容）。"""

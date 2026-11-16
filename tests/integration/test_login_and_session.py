@@ -126,7 +126,7 @@ def test_a_missing_camera_is_explained_and_can_be_retried(root, db, add_user, cl
     add_user("管理者甲", "A1", embedding=ONES, role="admin")
     window, _ = make_login(root, camera_factory=lambda: None)
     assert pump(root, lambda: "打不開鏡頭" in window.status.cget("text"))
-    assert window.retry.winfo_ismapped()
+    assert pump(root, lambda: window.retry.winfo_ismapped())            # 重試鈕在狀態文字之後才排版，等它出現再檢查
     window._cancel()
 
 
