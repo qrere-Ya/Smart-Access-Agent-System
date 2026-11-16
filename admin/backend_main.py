@@ -202,7 +202,7 @@ class BackendManagerApp:
             ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", "warning", self.open_qr_registration),
             ("🤖", "企業知識庫與出勤查詢", "用聊天查公司文件與法規、考勤紀錄、異常事件（模型另開獨立視窗）", "primary",
              self.open_assistant_window),
-            ("🗓️", "出勤報告", "每日出勤報告（可匯出 CSV）；週六日與國定假日自動判斷", "success",
+            ("🗓️", "出勤報告", "每日出勤報告（可匯出 CSV）、AI 對話紀錄（審查有沒有答錯或幻覺）", "success",
              self.open_calendar),
             ("📰", "出勤日報", "查看每天的出勤明細與 AI 摘要（排程時間在底部「⚙ 排程設定」）", "info",
              self.open_report),
@@ -674,7 +674,8 @@ class BackendManagerApp:
     def open_calendar(self):
         """切到出勤報告頁"""
         def build(body):
-            self.calendar_view = calendar_panel.CalendarPanel(body)
+            who = self.session.admin_name if self.session is not None else ""      # 審查者
+            self.calendar_view = calendar_panel.CalendarPanel(body, reviewer=who)
             self.calendar_view.pack(fill="both", expand=True)
 
         self._open_page("calendar", "🗓️ 出勤報告", build)

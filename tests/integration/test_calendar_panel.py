@@ -32,11 +32,12 @@ def panel(root, db, add_user):
     return p
 
 
-def test_the_page_has_only_the_daily_report(panel):
+def test_the_page_has_the_report_and_chat_log_tabs_and_no_holiday_or_leave_controls(panel):
     texts = [t for t in _texts(panel) if isinstance(t, str)]
     assert panel.report_panel.report is not None
-    assert not hasattr(panel, "tabs")
-    assert not {"假日", "請假", "每週休息日", "新增請假", "新增／更新", "刪除所選"} & set(texts)
+    assert panel.tabs.get() == "每日出勤報告"
+    assert set(panel.tabs._tab_dict) == {"每日出勤報告", "對話紀錄"}
+    assert not {"假日", "請假", "每週休息日", "新增請假", "新增／更新"} & set(texts)
     assert "匯出 CSV" in texts
 
 
