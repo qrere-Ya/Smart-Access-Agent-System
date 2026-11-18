@@ -14,6 +14,15 @@ pytestmark = pytest.mark.integration
 pytest.importorskip("customtkinter")
 
 
+@pytest.fixture(autouse=True)
+def no_real_news_fetch(monkeypatch):
+    """視窗測試不連真的新聞網站（連線慢或被擋時背景執行緒會拖到測試結束後行程還退不出去）。"""
+    from admin import morning_brief
+
+    monkeypatch.setattr(morning_brief, "build_brief", lambda today, **kw: {
+        "date": today.isoformat(), "generated_at": "", "news": [], "news_problem": "測試不連網", "news_tries": 1})
+
+
 @pytest.fixture
 def settings_files(tmp_path, monkeypatch):
     """報告與設定檔改放臨時資料夾，不碰真實 runtime。"""
