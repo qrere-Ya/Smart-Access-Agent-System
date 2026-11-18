@@ -168,3 +168,12 @@ def click_button():
         raise AssertionError(f"找不到按鈕：{label}")
 
     return click
+
+
+@pytest.fixture(autouse=True)
+def no_real_news_fetch(monkeypatch):
+    """整合測試的視窗不連真的新聞網站（連線慢或被擋時背景執行緒會拖到測試結束後行程還退不出去）。"""
+    from admin import morning_brief
+
+    monkeypatch.setattr(morning_brief, "build_brief", lambda today, **kw: {
+        "date": today.isoformat(), "generated_at": "", "news": [], "news_problem": "測試不連網", "news_tries": 1})
