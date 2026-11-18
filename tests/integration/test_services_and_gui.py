@@ -165,37 +165,24 @@ def test_the_back_card_stops_and_resumes_the_front_recognition_with_a_confirmati
     app.teardown()
 
 
-def test_the_back_card_opens_front_chat_only_after_the_warning_and_closes_it_without_asking(
-        root, db, monkeypatch, tmp_path):
-    """雙機後台：前台知識庫問答預設關閉；開放前要先看警告（取消就不開）；關閉不用確認；不影響前台辨識的開關。"""
-    from admin import backend_main
+def test_the_back_card_has_no_chat_or_talk_switch_because_both_are_always_open(root, db, monkeypatch, tmp_path):
+    """雙機後台：Smart_Chat 與 Smart_RAG 本來就是開放的，後台卡片沒有這兩個開關，只剩前台辨識的停止與恢復。"""
     from admin import service_manager as sm
     from admin.backend_main import BackendManagerApp
-    from shared import front_control, paths, ui_theme
+    from shared import front_control, paths
 
     monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
     monkeypatch.setattr(sm, "link_service_wanted", lambda settings=None: True)
     monkeypatch.setattr(sm, "link_service_running", lambda settings=None: True)
     monkeypatch.setattr(sm, "start_link_service", lambda on_line, settings=None: (True, "ok"))
-    asked = []
-    answers = [False, True]
-    monkeypatch.setattr(ui_theme, "confirm",
-                        lambda master, title, message, **kw: asked.append(message) or answers.pop(0))
     root.deiconify()
     app = BackendManagerApp(root)
     root.withdraw()
     app.open_dashboard()
     app.dash_page.update()
-    assert front_control.chat_enabled() is False and "開放前台問答" in app.chat_control_btn.cget("text")
-    assert "未開放" in app.chat_control_label.cget("text")
-    app.chat_control_btn.invoke()                                                   # 看到警告後取消：沒有開
-    assert asked == [backend_main.CHAT_OPEN_WARNING] and front_control.chat_enabled() is False
-    assert "data/docs" in asked[0] and "所有" in asked[0] and "不能查出缺勤" in asked[0]
-    app.chat_control_btn.invoke()                                                   # 確定：開
-    assert front_control.chat_enabled() is True and "關閉前台問答" in app.chat_control_btn.cget("text")
-    assert "已開放" in app.chat_control_label.cget("text") and front_control.recognition_enabled() is True
-    app.chat_control_btn.invoke()                                                   # 關閉：不再問
-    assert front_control.chat_enabled() is False and len(asked) == 2
+    assert not hasattr(app, "chat_control_btn") and not hasattr(app, "talk_control_btn")
+    assert front_control.chat_enabled() is True and front_control.talk_enabled() is True
+    assert front_control.recognition_enabled() is True
     app.teardown()
 
 
@@ -235,7 +222,7 @@ def test_the_back_card_manages_the_knowledge_documents_folder_and_the_rescan(roo
     app._refresh_link_card()
     text = app.docs_label.cget("text")
     assert "有 3 份" in text and "最近一次掃描" in text and "新增：新文件.txt" in text
-    assert front_control.chat_enabled() is False                    # 重新掃描不會動到前台問答的開關
+    assert front_control.chat_enabled() is True                     # 前台問答本來就是開放的，重新掃描不影響
     app.teardown()
 
 

@@ -94,6 +94,28 @@ class PinnedAdapter(HTTPAdapter):
         super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
 
 
+VERIFY_DONE_KEY = "verify_request_done"        # 前台最後做完的自動驗證請求編號
+
+
+def default_verify(agent):
+    """前台自動驗證：本機狀態（數字與開關）、PySide6 版本、Smart_Chat 與 Smart_RAG 各問一題（不記回答內容）。"""
+    from access import front_verify
+
+    status = agent.heartbeat_payload()
+    running = "執行中" if status["recognition_running"] else "沒在跑"
+    camera = "正常" if status["camera_ok"] else "沒有回報"
+    lines = [f"前台代理：在線，臉資料 {status['faces']} 筆，待補送 {status['pending_events']}，"
+             f"被拒 {status['rejected_events']}",
+             f"人臉辨識：{running}；攝影機：{camera}",
+             f"時鐘差：{status['clock_offset_seconds']} 秒"]
+    try:
+        import PySide6
+        lines.append(f"PySide6：{PySide6.__version__}")
+    except ImportError:
+        lines.append("PySide6：沒有安裝（新版儀表板無法啟動）")
+    return lines + front_verify.qa_probe()
+
+
 class BackClient:
     def __init__(self, host, port, token, fingerprint=None, timeout=(3.0, 10.0), session=None):
         self.headers = {"Authorization": f"Bearer {token}"}
@@ -133,7 +155,7 @@ class BackClient:
         if chat and response.status_code == 429:
             code = self._error_of(response).split(" ")[0]
             raise ChatBusy(code if code in ("busy", "slow_down") else "busy")
-        if response.status_code in (400, 413, 422):
+        if response.status_code in (400, 409, 413, 422):
             raise BackRejected(f"{response.status_code} {self._error_of(response)}")
         if response.status_code not in accept:
             raise BackOffline(f"HTTP {response.status_code}")
@@ -161,6 +183,10 @@ class BackClient:
 
     def morning(self):
         return self._call("GET", lp.API_PREFIX + "/morning")
+
+    def verify_report(self, request_id, lines):
+        """回傳自動驗證報告（只有短文字行）；後台只收它目前那一次請求的回報，過期的會被拒收（BackRejected）。"""
+        return self._call("POST", lp.API_PREFIX + lp.VERIFY_REPORT_PATH, json={"request": request_id, "lines": lines})
 
     def send_event(self, event):
         return self._call("POST", lp.API_PREFIX + "/events", json=event)
@@ -193,10 +219,13 @@ class FrontAgent:
         self.heartbeat_path = heartbeat_path or HEARTBEAT_PATH
         self.back_online = False
         self.auth_error = False
+        self.cert_error = False
         self.last_error = ""
         self.last_sync_ok = None
         self._index = FaceIndex(store.load_faces())
         self._wake = threading.Event()
+        self.verify_fn = default_verify              # 自動驗證要做的事（測試可換掉）；回傳報告文字行
+        self._verifying = False
 
     # --- 時鐘與辨識用的快取 ---
     def clock_offset(self):
@@ -225,7 +254,16 @@ class FrontAgent:
         """做一輪同步並把在線狀態寫進本機檔（辨識程式據此提示）；回傳 True 表示後台在線。"""
         online = self._sync_once()
         self.store.set_link_state(online, now=self._clock)
+        self.store.set_meta(REASON_KEY, "" if online else self.offline_reason())
         return online
+
+    def offline_reason(self):
+        """連不上後台的原因（一句話，給儀表板顯示；不含位址、通行碼等細節）。"""
+        if self.cert_error:
+            return "後台憑證指紋不符（後台重新產生了憑證，或有人冒充後台）"
+        if self.auth_error:
+            return "通行碼不被後台接受（前後台的通行碼要一致）"
+        return "連不上後台：後台沒開、網路線沒插好，或防火牆擋住了 TCP 8770"
 
     def _sync_once(self):
         """做一輪同步；任何暫時失敗都不丟例外。"""
@@ -237,6 +275,7 @@ class FrontAgent:
             self._send_heartbeat()
         except BackAuthError as e:
             self.back_online, self.auth_error, self.last_error = False, True, str(e)
+            self.cert_error = isinstance(e, BackCertError)
             return False
         except BackOffline as e:
             self.back_online, self.auth_error, self.last_error = False, False, str(e)
@@ -277,9 +316,37 @@ class FrontAgent:
             self.store.set_meta(BACK_CHAT_KEY, body["chat_enabled"])
         if isinstance(body.get("talk_enabled"), bool):         # 一般對話開關，同上
             self.store.set_meta(BACK_TALK_KEY, body["talk_enabled"])
+        request = body.get("verify_request")                   # 後台下達的自動驗證請求編號（整數，變大才跑）
+        if isinstance(request, int) and not isinstance(request, bool):
+            self._maybe_verify(request)
         target = {"host": self.client.host, "port": self.client.port, "fingerprint": self.client.fingerprint}
         if self.store.get_meta(BACK_TARGET_KEY) != target:     # 位址沒變就不重寫；儀表板的問答用它找到後台
             self.store.set_meta(BACK_TARGET_KEY, target)
+
+    def _maybe_verify(self, request):
+        """收到比上次做過的更大的請求編號，就在背景跑一次自動驗證並回傳；同時只跑一個。"""
+        done = self.store.get_meta(VERIFY_DONE_KEY)
+        if request <= 0 or self._verifying or (isinstance(done, int) and request <= done):
+            return
+        self._verifying = True
+        threading.Thread(target=self._run_verify, args=(request,), daemon=True).start()
+
+    def _run_verify(self, request):
+        try:
+            lines = self.verify_fn(self)
+            self.client.verify_report(request, lines)
+            self.store.set_meta(VERIFY_DONE_KEY, request)
+        except (BackOffline, BackAuthError, BackRejected) as e:
+            self.last_error = f"自動驗證回傳失敗：{type(e).__name__}"   # 下一輪同步還會再試
+        except Exception as e:  # noqa: BLE001  自動驗證出意外不能影響同步
+            self.last_error = f"自動驗證出錯：{type(e).__name__}"
+            try:
+                self.client.verify_report(request, [f"自動驗證出錯（{type(e).__name__}）"])
+                self.store.set_meta(VERIFY_DONE_KEY, request)
+            except (BackOffline, BackAuthError, BackRejected):
+                pass
+        finally:
+            self._verifying = False
 
     def heartbeat_payload(self):
         """要回報給後台的狀態（只有數字與開關，不含人臉、姓名或事件內容）。"""
@@ -391,6 +458,24 @@ def _wait_for(stop, what, attempt, interval=3.0):
     return None
 
 
+REASON_KEY = "link_reason"                   # 目前連不上後台的原因（給儀表板顯示；連上就清空）
+REASON_NOT_FOUND = "找不到後台：後台沒開、網路線沒插好，或後台防火牆沒開 UDP 8772"
+
+
+def _find_back(stop, store, token, discover=lan_discovery.discover_back):
+    """自動模式找後台：先探測一次；探測不到就用上次記住的位址直接試（後台的自動尋找暫時壞了也連得上）；
+    都沒有才一直等並在儀表板顯示原因。回傳 (位址, 埠, 憑證指紋) 或 None。"""
+    found = discover(token)
+    if found:
+        return found
+    cached = store.get_meta(BACK_TARGET_KEY)
+    if isinstance(cached, dict) and cached.get("host") and cached.get("port") and cached.get("fingerprint"):
+        print("[front_agent] 自動尋找沒有回應，改用上次記住的後台位址")
+        return cached["host"], cached["port"], cached["fingerprint"]
+    store.set_meta(REASON_KEY, REASON_NOT_FOUND)
+    return _wait_for(stop, "自動找到後台", lambda: discover(token))
+
+
 def _rediscover_loop(agent, token, stop, interval=10.0, discover=lan_discovery.discover_back):
     """後台離線時重新探測位址（重開機或重插網路線後後台位址可能變了）；找到就換連線目標。"""
     while not stop.wait(interval):
@@ -411,15 +496,15 @@ def main():
     try:
         token = role_config.require_token()
         auto = settings.back_host.strip().lower() == role_config.AUTO
+        store = FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db"))
         if auto:
-            host, port, fingerprint = (_wait_for(stop, "自動找到後台", lambda: lan_discovery.discover_back(token))
-                                       or (None, None, None))
+            host, port, fingerprint = _find_back(stop, store, token) or (None, None, None)
             if host is None:
                 return 0
         else:
             host, port, fingerprint = settings.back_host, settings.back_port, settings.back_fingerprint
         client = BackClient(host, port, token, fingerprint)
-        agent = FrontAgent(FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db")), client)
+        agent = FrontAgent(store, client)
     except role_config.ConfigError as e:
         print(f"[front_agent] 無法啟動：{e}")
         return 2

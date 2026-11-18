@@ -74,25 +74,24 @@ def make_model(qt_app, store, clock, **kwargs):
 
 # --- 顯示規則 ---
 
-def test_the_qa_display_rules_match_the_old_panel():
-    idle = qmodel.qa_display({"state": "idle", "message": "", "answer": "", "sources": [], "can_ask": True}, "")
+def test_the_qa_display_rules(qt_app):
+    user = {"role": "user", "text": "特休幾天", "sources": []}
+    idle = qmodel.qa_display({"state": "idle", "message": "", "answer": "", "sources": [], "can_ask": True}, [])
     assert idle["welcome"] is True and idle["inputVisible"] is True and idle["inputEnabled"] is True
+    assert idle["messages"] == [] and idle["thinking"] is False
     asking = qmodel.qa_display({"state": "asking", "message": "查詢中…", "answer": "", "sources": [], "can_ask": False},
-                               "特休幾天")
-    assert asking["inputEnabled"] is False and asking["status"] == "查詢中…"
-    assert asking["text"].startswith("你問：特休幾天")
+                               [user])
+    assert asking["inputEnabled"] is False and asking["status"] == "查詢中…" and asking["thinking"] is True
+    assert asking["welcome"] is False and asking["messages"] == [user]
     answer = qmodel.qa_display({"state": "answer", "message": "", "answer": "七日", "sources": ["勞動基準法"],
-                                "can_ask": True}, "特休幾天")
-    assert answer["welcome"] is False and answer["status"] == "" and "來源文件：勞動基準法" in answer["text"]
-    closed = qmodel.qa_display({"state": "closed", "message": "未開放", "answer": "", "sources": [], "can_ask": False},
-                               "舊問題")
-    assert closed["inputVisible"] is False and closed["welcome"] is False and "舊問題" not in closed["text"]
+                                "can_ask": True}, [user])
+    assert answer["welcome"] is False and answer["status"] == "" and answer["thinking"] is False
+    closed = qmodel.qa_display({"state": "closed", "message": "未開放", "answer": "", "sources": [],
+                                "can_ask": False}, [])
+    assert closed["inputVisible"] is False and closed["welcome"] is False
     offline = qmodel.qa_display({"state": "offline", "message": "後台未連線", "answer": "", "sources": [],
-                                 "can_ask": False}, "舊問題")
+                                 "can_ask": False}, [])
     assert offline["inputVisible"] is False and offline["status"] == "後台未連線"
-    error = qmodel.qa_display({"state": "error", "message": "這一題沒有成功", "answer": "", "sources": [],
-                               "can_ask": True}, "問")
-    assert "這一題沒有成功" in error["text"] and error["status"] == "這一題沒有成功"
 
 
 # --- 模型 ---
@@ -129,10 +128,10 @@ def test_open_and_go_home_and_unknown_keys_are_ignored(qt_app, store, clock):
     model.openModule("talk")
     assert model.current == "talk"
     model.goHome()
-    assert model.current == "" and talk.cleared == 1                          # 離開問答面板就清掉
+    assert model.current == "" and talk.cleared == 0                          # 離開問答面板不清，半小時沒人操作才重置
     model.openModule("news")
     model.goHome()
-    assert talk.cleared == 1                                                   # 其他模組離開不用清
+    assert talk.cleared == 0
 
 
 def test_submit_clear_and_the_panel_cleared_signal(qt_app, store, clock):
@@ -143,11 +142,13 @@ def test_submit_clear_and_the_panel_cleared_signal(qt_app, store, clock):
     model.openModule("chat")
     assert model.submit("chat", "   ") is False and chat.submitted == []
     assert model.submit("chat", "特休幾天") is True and chat.submitted == ["特休幾天"]
-    assert model.qaChat["state"] == "asking" and model.qaChat["text"].startswith("你問：特休幾天")
+    assert model.qaChat["state"] == "asking" and model.qaChat["messages"][0] == {
+        "role": "user", "text": "特休幾天", "sources": []}
     assert model.submit("chat", "第二題") is False                              # 處理中不能重複送
     assert model.submit("nope", "x") is False
     model.clearPanel("chat")
-    assert chat.cleared == 1 and cleared == ["chat"] and model.qaChat["welcome"] is True and model.qaChat["text"] == ""
+    assert chat.cleared == 1 and cleared == ["chat"]
+    assert model.qaChat["welcome"] is True and model.qaChat["messages"] == []
 
 
 def test_the_talk_and_rag_panels_are_independent(qt_app, store, clock):
@@ -158,22 +159,38 @@ def test_the_talk_and_rag_panels_are_independent(qt_app, store, clock):
     assert model.qaTalk["state"] == "asking" and model.qaChat["state"] == "idle"
 
 
-def test_idle_rules_90_seconds_for_modules_and_60_for_panels(qt_app, store, clock):
-    talk = FakeController()
-    model = make_model(qt_app, store, clock, talk=talk)
+def test_idle_rules_90_seconds_for_modules_and_half_an_hour_for_the_panels(qt_app, store, clock):
+    talk, chat = FakeController(), FakeController()
+    model = make_model(qt_app, store, clock, talk=talk, chat=chat)
     model.openModule("talk")
-    clock[0] += 61
+    clock[0] += 91
     model.refresh()
-    assert talk.cleared == 1 and model.current == "talk"                      # 面板清掉，人還留在面板
-    clock[0] += 30                                                             # 距離上次操作共 91 秒
+    assert model.current == "" and talk.cleared == 0                          # 模組畫面閒置回主畫面，對話內容還在
+    clock[0] += 1700                                                           # 距離上次操作共 1791 秒
     model.refresh()
-    assert model.current == ""                                                 # 模組畫面閒置回主畫面
-    model.openModule("talk")
+    assert talk.cleared == 0 and chat.cleared == 0
+    clock[0] += 20                                                             # 超過半小時：兩個面板各自重置
+    model.refresh()
+    assert talk.cleared == 1 and chat.cleared == 1
+    model.openModule("chat")
     clock[0] += 50
     model.touch()                                                              # 有人操作：重新計時
     clock[0] += 50
     model.refresh()
-    assert model.current == "talk" and talk.cleared == 2                       # 有操作就不清、不回主畫面
+    assert model.current == "chat" and chat.cleared == 1                       # 有操作就不重置、不回主畫面
+
+
+def test_the_background_read_hands_data_to_the_screen_thread_and_skips_overlaps(qt_app, store, clock):
+    import time as _time
+    model = make_model(qt_app, store, clock)
+    model._set("clock", {}, model.clockChanged)
+    model.refresh_async()
+    model.refresh_async()                                                      # 上一次還沒套用：略過
+    end = _time.time() + 5
+    while model._collecting and _time.time() < end:
+        qt_app.processEvents()
+        _time.sleep(0.01)
+    assert not model._collecting and model.clock.get("time")                   # 資料經背景讀取後套用到屬性
 
 
 class FakeRecognition:
@@ -297,3 +314,21 @@ def test_a_broken_qml_directory_raises_with_the_qml_error(qt_app, store, tmp_pat
     (tmp_path / "Main.qml").write_text("import QtQuick\nItem { 這不是 QML }\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="QML"):
         qapp.create(store, qml_dir=str(tmp_path), app=qt_app)
+
+
+def test_answers_and_failures_become_bubbles_once_and_the_conversation_builds_up(qt_app, store, clock):
+    talk = FakeController()
+    model = make_model(qt_app, store, clock, talk=talk)
+    model.submit("talk", "你好")
+    talk.state, talk.answer, talk.sources = "answer", "您好！", ["天氣查詢"]
+    model.refresh()
+    model.refresh()                                                            # 同一個回答不會重複加進對話
+    roles = [m["role"] for m in model.qaTalk["messages"]]
+    assert roles == ["user", "assistant"] and model.qaTalk["messages"][1]["sources"] == ["天氣查詢"]
+    talk.state = "idle"
+    assert model.submit("talk", "再問一題") is True
+    talk.state, talk.message = "error", "這一題沒有成功"
+    model.refresh()
+    assert [m["role"] for m in model.qaTalk["messages"]] == ["user", "assistant", "user", "error"]
+    model.clearPanel("talk")
+    assert model.qaTalk["messages"] == []

@@ -156,21 +156,21 @@ def test_the_home_card_follows_the_back_state(root, seeded):
     assert app.tiles["chat"]["summary"].cget("text") == "後台未連線"
 
 
-def test_the_panel_clears_itself_after_a_minute_of_nobody_typing(root, seeded):
+def test_the_panel_clears_itself_after_half_an_hour_of_nobody_typing(root, seeded):
     chat = FakeChat(state="answer", answer="舊的回答", can_ask=True)
     app = open_chat(root, seeded, chat)
     app._chat_question = "舊的問題"
     app.chat_entry.insert(0, "打了一半")
     now = [app._chat_touched]
     app._clock = lambda: now[0]
-    now[0] += 59
+    now[0] += 1799
     app.refresh()
     assert chat.cleared == 0 and app.chat_entry.get() == "打了一半"
     now[0] += 2
     app.refresh()
     root.update()
     assert chat.cleared == 1 and app.chat_entry.get() == "" and answer_text(app) == ""
-    assert app.current == "chat"                                     # 清掉輸入與回答，但留在問答畫面
+    assert app.current is None                                       # 超過半小時也早就過了 90 秒：回到主畫面
 
 
 def test_typing_counts_as_someone_being_there(root, seeded):
@@ -185,18 +185,18 @@ def test_typing_counts_as_someone_being_there(root, seeded):
     assert chat.cleared == 0
 
 
-def test_leaving_the_panel_clears_everything(root, seeded):
+def test_leaving_the_panel_keeps_the_conversation_until_the_half_hour_reset(root, seeded):
     chat = FakeChat(state="answer", answer="回答", sources=["文件"], can_ask=True)
     app = open_chat(root, seeded, chat)
     app._chat_question = "問題"
     app.chat_entry.insert(0, "還沒送出的字")
     app.back_button.invoke()
     root.update()
-    assert chat.cleared == 1 and app.chat_entry.get() == "" and app._chat_question == ""
+    assert chat.cleared == 0 and app.chat_entry.get() == "還沒送出的字" and app._chat_question == "問題"
     assert app.current is None and app.home.winfo_ismapped()
     app.open_module("chat")
     root.update()
-    assert answer_text(app) == ""
+    assert "回答" in answer_text(app)                                  # 離開再回來，半小時內對話還在
 
 
 def test_a_question_longer_than_the_limit_is_cut_in_the_box(root, seeded):
@@ -264,7 +264,7 @@ def test_smart_chat_is_the_first_card_and_smart_rag_the_second_and_each_has_its_
     assert app.qa["talk"].panel is not app.qa["chat"].panel and app.qa["talk"].entry is not app.qa["chat"].entry
 
 
-def test_smart_chat_panel_asks_through_its_own_controller_and_leaving_clears_it(root, seeded, screenshot):
+def test_smart_chat_panel_asks_through_its_own_controller_and_leaving_keeps_it(root, seeded, screenshot):
     store, _screen = seeded
     app = build(root, store)
     talk, rag = FakeChat(), FakeChat()
@@ -287,7 +287,7 @@ def test_smart_chat_panel_asks_through_its_own_controller_and_leaving_clears_it(
     assert "你問：幫我把這句話翻成英文" in text and "Please translate" in text and "來源文件" not in text
     assert screenshot(root, "前台_Smart_Chat_回答")
     app.go_home()
-    assert talk.cleared == 1 and rag.cleared == 0 and panel.question == ""
+    assert talk.cleared == 0 and rag.cleared == 0
 
 
 def test_each_panel_idle_timer_clears_only_that_panel(root, seeded):
@@ -298,6 +298,6 @@ def test_each_panel_idle_timer_clears_only_that_panel(root, seeded):
     app.qa["talk"].controller, app.qa["chat"].controller = FakeChat(), FakeChat()
     app.open_module("talk")
     app.qa["talk"].touched = clock[0]
-    clock[0] += 61
+    clock[0] += 1801
     app.refresh()
     assert app.qa["talk"].controller.cleared == 1 and app.qa["chat"].controller.cleared == 0

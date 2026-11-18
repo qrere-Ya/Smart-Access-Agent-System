@@ -37,12 +37,13 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
 import datetime
 import os
 import sys
+import threading
 
 from flask import Flask, jsonify, request
 
 from access import pass_through
 from shared import database_mgr as db
-from admin import front_status, link_cert
+from admin import front_status, front_verify_report, link_cert, safe_output
 from admin import chat_service as chat_service_mod
 from shared import (digest_store, front_control, lan_discovery, link_protocol as lp, link_tls, network_policy, paths,
                     role_config)
@@ -99,7 +100,8 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
         local = network_policy.local_only() is True          # 後台的全本地開關，前台同步時一起取得（只有布林）
         control = {"local_only": local, "recognition_enabled": front_control.recognition_enabled() is True,
                    "chat_enabled": front_control.chat_enabled() is True and chat_service is not None,
-                   "talk_enabled": front_control.talk_enabled() is True and talk_service is not None}
+                   "talk_enabled": front_control.talk_enabled() is True and talk_service is not None,
+                   "verify_request": front_control.verify_request()}
         brief = digest_store.load_brief()
         if not brief:
             return reply({"ok": True, "brief": None, **control})
@@ -151,6 +153,21 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
         if result is None:
             return reply({"ok": False, "error": "not_found"}, 404)
         return reply({"ok": True, **result})
+
+    @app.post(lp.API_PREFIX + lp.VERIFY_REPORT_PATH)
+    def verify_report():
+        try:
+            request_id, lines = lp.validate_verify_report(request.get_json(silent=True))
+        except lp.ProtocolError as e:
+            return reply({"ok": False, "error": "invalid", "message": str(e)}, 400)
+        if request_id != front_control.verify_request():       # 只收後台目前這一次請求的回報
+            return reply({"ok": False, "error": "stale"}, 409)
+        try:
+            front_verify_report.save(request_id, lines, remote_addr=request.remote_addr or "")
+        except OSError as e:
+            print(f"[link_server] 前台驗證報告寫入失敗：{type(e).__name__}")
+            return reply({"ok": False, "error": "server_error"}, 500)
+        return reply({"ok": True})
 
     @app.post(lp.API_PREFIX + "/heartbeat")
     def heartbeat():
@@ -235,7 +252,46 @@ def make_server(settings=None, chat_service=None, talk_service=None):
     return server
 
 
+class DiscoveryKeeper:
+    """前台自動尋找的回應器：開不起來（例如 UDP 8772 剛好被舊的行程占著）就每 10 秒重試，不會永遠沒有自動尋找。"""
+
+    RETRY_SECONDS = 10.0
+
+    def __init__(self, host, port, fingerprint, factory=None, retry=None):
+        self._args = (host, port, fingerprint)
+        self._factory = factory or (lambda *a: lan_discovery.DiscoveryResponder(*a).start())
+        self._retry = self.RETRY_SECONDS if retry is None else retry
+        self._stop = threading.Event()
+        self._responder = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name="discovery-keeper")
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=3)
+        if self._responder is not None:
+            self._responder.stop()
+
+    def _run(self):
+        warned = False
+        while not self._stop.is_set():
+            try:
+                self._responder = self._factory(*self._args)
+                print(f"[link_server] 前台自動尋找：UDP {self._responder.port}")
+                return
+            except OSError as e:
+                if not warned:
+                    print(f"[link_server] 無法開啟自動尋找（{type(e).__name__}），每 {self._retry:.0f} 秒重試；"
+                          "期間前台要靠上次記住的位址連線")
+                    warned = True
+            self._stop.wait(self._retry)
+
+
 def main():
+    safe_output.install("link_server")               # 輸出接的管線沒人讀時，問答工作也不會卡在 print
     for stream in (sys.stdout, sys.stderr):          # 命令列啟動的主控台是 cp950，印 emoji 會出錯，改成換字不讓問答失敗
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
@@ -247,19 +303,14 @@ def main():
         return 2
     print(f"[link_server] 後台連線服務啟動：https://{server.host}:{server.port}（只給前台使用，TLS 加密）")
     print(f"[link_server] 憑證指紋（SHA-256）：{server.fingerprint}")
-    responder = None
-    try:
-        responder = lan_discovery.DiscoveryResponder(server.host, server.port, server.fingerprint).start()
-        print(f"[link_server] 前台自動尋找：UDP {responder.port}")
-    except OSError as e:
-        print(f"[link_server] 無法開啟自動尋找（{type(e).__name__}）：前台要手動填後台位址")
+    keeper = DiscoveryKeeper(server.host, server.port, server.fingerprint)
+    keeper.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        if responder:
-            responder.stop()
+        keeper.stop()
         server.chat_service.close()
         server.talk_service.close()
         server.server_close()

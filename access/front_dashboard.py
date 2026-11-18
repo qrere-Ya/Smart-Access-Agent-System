@@ -44,7 +44,7 @@ from shared import network_policy, paths, ui_theme
 REFRESH_MS = 1000
 DETAIL_IDLE_SECONDS = 90.0            # 在模組全版畫面沒人操作這麼久，自動回主畫面
 MODULE_KEYS = ("talk", "chat", "news", "greetings", "status")     # talk＝Smart_Chat、chat＝Smart_RAG（舊名）
-CHAT_IDLE_SECONDS = 60.0              # 知識庫問答閒置這麼久，自動清除輸入與回答（前台不保存任何對話）
+CHAT_IDLE_SECONDS = 1800.0             # 知識庫問答閒置這麼久，自動清除輸入與回答（前台不保存任何對話）
 THEME_LABELS = {"dark": "🌙 深色藍", "frosted": "☀ 半透明白"}
 FROSTED_ALPHA = 0.97                  # 半透明白：只讓桌面微弱透出，不影響閱讀
 DESIGN_WIDTH, DESIGN_HEIGHT = 1920, 1080
@@ -512,9 +512,7 @@ class FrontDashboard:
         self.qa["chat"].focus()
 
     def go_home(self):
-        """回到主畫面（離開知識庫問答時一併清掉輸入與回答）。"""
-        if self.current in self.qa:
-            self.qa[self.current].clear()
+        """回到主畫面（問答面板的內容保留，半小時沒人操作才重置）。"""
         self.current = None
         self._hide(self.detail)
         self._show(self.home)
@@ -632,10 +630,10 @@ class FrontDashboard:
         self._render_resources()
         self._render_footer()
         if self.current in self.qa:
-            panel = self.qa[self.current]
-            panel.render()
+            self.qa[self.current].render()
+        for panel in self.qa.values():                           # 兩個問答模組各自計時，沒人操作半小時就重置
             if self._clock() - panel.touched > CHAT_IDLE_SECONDS:
-                panel.clear()                                    # 閒置自動清除輸入與回答（留在問答畫面）
+                panel.clear()
                 panel.touched = self._clock()
         if self.current is not None and self._clock() - self._touched > DETAIL_IDLE_SECONDS:
             self.go_home()

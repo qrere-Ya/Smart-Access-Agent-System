@@ -93,7 +93,7 @@ def create(store, qml_dir=QML_DIR, app=None, **model_args):
 
     def tick():
         try:
-            model.refresh()
+            model.refresh_async()
         except Exception as e:  # noqa: BLE001  任何一次更新出錯都不能讓畫面停止
             print(f"[front_qt][WARN] 更新失敗，下一輪再試：{type(e).__name__}")
 

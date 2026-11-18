@@ -565,7 +565,7 @@ def step_front_qa(ctx):
         result.status, result.note = MANUAL, "只有一種有紀錄；另一種要先在後台「前台連線」卡片開放，再到前台問一題"
     else:
         result.status = MANUAL
-        result.note = ("沒有前台問答紀錄：兩個開關預設關閉，要先在後台「前台連線」卡片開放，"
+        result.note = ("沒有前台問答紀錄：兩個開關可能被關閉，請先在後台「前台連線」卡片開放，"
                        "再在前台執行「前台驗證.bat」的問答連線測試")
     return result
 

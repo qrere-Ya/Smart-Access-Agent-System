@@ -395,7 +395,7 @@ def test_front_qa_step_passes_only_when_both_sources_were_logged_recently(tmp_pa
     db = make_db(tmp_path)
     ctx, _ = make_ctx(tmp_path, answers=[], db=db, auto=True)
     first = vd.step_front_qa(ctx)
-    assert first.status == vd.MANUAL and "開關預設關閉" in first.note                  # 完全沒有紀錄
+    assert first.status == vd.MANUAL and "開關可能被關閉" in first.note                  # 完全沒有紀錄
     add_qa(db, T0 - dt.timedelta(hours=1), "front_talk")
     partial = vd.step_front_qa(ctx)
     assert partial.status == vd.MANUAL and "只有一種" in partial.note

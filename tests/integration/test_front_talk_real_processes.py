@@ -106,8 +106,9 @@ def ask(chat, question):
     return wait_for(chat, ("answer", "error", "closed"))
 
 
-def test_1_it_is_closed_by_default_on_the_back(back, talk):
-    assert back["front_control"].talk_enabled() is False
+def test_1_it_is_open_by_default_and_closes_when_the_admin_closes_it(back, talk):
+    assert back["front_control"].talk_enabled() is True
+    back["front_control"].set_talk_enabled(False)
     view = ask(talk, "你好")
     assert view["state"] == "closed" and view["can_ask"] is False
 
@@ -132,7 +133,7 @@ def test_3_the_exchange_is_logged_as_front_talk_and_no_rag_models_were_loaded(ba
 
 
 def test_4_the_rag_switch_does_not_affect_smart_chat(back, talk):
-    assert back["front_control"].chat_enabled() is False           # Smart_RAG 仍關閉
+    back["front_control"].set_chat_enabled(False)                    # Smart_RAG 關閉
     view = ask(talk, "用一句話說明什麼是防火牆。")
     assert view["state"] == "answer", view
 
@@ -148,8 +149,48 @@ def test_5_an_attendance_question_gets_nothing_from_the_back_database(back, talk
     assert view["state"] == "answer", view
     for secret in ("08:47", "2026-11-10", "E001"):
         assert secret not in view["answer"], (secret, view["answer"])
+    con = sqlite3.connect(db)                                        # 假員工的臉資料不是真的，別讓後面的同步讀到
+    con.execute("DELETE FROM Users WHERE employee_id = 'E001'")
+    con.commit()
+    con.close()
 
 
 def test_6_closing_the_switch_on_the_back_stops_answers_at_once(back, talk):
     back["front_control"].set_talk_enabled(False)
     assert ask(talk, "你好")["state"] == "closed"
+
+
+def test_7_the_back_asks_for_a_verification_and_the_front_reports_back_automatically(back, talk, tmp_path):
+    """後台一個指令下達請求，前台代理同步時收到、自己問兩個模組、把報告回傳，後台存成檔案（不用隨身碟）。"""
+    from access import front_agent, front_verify
+    from admin import front_verify_report
+
+    back["front_control"].set_talk_enabled(True)
+    client = front_agent.BackClient("127.0.0.1", back["port"], back["token"], back["fingerprint"])
+    agent = front_agent.FrontAgent(talk.store, client, heartbeat_path=str(tmp_path / "hb.json"))
+    talk.clear()                                                 # 上一項留下的畫面狀態與兩題間隔
+    time.sleep(3.2)
+    agent.verify_fn = lambda a: front_verify.qa_probe({"talk": talk, "chat": talk})
+    stamp = back["front_control"].request_verify()
+    agent.sync_once()                                            # 同步時收到請求，背景跑驗證並回傳
+    report = os.path.join(str(back["runtime"]), "verification", f"前台自動_{stamp}.md")
+    deadline = time.time() + 60
+    while time.time() < deadline and not os.path.exists(report):
+        time.sleep(0.5)
+    assert os.path.exists(report), (f"前台沒有在時限內回傳報告：{agent.last_error!r} 在線 {agent.back_online} "
+                                  f"已做 {talk.store.get_meta(front_agent.VERIFY_DONE_KEY)}")
+    text = open(report, encoding="utf-8").read()
+    assert "Smart_Chat 一般對話：通過" in text
+    assert front_verify_report.report_path(stamp).endswith(f"前台自動_{stamp}.md")
+
+
+def test_8_smart_chat_can_check_the_weather_and_search_and_remembers_the_conversation(back, talk):
+    """真後台行程加真語言模型加真的 MCP 工具（stdio 伺服器）：問天氣會用天氣工具、回答附工具名稱；追問接得上前一題。"""
+    back["front_control"].set_talk_enabled(True)
+    view = ask(talk, "高雄明天天氣怎麼樣？會下雨嗎")
+    assert view["state"] == "answer" and view["sources"] == ["天氣查詢"], view
+    assert any(ch.isdigit() for ch in view["answer"])
+    view = ask(talk, "我剛剛問的是哪個城市？")
+    assert view["state"] == "answer" and "高雄" in view["answer"], view          # 對話記憶
+    view = ask(talk, "台積電最近有什麼新聞？")
+    assert view["state"] == "answer" and view["sources"] in (["新聞搜尋"], ["維基百科"]), view

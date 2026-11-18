@@ -147,7 +147,9 @@ def create_talk_runtime(progress: Progress = print, settings: Optional[dict] = N
     if model is None:
         raise RuntimeError(note)
     progress("準備完成")
-    return Runtime(Talker(model), None, note, None, [])
+    from rag import mcp_client
+
+    return Runtime(Talker(model, tools=mcp_client.default_toolbox()), None, note, None, [])
 
 
 def refresh_documents(runtime: Runtime):

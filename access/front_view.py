@@ -83,16 +83,17 @@ def _safe_link(url, local_only):
     return url if url and not local_only and not link_check.link_problem(url) else ""
 
 
-def link_view(link_online, pending):
-    """後台連線 → (色調, 文字)。前台離線時照樣辨識與暫存事件，所以是提醒（warning）不是錯誤。"""
+def link_view(link_online, pending, reason=""):
+    """後台連線 → (色調, 文字)。前台離線時照樣辨識與暫存事件，所以是提醒（warning）不是錯誤；有原因就一併顯示。"""
     if link_online:
         return "success", "後台連線中" + (f"（待補送 {pending} 筆）" if pending else "")
-    return "warning", "後台離線，打卡先暫存" + (f"（已暫存 {pending} 筆）" if pending else "")
+    why = f"：{_cut(reason, 40)}" if reason else ""
+    return "warning", "後台離線" + why + "，打卡先暫存" + (f"（已暫存 {pending} 筆）" if pending else "")
 
 
-def status_rows(link_online, pending, faces, heartbeat):
-    """右下角的狀態列表 → [(名稱, 內容, 色調)]。"""
-    link_tone, link_text = link_view(link_online, pending)
+def status_rows(link_online, pending, faces, heartbeat, reason=""):
+    """右下角的狀態列表 → [(名稱, 內容, 色調)]；後台離線時這一列寫出原因（通行碼、憑證、網路線…）。"""
+    link_tone, link_text = link_view(link_online, pending, reason)
     camera, running = heartbeat.get("camera_ok"), heartbeat.get("recognition_running")
     return [
         ("後台連線", link_text, link_tone),
@@ -175,7 +176,7 @@ def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_onl
     faces = len(store.load_faces())
     greetings = greeting_rows(screen.recent_punches(GREETING_MAX_AGE, now=lambda: now_ts))
     news = news_view(store.get_meta("morning"), now.date(), now_ts, local_only=local_only)
-    status = status_rows(link_online, pending, faces, read_heartbeat())
+    status = status_rows(link_online, pending, faces, read_heartbeat(), store.get_meta("link_reason") or "")
     return {
         "time": time_text, "date": date_text,
         "link": link_view(link_online, pending),

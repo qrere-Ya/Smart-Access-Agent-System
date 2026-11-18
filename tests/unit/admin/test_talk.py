@@ -171,9 +171,10 @@ def client(db, monkeypatch, tmp_path):
     return app.test_client(), talk_service, chat_service
 
 
-def test_the_talk_switch_is_off_by_default_and_independent_of_the_chat_switch(client):
+def test_the_talk_switch_is_open_by_default_and_independent_of_the_chat_switch(client):
     c, talk_service, chat_service = client
-    assert front_control.talk_enabled() is False
+    assert front_control.talk_enabled() is True
+    front_control.set_talk_enabled(False)
     response = c.post("/v1/talk", json={"question": "你好"}, headers=AUTH)
     assert response.status_code == 403 and response.get_json()["error"] == "talk_disabled"
     front_control.set_chat_enabled(True)                              # 開知識庫不會開一般對話
@@ -200,6 +201,8 @@ def test_the_talk_routes_need_the_token_and_validate_the_question(client):
 
 def test_morning_carries_talk_enabled_and_a_missing_service_means_closed(client, db):
     c, _, _ = client
+    assert c.get("/v1/morning", headers=AUTH).get_json()["talk_enabled"] is True            # 預設開放
+    front_control.set_talk_enabled(False)
     assert c.get("/v1/morning", headers=AUTH).get_json()["talk_enabled"] is False
     front_control.set_talk_enabled(True)
     assert c.get("/v1/morning", headers=AUTH).get_json()["talk_enabled"] is True

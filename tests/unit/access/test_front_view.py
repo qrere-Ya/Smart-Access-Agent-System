@@ -185,3 +185,12 @@ def test_news_cards_carry_only_safe_https_links_and_none_in_local_only_mode():
     cards = fv.news_view(brief, today, 0, per_page=4)["cards"]
     assert [c["link"] for c in cards] == ["https://example.com/a", "", "", ""]
     assert all(c["link"] == "" for c in fv.news_view(brief, today, 0, per_page=4, local_only=True)["cards"])
+
+
+def test_the_offline_reason_shows_in_the_status_row_but_not_in_the_short_header_badge():
+    tone, text = fv.link_view(False, 2, "通行碼不被後台接受")
+    assert tone == "warning" and "通行碼不被後台接受" in text and "已暫存 2 筆" in text
+    assert fv.link_view(False, 0)[1] == "後台離線，打卡先暫存"
+    rows = fv.status_rows(False, 0, 10, {}, "憑證指紋不符")
+    assert "憑證指紋不符" in rows[0][1]
+    assert fv.status_rows(True, 0, 10, {}, "舊原因")[0][1] == "後台連線中"      # 連上了就不顯示原因

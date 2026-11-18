@@ -60,3 +60,10 @@ def test_apply_volume_is_louder_but_never_exceeds_full_scale():
     assert np.abs(loud).max() <= 1.0 and loud[0] > 0 > loud[1]               # 超過的部分被壓縮，正負號不變
     assert loud[0] <= loud[2]                                                # 順序保持（越大聲越大）
     assert ap.apply_volume(quiet, 1.0).dtype == np.float32
+
+
+def test_only_the_punch_greeting_pauses_other_speech_is_one_piece():
+    assert ap.segments_for("葉君緯，早安", pause=True) == ["葉君緯", "早安"]
+    assert ap.segments_for("智慧門禁系統，已啟用。", pause=False) == ["智慧門禁系統，已啟用"]
+    assert ap.segments_for("智慧門禁系統已啟用", pause=False) == ["智慧門禁系統已啟用"]
+    assert ap.segments_for("。", pause=False) == []

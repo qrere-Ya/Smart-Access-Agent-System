@@ -157,6 +157,19 @@ def check_camera(index=0):
     return [("OK", f"攝影機 {index} 可讀取") if ok else ("FAIL", f"攝影機 {index} 打不開或讀不到畫面")]
 
 
+def _remembered_back():
+    """前台代理上次成功連過的後台位址（(位址, 埠, 憑證指紋) 或 None）；讀不到就當作沒有。"""
+    try:
+        from access import front_agent
+        from access.front_store import FrontStore
+        cached = FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db")).get_meta(front_agent.BACK_TARGET_KEY)
+        if isinstance(cached, dict) and cached.get("host") and cached.get("port") and cached.get("fingerprint"):
+            return cached["host"], cached["port"], cached["fingerprint"]
+    except Exception as e:  # noqa: BLE001  資料庫不存在或壞掉：視為沒有
+        print(f"[front_check] 讀不到記住的後台位址（{type(e).__name__}）")
+    return None
+
+
 def check_back():
     """用通行碼 ping 後台；連不上只警告（前台離線時照樣辨識與暫存事件）。"""
     from access.front_agent import BackCertError, BackClient
@@ -166,13 +179,18 @@ def check_back():
     host, port, fingerprint = settings.back_host, settings.back_port, settings.back_fingerprint
     if host.strip().lower() == role_config.AUTO:
         found = lan_discovery.discover_back(role_config.link_token())
+        note = ""
         if not found:
-            return [("WARN", "自動尋找沒有找到後台：後台還沒開、網路線沒插好（位址分配要 30 到 60 秒）、"
-                             "後台防火牆沒開 UDP 或通行碼不一致")]
+            found = _remembered_back()
+            if not found:
+                return [("WARN", "自動尋找沒有找到後台，也沒有記住的位址：後台還沒開、網路線沒插好"
+                                 "（位址分配要 30 到 60 秒）、後台防火牆沒開 UDP 8772 或通行碼不一致。"
+                                 "到後台執行「檢查後台網路.bat」看哪一項不對")]
+            note = "（自動尋找沒有回應，改用上次記住的位址；後台那邊的 UDP 8772 自動尋找可能沒開）"
         host, port, fingerprint = found
     try:
         BackClient(host, port, role_config.link_token(), fingerprint, timeout=(3.0, 5.0)).ping()
-        return [("OK", f"後台 {host}:{port} 加密連線正常（憑證指紋相符）、通行碼正確")]
+        return [("OK" if not note else "WARN", f"後台 {host}:{port} 加密連線正常（憑證指紋相符）、通行碼正確{note}")]
     except BackCertError as e:
         return [("FAIL", str(e))]
     except Exception as e:  # noqa: BLE001

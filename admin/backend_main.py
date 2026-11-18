@@ -46,6 +46,7 @@ from admin import (
     digest_window,
     front_status,
     login_window,
+    network_check,
     notification_bar,
     schedule_window,
     service_manager,
@@ -55,17 +56,20 @@ from shared import database_mgr as db
 
 ANOMALY_DIR = paths.ANOMALY_DIR
 NEWLINE = chr(10)
+def link_check_lines(results, front_snapshot):
+    """連線檢查的畫面文字：先說有幾項需要處理，再列出所有非 OK 的項目與前台最後一次心跳是多久以前。"""
+    bad = [(level, text) for level, text in results if level != "OK"]
+    lines = [f"檢查 {len(results)} 項：{'全部正常' if not bad else f'{len(bad)} 項要處理'}"]
+    lines += [f"{'❌' if level == 'FAIL' else '⚠'} {text}" for level, text in bad[:6]]
+    age = front_snapshot.get("age") if isinstance(front_snapshot, dict) and front_snapshot.get("seen") else None
+    lines.append(f"前台最後一次心跳：{int(age)} 秒前" if isinstance(age, (int, float)) else "還沒收到過前台的心跳")
+    return lines
+
+
 WINDOW_MAX = (1280, 820)      # 主視窗的統一大小（螢幕放不下才縮小）
 WINDOW_MIN = (1000, 640)
 NOTICE_SECONDS = 8            # 底部提示訊息顯示幾秒
 
-
-TALK_OPEN_WARNING = ("開放後，前台的任何人（沒有登入）都可以用實體鍵盤跟後台的語言模型一般聊天（Smart_Chat），"
-                     "但它看不到公司文件、員工與出缺勤資料。\n\n語言模型是雲端時，問題會送到雲端服務；"
-                     "全本地模式下只用本機模型。每一題都會記進對話紀錄（前台不會顯示這件事）。\n\n確定要開放嗎？")
-CHAT_OPEN_WARNING = ("開放後，前台的任何人（沒有登入）都可以用實體鍵盤問 data/docs 資料夾裡「所有」文件的內容，"
-                     "不能查出缺勤與員工資料。\n\n請先確認資料夾裡沒有不想讓前台使用者看到的文件。"
-                     "每一題都會記進對話紀錄（前台不會顯示這件事）。\n\n確定要開放嗎？")
 
 
 class BackendManagerApp:
@@ -579,6 +583,14 @@ class BackendManagerApp:
         self.link_service_label = ui_theme.muted_label(box, "")
         self.link_service_label.configure(anchor="w")
         self.link_service_label.pack(fill="x", padx=15, pady=(6, 6))
+        # 連線檢查：前台連不上時，一鍵檢查網路線位址、連線服務與自動尋找有沒有在聽、防火牆規則、前台最後一次心跳
+        check_row = ctk.CTkFrame(box, fg_color="transparent")
+        check_row.pack(fill="x", padx=15, pady=(0, 6))
+        self.link_check_label = ui_theme.muted_label(check_row, "前台連不上時，按右邊的按鈕檢查網路線與防火牆")
+        self.link_check_label.configure(anchor="w", justify="left", wraplength=620)
+        self.link_check_label.pack(side="left", fill="x", expand=True)
+        self.link_check_btn = ui_theme.secondary_button(check_row, "🔍 檢查連線", self._press_check_link, width=130)
+        self.link_check_btn.pack(side="right")
         # 前台人臉辨識的遠端停止／恢復：前台只有「啟動」按鈕，停止由這裡下指令（前台同步時套用）
         control = ctk.CTkFrame(box, fg_color="transparent")
         control.pack(fill="x", padx=15, pady=(0, 12))
@@ -590,24 +602,6 @@ class BackendManagerApp:
         self.face_control_btn = ui_theme.secondary_button(control, "", self._press_face_control, width=170)
         self.face_control_btn.pack(side="right")
         self._refresh_face_control()
-        # 前台知識庫問答的開放與關閉：預設關閉，開放前要看過警告（前台是公開的螢幕與鍵盤，沒有登入）
-        chat_row = ctk.CTkFrame(box, fg_color="transparent")
-        chat_row.pack(fill="x", padx=15, pady=(0, 12))
-        self.chat_control_label = ui_theme.muted_label(chat_row, "")
-        self.chat_control_label.configure(anchor="w", justify="left", wraplength=520)
-        self.chat_control_label.pack(side="left", fill="x", expand=True)
-        self.chat_control_btn = ui_theme.secondary_button(chat_row, "", self._press_chat_control, width=170)
-        self.chat_control_btn.pack(side="right")
-        self._refresh_chat_control()
-        # 前台 Smart_Chat 一般對話的開放與關閉：和知識庫問答是兩個獨立開關，同樣預設關閉
-        talk_row = ctk.CTkFrame(box, fg_color="transparent")
-        talk_row.pack(fill="x", padx=15, pady=(0, 12))
-        self.talk_control_label = ui_theme.muted_label(talk_row, "")
-        self.talk_control_label.configure(anchor="w", justify="left", wraplength=520)
-        self.talk_control_label.pack(side="left", fill="x", expand=True)
-        self.talk_control_btn = ui_theme.secondary_button(talk_row, "", self._press_talk_control, width=170)
-        self.talk_control_btn.pack(side="right")
-        self._refresh_talk_control()
         # 知識庫文件管理：文件問答搬到前台之後，管理者在這裡放文件與重新掃描（文件放在 data/docs）
         docs_row = ctk.CTkFrame(box, fg_color="transparent")
         docs_row.pack(fill="x", padx=15, pady=(0, 12))
@@ -666,6 +660,27 @@ class BackendManagerApp:
             print(f"[後台] 開啟文件資料夾失敗：{type(e).__name__}")
             ui_theme.show_message(self.root, "知識庫文件", "無法開啟文件資料夾。", "warning")
 
+    def _press_check_link(self):
+        """在背景檢查後台這一側的連線條件（唯讀、不改任何設定），結果顯示在按鈕旁。"""
+        self.link_check_btn.configure(state="disabled")
+        self.link_check_label.configure(text="檢查中…")
+
+        def work():
+            try:
+                lines = link_check_lines(network_check.run_checks(), front_status.load())
+            except Exception as e:  # noqa: BLE001  檢查本身出錯也只顯示型別
+                lines = [f"檢查失敗（{type(e).__name__}）"]
+            if self._alive:
+                self.root.after(0, lambda: self._show_link_check(lines))
+
+        threading.Thread(target=work, daemon=True, name="link-check").start()
+
+    def _show_link_check(self, lines):
+        if not self._alive:
+            return
+        self.link_check_btn.configure(state="normal")
+        self.link_check_label.configure(text=NEWLINE.join(lines))
+
     def _request_docs_refresh(self):
         """通知知識庫服務重新掃描文件（服務約 1 秒內開始，結果顯示在旁邊）。"""
         try:
@@ -675,45 +690,6 @@ class BackendManagerApp:
             ui_theme.show_message(self.root, "知識庫文件", "無法通知知識庫服務，請稍後再試。", "warning")
             return
         self.notice("已通知知識庫服務重新掃描文件，結果會顯示在「前台連線」卡片。")
-
-    def _refresh_talk_control(self):
-        """依後台目前的設定更新「開放／關閉前台 Smart_Chat 一般對話」按鈕與說明。"""
-        if front_control.talk_enabled():
-            self.talk_control_btn.configure(text="⏸ 關閉前台對話")
-            self.talk_control_label.configure(
-                text="前台 Smart_Chat 一般對話：已開放（只有語言模型，沒有文件與資料；"
-                     "問答會記進對話紀錄，最慢約 10 秒套用）")
-        else:
-            self.talk_control_btn.configure(text="▶ 開放前台對話")
-            self.talk_control_label.configure(
-                text="前台 Smart_Chat 一般對話：未開放（預設關閉；開放前會先提醒）")
-
-    def _press_talk_control(self):
-        """開放前先確認警告；關閉不用確認。"""
-        if front_control.talk_enabled():
-            front_control.set_talk_enabled(False)
-        elif ui_theme.confirm(self.root, "開放前台一般對話", TALK_OPEN_WARNING, ok_text="開放", danger=True):
-            front_control.set_talk_enabled(True)
-        self._refresh_talk_control()
-
-    def _refresh_chat_control(self):
-        """依後台目前的設定更新「開放／關閉前台知識庫問答」按鈕與說明。"""
-        if front_control.chat_enabled():
-            self.chat_control_btn.configure(text="⏸ 關閉前台問答")
-            self.chat_control_label.configure(
-                text="前台知識庫問答：已開放（前台使用者可以問 data/docs 裡的所有文件；問答會記進"
-                     "「出勤報告」的對話紀錄，最慢約 10 秒套用）")
-        else:
-            self.chat_control_btn.configure(text="▶ 開放前台問答")
-            self.chat_control_label.configure(text="前台知識庫問答：未開放（預設關閉；開放前會先提醒文件範圍）")
-
-    def _press_chat_control(self):
-        """開放前先確認警告（所有文件都會讓前台使用者問到）；關閉不用確認。"""
-        if front_control.chat_enabled():
-            front_control.set_chat_enabled(False)
-        elif ui_theme.confirm(self.root, "開放前台知識庫問答", CHAT_OPEN_WARNING, ok_text="開放", danger=True):
-            front_control.set_chat_enabled(True)
-        self._refresh_chat_control()
 
     def _cancel_face_control(self):
         self.face_control_confirming = False
@@ -740,7 +716,6 @@ class BackendManagerApp:
             reason = f"：{self.link_note}" if self.link_note else "（正在嘗試啟動）"
             self.link_service_label.configure(text=f"🔴 後台連線服務未執行{reason}")
         self._refresh_face_control()
-        self._refresh_chat_control()
         self._refresh_docs_label()
         events = dashboard_stats.get_recent_events(limit=30)
         if events is not None:

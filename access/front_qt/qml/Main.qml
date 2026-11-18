@@ -172,7 +172,7 @@ ApplicationWindow {
         // ───────── 警示橫幅 ─────────
         Rectangle {
             id: alertBar
-            visible: backend.alert !== null
+            visible: !!backend.alert && (backend.alert.title || "") !== ""      // 沒有警示時 alert 是空值，不能用 !== null 判斷（會讓空橫幅一直顯示）
             x: 48; y: 96
             width: parent.width - 96
             height: 64
@@ -182,8 +182,14 @@ ApplicationWindow {
                 anchors.verticalCenter: parent.verticalCenter
                 x: 30
                 spacing: 26
+                Image {                                       // 不用 ⚠ 表情符號：部分機器的表情字型會讓同一行的中文跟著畫不出來
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 40; height: 40
+                    sourceSize: Qt.size(80, 80)
+                    source: backend.iconUri("smart_alert", backend.palette.on_danger, backend.palette.on_danger)
+                }
                 Text {
-                    text: "⚠ " + (backend.alert ? backend.alert.title : "")
+                    text: backend.alert ? backend.alert.title : ""
                     color: backend.palette.on_danger
                     font.pixelSize: 34
                     font.bold: true
@@ -432,7 +438,9 @@ ApplicationWindow {
                         qa: backend.qaTalk
                         icon: "smart_chat"
                         accent: backend.palette.mod_chat
-                        tagline: "一般對話　·　不查公司文件與資料　·　不保存對話　·　閒置 1 分鐘自動清除"
+                        tagline: "一般對話　·　可查天氣、上網搜尋　·　不查公司文件與資料　·　沒人操作半小時自動重置"
+                        chips: ["台北明天天氣如何？", "台積電最新消息", "把這句話翻成英文", "用一句話介紹你自己"]
+                        sourcesLabel: "使用工具"
                         welcome: "想聊什麼？"
                         hint: "用鍵盤輸入問題，例如：幫我把這句話翻成英文"
                     }
@@ -443,7 +451,9 @@ ApplicationWindow {
                         qa: backend.qaChat
                         icon: "smart_rag"
                         accent: backend.palette.mod_rag
-                        tagline: "只查公司文件　·　不保存對話　·　閒置 1 分鐘自動清除"
+                        tagline: "只查公司文件　·　沒人操作半小時自動重置"
+                        chips: ["特休有幾天？", "加班費怎麼算？", "請病假要準備什麼？"]
+                        sourcesLabel: "來源文件"
                         welcome: "有什麼想問公司文件？"
                         hint: "用鍵盤輸入問題，例如：特休有幾天？加班費怎麼算？"
                     }
