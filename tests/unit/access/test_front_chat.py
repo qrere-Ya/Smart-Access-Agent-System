@@ -30,13 +30,13 @@ class FakeChatClient:
         self.submit_error, self.result_error = submit_error, result_error
         self.submitted, self.polls = [], 0
 
-    def chat_submit(self, question):
+    def chat_submit(self, question, path="/chat"):
         if self.submit_error:
             raise self.submit_error
         self.submitted.append(question)
         return {"ok": True, "job_id": JOB, "status": "queued"}
 
-    def chat_result(self, job_id):
+    def chat_result(self, job_id, path="/chat"):
         self.polls += 1
         if self.result_error:
             raise self.result_error
@@ -110,9 +110,9 @@ def test_the_first_question_shows_the_preparing_message(store):
     chat = make(store, client)
     original = client.chat_result
 
-    def watching(job_id):
+    def watching(job_id, path="/chat"):
         seen.append(chat.view()["state"])
-        return original(job_id)
+        return original(job_id, path)
 
     client.chat_result = watching
     chat.submit("問題")
@@ -218,7 +218,7 @@ def test_clearing_while_a_question_is_in_flight_discards_its_result(store):
     gate = {"open": False}
 
     class Slow(FakeChatClient):
-        def chat_result(self, job_id):
+        def chat_result(self, job_id, path="/chat"):
             while not gate["open"]:
                 time.sleep(0.002)
             return super().chat_result(job_id)

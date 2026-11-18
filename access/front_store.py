@@ -50,12 +50,11 @@ class FrontStore:
         self._lock = threading.Lock()
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")           # 寫在檔案裡，只要設一次；之後每次開連線不必再做
             conn.executescript(_SCHEMA)
 
     def _connect(self):
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        return sqlite3.connect(self.path, timeout=10)
 
     # --- meta ---
     def get_meta(self, key, default=None):

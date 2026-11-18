@@ -55,8 +55,10 @@ def test_the_routes_need_the_token(setup):
         assert client.get(f"/v1/chat/{JOB}", headers=headers).status_code == 401
 
 
-def test_the_feature_is_off_by_default_and_refuses_everything(setup):
+def test_the_feature_is_open_by_default_and_refuses_everything_once_the_admin_closes_it(setup):
     client, service = setup
+    assert front_control.chat_enabled() is True
+    front_control.set_chat_enabled(False)
     response = post(client, {"question": "每年給幾天特別休假"})
     assert response.status_code == 403 and response.get_json()["error"] == "chat_disabled"
     assert client.get(f"/v1/chat/{JOB}", headers=AUTH).status_code == 403
@@ -147,6 +149,8 @@ def test_unknown_or_malformed_job_ids_are_404_without_asking_the_service(setup, 
 
 def test_the_sync_response_says_whether_chat_is_open(setup):
     client, _ = setup
+    assert client.get("/v1/morning", headers=AUTH).get_json()["chat_enabled"] is True        # 預設開放
+    front_control.set_chat_enabled(False)
     assert client.get("/v1/morning", headers=AUTH).get_json()["chat_enabled"] is False
     front_control.set_chat_enabled(True)
     body = client.get("/v1/morning", headers=AUTH).get_json()
@@ -165,7 +169,8 @@ def test_without_a_chat_service_everything_looks_not_open(db, monkeypatch, tmp_p
 
 def test_the_recognition_switch_and_the_chat_switch_do_not_disturb_each_other(tmp_path):
     path = str(tmp_path / "c.json")
-    assert front_control.recognition_enabled(path) is True and front_control.chat_enabled(path) is False
+    assert front_control.recognition_enabled(path) is True and front_control.chat_enabled(path) is True
+    front_control.set_chat_enabled(False, path)
     front_control.set_chat_enabled(True, path)
     front_control.set_recognition_enabled(False, path)
     assert front_control.chat_enabled(path) is True and front_control.recognition_enabled(path) is False

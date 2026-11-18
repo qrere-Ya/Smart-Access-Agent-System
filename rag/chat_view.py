@@ -17,9 +17,9 @@ import webbrowser
 
 import customtkinter as ctk
 
-from shared import ui_theme
+from shared import svg_icon, ui_theme
 
-APP_TITLE = "出缺勤查詢"
+APP_TITLE = "Smart_Query 出缺勤查詢"
 FONT_FAMILY = ui_theme.FONT_FAMILY
 SAMPLE_QUESTIONS = ["今天誰遲到？", "這週誰早退？", "最近有沒有尾隨事件？", "今天的出勤狀況",
                     "這個月誰遲到？", "列出員工名單"]
@@ -35,11 +35,11 @@ WHEEL_UNITS = 6   # 滾輪一格（delta 120）捲動的單位數的倒數：和
 class Bubble(ctk.CTkFrame):
     """一則訊息：圓角底色加上可選取複製的文字，高度跟著內容自動伸縮。"""
 
-    def __init__(self, master, role, text="", width=560):
+    def __init__(self, master, role, text="", width=560, size=15):
         super().__init__(master, corner_radius=16, fg_color=USER_COLOR if role == "user" else BOT_COLOR)
         self.role = role
         self.box = ctk.CTkTextbox(self, width=width, height=30, wrap="word", activate_scrollbars=False,
-                                  fg_color="transparent", border_spacing=8, font=ui_theme.font(14),
+                                  fg_color="transparent", border_spacing=8, font=ui_theme.font(size),
                                   text_color=ui_theme.pair("on_primary" if role == "user" else "on_secondary"))
         self.box.pack(padx=6, pady=4)
         self.box._textbox.tag_config("meta", foreground=ui_theme.color("text_muted"))
@@ -51,6 +51,11 @@ class Bubble(ctk.CTkFrame):
         self.box._textbox.bind("<Configure>", ui_theme.event_only(self._on_box_configure), add="+")
         if text:
             self.set_text(text)
+
+    def set_font_size(self, size):
+        """改變文字大小並重算高度（字級切換用）。"""
+        self.box.configure(font=ui_theme.font(size))
+        self.after_idle(self.fit)
 
     def _on_box_configure(self, event):
         """文字框寬度改變時重算高度。"""
@@ -172,7 +177,12 @@ def build_welcome(chat, on_pick, digest_text=""):
     """建立歡迎畫面；回傳 (歡迎框, 範例問題按鈕清單)，按下範例問題會呼叫 on_pick(問題)。
     digest_text 不是空字串時，在範例問題上方顯示最新日報與待處理異常。"""
     welcome = ctk.CTkFrame(chat, fg_color="transparent")
-    welcome.pack(pady=(48, 8))
+    welcome.pack(pady=(40, 8))
+    disc = ctk.CTkFrame(welcome, width=72, height=72, corner_radius=36, fg_color=ui_theme.pair("primary"))
+    disc.pack(pady=(0, 14))
+    disc.pack_propagate(False)
+    ctk.CTkLabel(disc, text="", image=svg_icon.ctk_icon("smart_query", 40, ui_theme.pair("on_primary"), disc)).pack(
+        expand=True)
     ctk.CTkLabel(welcome, text="有什麼想查的？", font=ui_theme.font(ui_theme.FONT_SIZE_HERO, bold=True)).pack()
     ctk.CTkLabel(welcome, text="查考勤與異常紀錄（文件與法規的問答已移到前台）", text_color=META_COLOR,
                  font=ui_theme.font(14)).pack(pady=(4, 18))
@@ -203,13 +213,15 @@ def make_note(chat, text):
 
 def build_input_row(master, on_enter, on_send):
     """建立輸入框與送出鈕；回傳 (外框, 輸入框, 送出鈕)。"""
-    bottom = ctk.CTkFrame(master, fg_color="transparent")
+    bottom = ctk.CTkFrame(master, corner_radius=30, fg_color=ui_theme.pair("card"), border_width=1,
+                          border_color=ui_theme.pair("border"))
     bottom.grid_columnconfigure(0, weight=1)
-    box = ctk.CTkTextbox(bottom, height=64, wrap="word", font=ui_theme.font(ui_theme.FONT_SIZE_INPUT),
-                         border_width=1, border_spacing=8)
-    box.grid(row=0, column=0, sticky="ew")
+    box = ctk.CTkTextbox(bottom, height=52, wrap="word", font=ui_theme.font(ui_theme.FONT_SIZE_INPUT),
+                         fg_color="transparent", border_width=0, border_spacing=8)
+    box.grid(row=0, column=0, sticky="ew", padx=(18, 4), pady=6)
     box.bind("<Return>", ui_theme.event_only(on_enter))
-    send_btn = ui_theme.primary_button(bottom, "送出", on_send, width=84, height=64, state="disabled")
-    send_btn.configure(font=ui_theme.font(15, bold=True))
-    send_btn.grid(row=0, column=1, padx=(10, 0))
+    send_btn = ui_theme.primary_button(bottom, "", on_send, width=44, height=44, state="disabled",
+                                       image=svg_icon.ctk_icon("smart_send", 22, ui_theme.pair("on_primary"), bottom))
+    send_btn.configure(corner_radius=22)
+    send_btn.grid(row=0, column=1, padx=(0, 10), pady=6)
     return bottom, box, send_btn

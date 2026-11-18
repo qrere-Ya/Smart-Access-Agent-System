@@ -32,8 +32,10 @@ from tkinter import ttk
 
 import customtkinter as ctk
 
-from access import front_agent, front_chat, front_launcher, front_resources, front_screens, front_view
+from access import (front_agent, front_chat, front_launcher, front_qa_panel, front_resources, front_screens,
+                    front_view)
 from access.front_store import FrontStore, ScreenState
+from shared import svg_icon, tech_art
 from PIL import ImageTk
 
 from access import front_qr
@@ -41,8 +43,8 @@ from shared import network_policy, paths, ui_theme
 
 REFRESH_MS = 1000
 DETAIL_IDLE_SECONDS = 90.0            # 在模組全版畫面沒人操作這麼久，自動回主畫面
-MODULE_KEYS = ("news", "greetings", "status", "chat")
-CHAT_IDLE_SECONDS = 60.0              # 知識庫問答閒置這麼久，自動清除輸入與回答（前台不保存任何對話）
+MODULE_KEYS = ("talk", "chat", "news", "greetings", "status")     # talk＝Smart_Chat、chat＝Smart_RAG（舊名）
+CHAT_IDLE_SECONDS = 1800.0             # 知識庫問答閒置這麼久，自動清除輸入與回答（前台不保存任何對話）
 THEME_LABELS = {"dark": "🌙 深色藍", "frosted": "☀ 半透明白"}
 FROSTED_ALPHA = 0.97                  # 半透明白：只讓桌面微弱透出，不影響閱讀
 DESIGN_WIDTH, DESIGN_HEIGHT = 1920, 1080
@@ -73,11 +75,10 @@ def window_scale(width, height, dpi=1.0):
 
 class FrontDashboard:
     def __init__(self, root, store, now=datetime.datetime.now, clock=time.time, read_heartbeat=None,
-                 read_resources=None, recognition=None, monitors=None, chat=None):
+                 read_resources=None, recognition=None, monitors=None, chat=None, talk=None):
         self.recognition = recognition                       # front_launcher.ManagedProcess；None 就不顯示辨識開關
-        self.chat = chat or front_chat.FrontChat(store)        # 知識庫問答的對話控制（只在記憶體）
-        self._chat_touched = clock()
-        self._chat_question = ""
+        self._controllers = {"chat": chat or front_chat.FrontChat(store),      # Smart_RAG 知識庫問答（只在記憶體）
+                             "talk": talk or front_chat.FrontTalk(store)}       # Smart_Chat 一般對話
         self.root, self.store, self._now, self._clock = root, store, now, clock
         self.screen = ScreenState(store)
         self._read_heartbeat = read_heartbeat or front_agent.read_terminal_heartbeat
@@ -85,6 +86,7 @@ class FrontDashboard:
         self._signatures = {}
         self._trees = []
         self._grid_opts = {}
+        self._tile_images = {}
         self.current = None                                  # 目前開著的模組；None 是主畫面
         self._touched = clock()
         self._page_text = ""
@@ -149,8 +151,10 @@ class FrontDashboard:
         top = ctk.CTkFrame(root, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=48, pady=(18, 6))
         top.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(top, text="🔐 智慧門禁 前台", font=_font(34, bold=True),
+        ctk.CTkLabel(top, text=" Smart Access 前台", font=_font(34, bold=True),
+                     image=svg_icon.ctk_icon("smart_access", 40, ui_theme.pair("primary"), top), compound="left",
                      text_color=ui_theme.pair("primary"), anchor="w").grid(row=0, column=0, sticky="w")
+        self._neon_line(top, 3).grid(row=1, column=0, columnspan=6, sticky="ew", pady=(6, 0))
         self.link_badge = ui_theme.status_badge(top, "後台連線", "neutral")
         self.link_badge.configure(font=_font(18, bold=True))
         self.link_badge.grid(row=0, column=1, sticky="w", padx=24, ipadx=8, ipady=3)
@@ -193,15 +197,18 @@ class FrontDashboard:
         self.footer_label.grid(row=3, column=0, sticky="ew", padx=48, pady=(2, 10))
         root.bind_all("<Button-1>", self._note_touch, add="+")
 
+    def _neon_line(self, master, height=4):
+        return tech_art.neon_line(master, height)
+
     def _build_home(self):
         """主畫面由上到下：功能模組（小圖示卡）、最近打卡與連線辨識兩張卡、資源狀態監控、日期與大時鐘。"""
         home = self.home
         home.grid_columnconfigure(0, weight=1)
         home.grid_rowconfigure(2, weight=1)
-        ctk.CTkLabel(home, text="🗂  功能模組", font=_font(26, bold=True), text_color=ui_theme.pair("text"),
+        ctk.CTkLabel(home, text="  功能模組", image=svg_icon.ctk_icon("smart_modules", 28, ui_theme.pair("text"), home),
+                     compound="left", font=_font(26, bold=True), text_color=ui_theme.pair("text"),
                      anchor="w").grid(row=0, column=0, sticky="w", padx=12, pady=(6, 2))
-        ctk.CTkFrame(home, height=2, fg_color=ui_theme.pair("primary")).grid(row=0, column=0, sticky="ew", padx=12,
-                                                                              pady=(46, 0))
+        self._neon_line(home).grid(row=0, column=0, sticky="ew", padx=12, pady=(46, 0))
         wall = ctk.CTkFrame(home, fg_color="transparent")
         wall.grid(row=1, column=0, sticky="w", padx=4, pady=(14, 4))
         self.tiles = {key: self._make_tile(wall, key, column) for column, key in enumerate(MODULE_KEYS)}
@@ -210,13 +217,16 @@ class FrontDashboard:
         mid.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
         mid.grid_columnconfigure((0, 1), weight=1, uniform="mid")
         mid.grid_rowconfigure(0, weight=1)
-        mini_greet_card = self._mini_card(mid, 0, "👋  最近打卡")
+        mini_greet_card = self._mini_card(mid, 0, "  最近打卡", "smart_greet")
         self.mini_greet = self._table(mini_greet_card, GREET_COLUMNS, height=3, big=False)
-        self.mini_status = self._table(self._mini_card(mid, 1, "📡  連線與辨識"), STATUS_COLUMNS, height=4, big=False)
+        status_card = self._mini_card(mid, 1, "  連線與辨識", "smart_status")
+        self.mini_status = self._table(status_card, STATUS_COLUMNS, height=4, big=False)
 
         res = ui_theme.card(home)
         res.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 4))
-        ctk.CTkLabel(res, text="🖥️  資源狀態監控", font=_font(22, bold=True), text_color=ui_theme.pair("text"),
+        res_icon = svg_icon.ctk_icon("smart_monitor", 24, ui_theme.pair("text"), res)
+        ctk.CTkLabel(res, text="  資源狀態監控", image=res_icon,
+                     compound="left", font=_font(22, bold=True), text_color=ui_theme.pair("text"),
                      anchor="w").pack(anchor="w", padx=24, pady=(10, 4))
         grid = ctk.CTkFrame(res, fg_color="transparent")
         grid.pack(fill="x", padx=18, pady=(0, 10))
@@ -235,14 +245,14 @@ class FrontDashboard:
         clock.grid(row=4, column=0, pady=(4, 2))
         self.date_label = ctk.CTkLabel(clock, text="", font=_font(26), text_color=ui_theme.pair("text_muted"))
         self.date_label.pack(side="left", padx=(0, 28))
-        self.time_label = ctk.CTkLabel(clock, text="", font=_font(64, bold=True),
-                                       text_color=ui_theme.pair("text"))
+        self.time_label = ctk.CTkLabel(clock, text="", font=_mono(64), text_color=ui_theme.pair("primary"))
         self.time_label.pack(side="left")
 
-    def _mini_card(self, master, column, title):
+    def _mini_card(self, master, column, title, icon):
         card = ui_theme.card(master)
         card.grid(row=0, column=column, sticky="nsew", padx=12, pady=6)
-        ctk.CTkLabel(card, text=title, font=_font(22, bold=True), text_color=ui_theme.pair("text"),
+        ctk.CTkLabel(card, text=title, image=svg_icon.ctk_icon(icon, 24, ui_theme.pair("text"), card), compound="left",
+                     font=_font(22, bold=True), text_color=ui_theme.pair("text"),
                      anchor="w").pack(anchor="w", padx=24, pady=(14, 2))
         ctk.CTkFrame(card, height=1, fg_color=ui_theme.pair("border")).pack(fill="x", padx=24)
         return card
@@ -262,25 +272,38 @@ class FrontDashboard:
         bar.pack(fill="x", padx=22, pady=(0, 12))
         return {"value": value, "bar": bar}
 
+    TILE_SIZE = (340, 262)
+    TILE_TOKEN = {"talk": "mod_chat", "chat": "mod_rag", "news": "mod_news", "greetings": "mod_greet",
+                  "status": "mod_status"}                  # 每個模組自己的顏色，不隨狀態變
+    TONE_TEXT = {"warning": "warning", "danger": "danger"}   # 狀態只改摘要文字的顏色
+
+    def _tile_art(self, token, hover, master):
+        """功能卡片的底圖（依模組色快取）；底圖是整張卡片，含 HUD 括號，hover 時邊線全亮。"""
+        key = (token, hover)
+        if key not in self._tile_images:
+            self._tile_images[key] = tech_art.card_bg(*self.TILE_SIZE, token, hover, master)
+        return self._tile_images[key]
+
     def _make_tile(self, master, key, column):
-        """小圖示卡：圓形色塊圖示、名稱、一行即時預覽；整張可點，滑鼠移入時亮起並換成強調色邊框。"""
-        card = ui_theme.card(master, width=270, height=216)
+        """功能卡片：整張是一張科技風底圖（HUD 括號、微漸層），上面放發光圓形徽章、名稱與一行即時預覽；
+        整張可點，滑鼠移入時換成強調色（紫）亮邊的底圖。"""
+        card = ctk.CTkLabel(master, text="", width=self.TILE_SIZE[0], height=self.TILE_SIZE[1], fg_color="transparent",
+                            image=self._tile_art(self.TILE_TOKEN[key], False, master))
         card.grid(row=0, column=column, padx=8, pady=6)
         card.pack_propagate(False)
-        disc = ctk.CTkFrame(card, width=72, height=72, corner_radius=36, fg_color=ui_theme.pair("info"))
-        disc.pack(pady=(18, 8))
-        disc.pack_propagate(False)
-        icon = ctk.CTkLabel(disc, text="", font=("Segoe UI Emoji", 26), text_color=ui_theme.pair("on_status"))
-        icon.pack(expand=True)
-        title = ctk.CTkLabel(card, text="", font=_font(24, bold=True), text_color=ui_theme.pair("text"))
+        flat = ui_theme.pair("card")                  # 底圖是純卡片色，文字元件用同色才看不出方框
+        icon = ctk.CTkLabel(card, text="", fg_color=flat)
+        icon.pack(pady=(14, 0))
+        title = ctk.CTkLabel(card, text="", font=_font(24, bold=True), text_color=ui_theme.pair("text"),
+                             fg_color=flat)
         title.pack()
         summary = ctk.CTkLabel(card, text="", font=_font(18), text_color=ui_theme.pair("text_muted"),
-                               justify="center", wraplength=240)
-        summary.pack(pady=(6, 10))
-        parts = {"card": card, "disc": disc, "icon": icon, "title": title, "summary": summary, "accent": "info"}
+                               justify="center", wraplength=290, fg_color=flat)
+        summary.pack(pady=(4, 10))
+        parts = {"card": card, "icon": icon, "title": title, "summary": summary, "accent": self.TILE_TOKEN[key]}
 
         def on_enter(_event=None):
-            card.configure(fg_color=ui_theme.pair("secondary"), border_color=ui_theme.pair(parts["accent"]))
+            card.configure(image=self._tile_art(parts["accent"], True, master))
 
         def on_leave(_event=None):
             try:   # 指標移到卡片內的子元件時也會觸發離開事件，這時不要還原
@@ -291,7 +314,7 @@ class FrontDashboard:
                     return
             except (tk.TclError, KeyError):
                 pass
-            card.configure(fg_color=ui_theme.pair("card"), border_color=ui_theme.pair("border"))
+            card.configure(image=self._tile_art(parts["accent"], False, master))
 
         stack = [card]
         while stack:
@@ -332,91 +355,83 @@ class FrontDashboard:
         self.panels["news"].bind("<Configure>", self._wrap_news, add="+")
         self.greet_table = self._table(self.panels["greetings"], GREET_COLUMNS, height=4)
         self.status_table = self._table(self.panels["status"], STATUS_COLUMNS, height=4)
-        self._build_chat_panel(self.panels["chat"])
+        self._build_qa_panels()
         for panel in self.panels.values():
             self._hide(panel)
 
-    def _build_chat_panel(self, panel):
-        """知識庫問答：上方狀態文字、中間回答（純文字、只能看）、下方輸入列（實體鍵盤輸入，Enter 送出）。"""
-        panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(1, weight=1)
-        self.chat_status = ctk.CTkLabel(panel, text="", font=_font(26), text_color=ui_theme.pair("text_muted"),
-                                        anchor="w", justify="left", wraplength=1500)
-        self.chat_status.grid(row=0, column=0, sticky="ew", padx=28, pady=(18, 6))
-        self.chat_answer = ctk.CTkTextbox(panel, wrap="word", font=_font(28), fg_color=ui_theme.pair("bg"),
-                                          text_color=ui_theme.pair("text"), border_width=1,
-                                          border_color=ui_theme.pair("border"))
-        self.chat_answer.grid(row=1, column=0, sticky="nsew", padx=28, pady=6)
-        self.chat_answer.configure(state="disabled")
-        self.chat_input_row = ctk.CTkFrame(panel, fg_color="transparent")
-        self.chat_input_row.grid(row=2, column=0, sticky="ew", padx=28, pady=(6, 18))
-        self.chat_input_row.grid_columnconfigure(0, weight=1)
-        self.chat_entry = ctk.CTkEntry(self.chat_input_row, font=_font(28), height=64, fg_color=ui_theme.pair("bg"),
-                                       text_color=ui_theme.pair("text"), border_color=ui_theme.pair("border"),
-                                       placeholder_text="用鍵盤輸入問題，按 Enter 送出")
-        self.chat_entry.grid(row=0, column=0, sticky="ew", padx=(0, 12))
-        self.chat_send = ui_theme.primary_button(self.chat_input_row, "送出", self._send_chat, width=150, height=64)
-        self.chat_send.configure(font=_font(26, bold=True))
-        self.chat_send.grid(row=0, column=1)
-        self.chat_entry.bind("<Return>", ui_theme.event_only(lambda _e: self._send_chat()))
-        self.chat_entry.bind("<Key>", ui_theme.event_only(lambda _e: self._on_chat_key()))
-        self.chat_entry.bind("<KeyRelease>", ui_theme.event_only(lambda _e: self._limit_chat_input()))
+    # Smart_RAG（知識庫問答）的舊名稱：內部一直叫 chat，測試與設定沿用；Smart_Chat 一般對話內部叫 talk
+    @property
+    def chat(self):
+        return self.qa["chat"].controller
+
+    @chat.setter
+    def chat(self, controller):
+        self.qa["chat"].controller = controller
+
+    @property
+    def _chat_touched(self):
+        return self.qa["chat"].touched
+
+    @_chat_touched.setter
+    def _chat_touched(self, value):
+        self.qa["chat"].touched = value
+
+    def _build_qa_panels(self):
+        """兩個問答面板：Smart_Chat（一般對話，只有語言模型）與 Smart_RAG（只查公司文件）。"""
+        specs = {
+            "talk": {"key": "talk", "icon": "smart_chat", "accent": "mod_chat",
+                     "tagline": "一般對話　·　不查公司文件與資料　·　不保存對話　·　閒置 1 分鐘自動清除",
+                     "welcome": "想聊什麼？", "hint": "用鍵盤輸入問題，例如：幫我把這句話翻成英文"},
+            "chat": {"key": "chat", "icon": "smart_rag", "accent": "mod_rag",
+                     "tagline": "只查公司文件　·　不保存對話　·　閒置 1 分鐘自動清除",
+                     "welcome": "有什麼想問公司文件？", "hint": "用鍵盤輸入問題，例如：特休有幾天？加班費怎麼算？"},
+        }
+        self.qa = {}
+        for key, spec in specs.items():
+            self.qa[key] = front_qa_panel.QAPanel(self, self.panels[key], self._controllers[key], spec, _font)
+
+    @property
+    def _chat_question(self):
+        return self.qa["chat"].question
+
+    @_chat_question.setter
+    def _chat_question(self, value):
+        self.qa["chat"].question = value
 
     def _on_chat_key(self):
-        """打字也算有人在操作（不然輸入一半就被閒置清掉）。"""
-        self._touched = self._chat_touched = self._clock()
+        self.qa["chat"].on_key()
 
     def _limit_chat_input(self):
-        """問題長度上限（超過的部分直接截掉，不送出被後台拒絕）。"""
-        limit = front_chat.lp.MAX_CHAT_QUESTION
-        if len(self.chat_entry.get()) > limit:
-            self.chat_entry.delete(limit, "end")
+        self.qa["chat"]._limit()
 
     def _send_chat(self):
-        """送出輸入框裡的問題；處理中、後台沒開放或空白時什麼都不做。"""
-        question = self.chat_entry.get().strip()
-        if self.chat.submit(question):
-            self._chat_question = question
-            self.chat_entry.delete(0, "end")
-            self._chat_touched = self._touched = self._clock()
-        self._render_chat()
+        self.qa["chat"].send()
 
     def _clear_chat(self):
-        """清掉輸入、問題與回答，並放棄還在進行的那一題；前台不保存任何對話。"""
-        self.chat.clear()
-        self._chat_question = ""
-        self.chat_entry.delete(0, "end")
-        self._signatures.pop("chat", None)
-        self._render_chat()
+        self.qa["chat"].clear()
 
     def _render_chat(self):
-        """依知識庫問答目前的狀態更新面板：不能問就藏起輸入，處理中輸入暫停，回答與來源只當純文字顯示。"""
-        view = self.chat.view()
-        state = view["state"]
-        asking = state in ("asking", "preparing")
-        text = ""
-        if self._chat_question and state != "closed":
-            text = "你問：" + self._chat_question + "\n\n"
-        if view["answer"]:
-            text += view["answer"]
-            if view["sources"]:
-                text += "\n\n來源文件：" + "、".join(view["sources"])
-        elif view["message"] and state in ("error", "busy"):
-            text += view["message"]
-        signature = (state, view["message"], text, view["can_ask"])
-        if not self._changed("chat", signature):
-            return
-        self.chat_status.configure(text="" if state in ("answer", "idle") else view["message"])
-        self.chat_answer.configure(state="normal")
-        self.chat_answer.delete("1.0", "end")
-        self.chat_answer.insert("1.0", text)
-        self.chat_answer.configure(state="disabled")
-        if state in ("closed", "offline"):
-            self._hide(self.chat_input_row)
-        else:
-            self._show(self.chat_input_row)
-        self.chat_entry.configure(state="disabled" if asking else "normal")
-        self.chat_send.configure(state="disabled" if asking else "normal")
+        self.qa["chat"].render()
+
+    @property
+    def chat_status(self):
+        return self.qa["chat"].status
+
+    @property
+    def chat_answer(self):
+        return self.qa["chat"].answer
+
+    @property
+    def chat_input_row(self):
+        return self.qa["chat"].input_row
+
+    @property
+    def chat_entry(self):
+        return self.qa["chat"].entry
+
+    @property
+    def chat_send(self):
+        return self.qa["chat"].send_button
 
     def _hide(self, widget):
         """藏起一個 grid 元件。不用 grid_remove：CustomTkinter 縮放時會照記住的 grid 呼叫把它重新放回來，
@@ -487,23 +502,17 @@ class FrontDashboard:
         self.detail_title.configure(text=self._titles.get(key, ""))
         self._hide(self.home)
         self._show(self.detail)
-        if key == "chat":
-            self._chat_touched = self._clock()
-            self._render_chat()
-            self.root.after(80, self._focus_chat)
+        if key in self.qa:
+            self.qa[key].touched = self._clock()
+            self.qa[key].render()
+            self.root.after(80, self.qa[key].focus)
 
     def _focus_chat(self):
         """進入知識庫問答時把鍵盤焦點放在輸入框（全螢幕與雙螢幕下也要能直接打字）。"""
-        try:
-            if self.current == "chat" and self.chat_entry.winfo_exists():
-                self.chat_entry.focus_force()
-        except tk.TclError:
-            pass
+        self.qa["chat"].focus()
 
     def go_home(self):
-        """回到主畫面（離開知識庫問答時一併清掉輸入與回答）。"""
-        if self.current == "chat":
-            self._clear_chat()
+        """回到主畫面（問答面板的內容保留，半小時沒人操作才重置）。"""
         self.current = None
         self._hide(self.detail)
         self._show(self.home)
@@ -605,7 +614,8 @@ class FrontDashboard:
     def refresh(self):
         """讀一次本機資料並更新畫面；內容沒變的區塊不重畫。"""
         view = front_view.snapshot(self.store, self.screen, self._read_heartbeat, self._now(), self._clock(),
-                                   local_only=self.local_only(), chat_state=self.chat.availability())
+                                   local_only=self.local_only(), chat_state=self.chat.availability(),
+                                   talk_state=self.qa["talk"].controller.availability())
         self._last_view = view
         self.time_label.configure(text=view["time"])
         self.date_label.configure(text=view["date"])
@@ -619,11 +629,12 @@ class FrontDashboard:
         self._render_status(view["status"])
         self._render_resources()
         self._render_footer()
-        if self.current == "chat":
-            self._render_chat()
-            if self._clock() - self._chat_touched > CHAT_IDLE_SECONDS:
-                self._clear_chat()                               # 閒置自動清除輸入與回答（留在問答畫面）
-                self._chat_touched = self._clock()
+        if self.current in self.qa:
+            self.qa[self.current].render()
+        for panel in self.qa.values():                           # 兩個問答模組各自計時，沒人操作半小時就重置
+            if self._clock() - panel.touched > CHAT_IDLE_SECONDS:
+                panel.clear()
+                panel.touched = self._clock()
         if self.current is not None and self._clock() - self._touched > DETAIL_IDLE_SECONDS:
             self.go_home()
 
@@ -654,13 +665,14 @@ class FrontDashboard:
             return
         for tile in tiles:
             parts = self.tiles[tile["key"]]
-            parts["accent"] = tile["accent"]
-            parts["icon"].configure(text=tile["icon"])
-            parts["disc"].configure(fg_color=ui_theme.pair(TONE_COLOR.get(tile["accent"], "info")))
-            parts["title"].configure(text=tile["title"])
-            parts["summary"].configure(text=tile["summary"])
-            parts["card"].configure(fg_color=ui_theme.pair("card"), border_color=ui_theme.pair("border"))
-            self._titles[tile["key"]] = tile["title"]
+            token = parts["accent"]                       # 模組色固定；tile["accent"] 是狀態，只用來決定摘要文字顏色
+            parts["icon"].configure(image=tech_art.badge(tile["icon"], 76, token, parts["icon"]))
+            parts["title"].configure(text=tile["title"] + chr(10) + tile["name"])
+            tone = self.TONE_TEXT.get(tile["accent"])
+            parts["summary"].configure(text=tile["summary"],
+                                       text_color=ui_theme.pair(tone) if tone else ui_theme.pair("text_muted"))
+            parts["card"].configure(image=self._tile_art(parts["accent"], False, parts["card"]))
+            self._titles[tile["key"]] = tile["title"] + " " + tile["name"]
         if self.current is not None:
             self.detail_title.configure(text=self._titles.get(self.current, ""))
 

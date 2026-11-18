@@ -46,23 +46,30 @@ from admin import (
     digest_window,
     front_status,
     login_window,
+    network_check,
     notification_bar,
     schedule_window,
     service_manager,
 )
-from shared import auth, docs_control, front_control, paths, phone_address, ui_theme
+from shared import auth, docs_control, front_control, paths, phone_address, svg_icon, tech_art, ui_theme
 from shared import database_mgr as db
 
 ANOMALY_DIR = paths.ANOMALY_DIR
 NEWLINE = chr(10)
+def link_check_lines(results, front_snapshot):
+    """連線檢查的畫面文字：先說有幾項需要處理，再列出所有非 OK 的項目與前台最後一次心跳是多久以前。"""
+    bad = [(level, text) for level, text in results if level != "OK"]
+    lines = [f"檢查 {len(results)} 項：{'全部正常' if not bad else f'{len(bad)} 項要處理'}"]
+    lines += [f"{'❌' if level == 'FAIL' else '⚠'} {text}" for level, text in bad[:6]]
+    age = front_snapshot.get("age") if isinstance(front_snapshot, dict) and front_snapshot.get("seen") else None
+    lines.append(f"前台最後一次心跳：{int(age)} 秒前" if isinstance(age, (int, float)) else "還沒收到過前台的心跳")
+    return lines
+
+
 WINDOW_MAX = (1280, 820)      # 主視窗的統一大小（螢幕放不下才縮小）
 WINDOW_MIN = (1000, 640)
 NOTICE_SECONDS = 8            # 底部提示訊息顯示幾秒
 
-
-CHAT_OPEN_WARNING = ("開放後，前台的任何人（沒有登入）都可以用實體鍵盤問 data/docs 資料夾裡「所有」文件的內容，"
-                     "不能查出缺勤與員工資料。\n\n請先確認資料夾裡沒有不想讓前台使用者看到的文件。"
-                     "每一題都會記進對話紀錄（前台不會顯示這件事）。\n\n確定要開放嗎？")
 
 
 class BackendManagerApp:
@@ -122,11 +129,13 @@ class BackendManagerApp:
     def _build_header(self):
         """標題列：品牌與狀態徽章、外觀按鈕、時鐘、登入者與登出。"""
         header = ctk.CTkFrame(self.root, fg_color="transparent", height=1)
-        header.pack(fill="x", padx=25, pady=(16, 10))
+        header.pack(fill="x", padx=25, pady=(16, 4))
+        tech_art.neon_line(self.root, 3, 1280).pack(fill="x", padx=25, pady=(0, 6))      # 標題列底下的霓虹線
 
         brand_col = ctk.CTkFrame(header, fg_color="transparent", height=1)
         brand_col.pack(side="left")
-        ctk.CTkLabel(brand_col, text="🔐 Smart Access Hub", font=ui_theme.font(ui_theme.FONT_SIZE_HERO, bold=True),
+        ctk.CTkLabel(brand_col, text=" Smart Access Hub", font=ui_theme.font(ui_theme.FONT_SIZE_HERO, bold=True),
+                     image=svg_icon.ctk_icon("smart_access", 30, ui_theme.pair("primary"), brand_col), compound="left",
                      text_color=ui_theme.pair("text"), anchor="w").pack(anchor="w")
         ui_theme.muted_label(brand_col, "邊緣運算門禁後臺系統").pack(anchor="w", pady=(2, 0))
         badges = ctk.CTkFrame(brand_col, fg_color="transparent", height=1)
@@ -142,7 +151,7 @@ class BackendManagerApp:
         self.clock_var = tk.StringVar(master=self.root, value="--:--:--")
         self.date_var = tk.StringVar(master=self.root, value="----/--/--")
         ctk.CTkLabel(clock_col, textvariable=self.clock_var, font=ui_theme.mono_font(ui_theme.FONT_SIZE_HERO),
-                     text_color=ui_theme.pair("text"), anchor="e").pack(anchor="e")
+                     text_color=ui_theme.pair("primary"), anchor="e").pack(anchor="e")
         ctk.CTkLabel(clock_col, textvariable=self.date_var, font=ui_theme.font(ui_theme.FONT_SIZE_SMALL),
                      text_color=ui_theme.pair("text_muted"), anchor="e").pack(anchor="e")
         if self.session is not None:
@@ -202,14 +211,20 @@ class BackendManagerApp:
 
         # (圖示, 標題, 說明, 強調色 token, 點擊要呼叫的函式)
         modules = [
-            ("📊", "營運狀態與尾隨監控", "今日打卡統計、安全警報、人臉辨識即時輸出", "success", self.open_dashboard),
-            ("👤", "員工帳號管理", "列出、停用、啟用、刪除員工帳號與角色", "info", self.open_account_admin),
-            ("📱", "遠端 QR Code 註冊", "產生動態安全碼，讓新進員工手機掃碼註冊", "warning", self.open_qr_registration),
-            ("🤖", "出缺勤查詢", "用聊天查考勤紀錄與異常事件（文件問答在前台；視窗另開獨立行程）", "primary",
+            ("smart_monitor", "Smart_Monitor 營運狀態與尾隨監控",
+             "今日打卡統計、安全警報、人臉辨識即時輸出", "mod_monitor", self.open_dashboard),
+            ("smart_accounts", "Smart_Accounts 員工帳號管理",
+             "列出、停用、啟用、刪除員工帳號與角色", "mod_accounts", self.open_account_admin),
+            ("smart_register", "Smart_Register 遠端 QR Code 註冊",
+             "產生動態安全碼，讓新進員工手機掃碼註冊", "mod_register", self.open_qr_registration),
+            ("smart_query", "Smart_Query 出缺勤查詢",
+             "用聊天查考勤紀錄與異常事件（文件問答在前台；視窗另開獨立行程）", "mod_query",
              self.open_assistant_window),
-            ("🗓️", "出勤報告", "每日出勤報告（可匯出 CSV）、AI 對話紀錄（審查有沒有答錯或幻覺）", "success",
+            ("smart_report", "Smart_Report 出勤報告",
+             "每日出勤報告（可匯出 CSV）、AI 對話紀錄（審查有沒有答錯或幻覺）", "mod_report",
              self.open_calendar),
-            ("📰", "出勤日報", "查看每天的出勤明細與 AI 摘要（排程時間在底部「⚙ 排程設定」）", "info",
+            ("smart_digest", "Smart_Digest 出勤日報",
+             "查看每天的出勤明細與 AI 摘要（排程時間在底部「⚙ 排程設定」）", "mod_digest",
              self.open_report),
         ]
         for idx, (icon, title, desc, accent, cmd) in enumerate(modules):
@@ -247,9 +262,9 @@ class BackendManagerApp:
         card = ui_theme.card(master, height=108)
         card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
         card.pack_propagate(False)
-        ctk.CTkLabel(card, text=icon, width=56, height=56, corner_radius=12, fg_color=ui_theme.pair(accent),
-                     font=("Segoe UI Emoji", 26), text_color=ui_theme.pair("on_status")).pack(
-            side="left", padx=(22, 16))
+        token = accent if accent in ui_theme.COLORS["dark"] else "info"
+        ctk.CTkLabel(card, text="", image=tech_art.badge(icon, 60, token, card),
+                     fg_color=ui_theme.pair("card")).pack(side="left", padx=(14, 6))
         text_col = ctk.CTkFrame(card, fg_color="transparent", height=1)
         text_col.pack(side="left", fill="x", expand=True, padx=(0, 16))      # 不 fill y：文字在卡片裡垂直置中
         ctk.CTkLabel(text_col, text=title, font=ui_theme.font(ui_theme.FONT_SIZE_TITLE, bold=True),
@@ -498,7 +513,7 @@ class BackendManagerApp:
     # --- 頁面 1：營運狀態與尾隨監控 ---
     def open_dashboard(self):
         """切到儀表板頁：左邊統計與打卡清單，右邊人臉辨識即時輸出"""
-        self._open_page("dashboard", "📊 營運狀態與尾隨監控", self._build_dashboard)
+        self._open_page("dashboard", "Smart_Monitor 營運狀態與尾隨監控", self._build_dashboard)
 
     def _build_dashboard(self, body):
         self.dash_page = body
@@ -568,6 +583,14 @@ class BackendManagerApp:
         self.link_service_label = ui_theme.muted_label(box, "")
         self.link_service_label.configure(anchor="w")
         self.link_service_label.pack(fill="x", padx=15, pady=(6, 6))
+        # 連線檢查：前台連不上時，一鍵檢查網路線位址、連線服務與自動尋找有沒有在聽、防火牆規則、前台最後一次心跳
+        check_row = ctk.CTkFrame(box, fg_color="transparent")
+        check_row.pack(fill="x", padx=15, pady=(0, 6))
+        self.link_check_label = ui_theme.muted_label(check_row, "前台連不上時，按右邊的按鈕檢查網路線與防火牆")
+        self.link_check_label.configure(anchor="w", justify="left", wraplength=620)
+        self.link_check_label.pack(side="left", fill="x", expand=True)
+        self.link_check_btn = ui_theme.secondary_button(check_row, "🔍 檢查連線", self._press_check_link, width=130)
+        self.link_check_btn.pack(side="right")
         # 前台人臉辨識的遠端停止／恢復：前台只有「啟動」按鈕，停止由這裡下指令（前台同步時套用）
         control = ctk.CTkFrame(box, fg_color="transparent")
         control.pack(fill="x", padx=15, pady=(0, 12))
@@ -579,15 +602,6 @@ class BackendManagerApp:
         self.face_control_btn = ui_theme.secondary_button(control, "", self._press_face_control, width=170)
         self.face_control_btn.pack(side="right")
         self._refresh_face_control()
-        # 前台知識庫問答的開放與關閉：預設關閉，開放前要看過警告（前台是公開的螢幕與鍵盤，沒有登入）
-        chat_row = ctk.CTkFrame(box, fg_color="transparent")
-        chat_row.pack(fill="x", padx=15, pady=(0, 12))
-        self.chat_control_label = ui_theme.muted_label(chat_row, "")
-        self.chat_control_label.configure(anchor="w", justify="left", wraplength=520)
-        self.chat_control_label.pack(side="left", fill="x", expand=True)
-        self.chat_control_btn = ui_theme.secondary_button(chat_row, "", self._press_chat_control, width=170)
-        self.chat_control_btn.pack(side="right")
-        self._refresh_chat_control()
         # 知識庫文件管理：文件問答搬到前台之後，管理者在這裡放文件與重新掃描（文件放在 data/docs）
         docs_row = ctk.CTkFrame(box, fg_color="transparent")
         docs_row.pack(fill="x", padx=15, pady=(0, 12))
@@ -646,6 +660,27 @@ class BackendManagerApp:
             print(f"[後台] 開啟文件資料夾失敗：{type(e).__name__}")
             ui_theme.show_message(self.root, "知識庫文件", "無法開啟文件資料夾。", "warning")
 
+    def _press_check_link(self):
+        """在背景檢查後台這一側的連線條件（唯讀、不改任何設定），結果顯示在按鈕旁。"""
+        self.link_check_btn.configure(state="disabled")
+        self.link_check_label.configure(text="檢查中…")
+
+        def work():
+            try:
+                lines = link_check_lines(network_check.run_checks(), front_status.load())
+            except Exception as e:  # noqa: BLE001  檢查本身出錯也只顯示型別
+                lines = [f"檢查失敗（{type(e).__name__}）"]
+            if self._alive:
+                self.root.after(0, lambda: self._show_link_check(lines))
+
+        threading.Thread(target=work, daemon=True, name="link-check").start()
+
+    def _show_link_check(self, lines):
+        if not self._alive:
+            return
+        self.link_check_btn.configure(state="normal")
+        self.link_check_label.configure(text=NEWLINE.join(lines))
+
     def _request_docs_refresh(self):
         """通知知識庫服務重新掃描文件（服務約 1 秒內開始，結果顯示在旁邊）。"""
         try:
@@ -655,25 +690,6 @@ class BackendManagerApp:
             ui_theme.show_message(self.root, "知識庫文件", "無法通知知識庫服務，請稍後再試。", "warning")
             return
         self.notice("已通知知識庫服務重新掃描文件，結果會顯示在「前台連線」卡片。")
-
-    def _refresh_chat_control(self):
-        """依後台目前的設定更新「開放／關閉前台知識庫問答」按鈕與說明。"""
-        if front_control.chat_enabled():
-            self.chat_control_btn.configure(text="⏸ 關閉前台問答")
-            self.chat_control_label.configure(
-                text="前台知識庫問答：已開放（前台使用者可以問 data/docs 裡的所有文件；問答會記進"
-                     "「出勤報告」的對話紀錄，最慢約 10 秒套用）")
-        else:
-            self.chat_control_btn.configure(text="▶ 開放前台問答")
-            self.chat_control_label.configure(text="前台知識庫問答：未開放（預設關閉；開放前會先提醒文件範圍）")
-
-    def _press_chat_control(self):
-        """開放前先確認警告（所有文件都會讓前台使用者問到）；關閉不用確認。"""
-        if front_control.chat_enabled():
-            front_control.set_chat_enabled(False)
-        elif ui_theme.confirm(self.root, "開放前台知識庫問答", CHAT_OPEN_WARNING, ok_text="開放", danger=True):
-            front_control.set_chat_enabled(True)
-        self._refresh_chat_control()
 
     def _cancel_face_control(self):
         self.face_control_confirming = False
@@ -700,7 +716,6 @@ class BackendManagerApp:
             reason = f"：{self.link_note}" if self.link_note else "（正在嘗試啟動）"
             self.link_service_label.configure(text=f"🔴 後台連線服務未執行{reason}")
         self._refresh_face_control()
-        self._refresh_chat_control()
         self._refresh_docs_label()
         events = dashboard_stats.get_recent_events(limit=30)
         if events is not None:
@@ -743,7 +758,7 @@ class BackendManagerApp:
             self.account_view = account_panel.AccountPanel(body, operator)
             self.account_view.pack(fill="both", expand=True)
 
-        self._open_page("accounts", "👤 員工帳號管理", build)
+        self._open_page("accounts", "Smart_Accounts 員工帳號管理", build)
 
     def open_calendar(self):
         """切到出勤報告頁"""
@@ -752,7 +767,7 @@ class BackendManagerApp:
             self.calendar_view = calendar_panel.CalendarPanel(body, reviewer=who)
             self.calendar_view.pack(fill="both", expand=True)
 
-        self._open_page("calendar", "🗓️ 出勤報告", build)
+        self._open_page("calendar", "Smart_Report 出勤報告", build)
 
     def _tick_digest(self):
         """每分鐘看一次該不該產生科技早報與出勤日報（到時間、當天要上班、還沒有那份才會產生）。"""
@@ -790,7 +805,7 @@ class BackendManagerApp:
                                                         on_close=self.show_home)
             self.report_view.pack(fill="both", expand=True)
 
-        self._open_page("report", "📋 出勤日報", build)
+        self._open_page("report", "Smart_Digest 出勤日報", build)
 
     def open_schedule(self):
         """切到排程設定頁（出勤日報與科技早報的排程時間、立即產生、全本地模式）；入口是底部「⚙ 排程設定」。"""
@@ -841,7 +856,7 @@ class BackendManagerApp:
     def open_qr_registration(self):
         """切到 QR Code 註冊頁：每 5 秒（背景）向註冊伺服器取新 Token、偵測所有網路位址並重畫 QR Code；
         所有位址都是註冊通道，可在選單切換"""
-        self._open_page("qr", "📱 手機遠端註冊 - 動態安全碼", self._build_qr_page)
+        self._open_page("qr", "Smart_Register 手機遠端註冊 - 動態安全碼", self._build_qr_page)
 
     def _build_qr_page(self, reg_window):
         self.reg_page = reg_window

@@ -29,8 +29,8 @@ from shared.verify_common import Console, QuitSession, SkipStep, atomic_write, m
 LOG_TAIL_LINES = 30                     # 每個記錄檔看最後幾行
 MAX_LOG_HITS = 15                       # 每個記錄檔最多列幾行
 _LOG_PATTERN = re.compile(r"ERROR|WARN|Traceback|Exception|Error\b|失敗|錯誤")
-PROCESSES = (("儀表板", "access.front_dashboard"), ("辨識程式", "access.terminal_app"),
-             ("連線代理", "access.front_agent"))
+PROCESSES = (("儀表板", ("access.front_qt", "access.front_dashboard")), ("辨識程式", ("access.terminal_app",)),
+             ("連線代理", ("access.front_agent",)))      # QML 版或舊的 Tk 版儀表板都算
 ALERT_LABELS = (("tailgate", "尾隨（三聲急促高音）"), ("spoof", "非活體（兩聲低沉長音）"),
                 ("no_scan_walkby", "經過未打卡（單聲中音）"))
 
@@ -67,7 +67,7 @@ def describe_monitors(monitors):
 def running_processes(process_iter):
     """儀表板、辨識程式、連線代理是否在執行：看命令列有沒有對應的模組名稱。process_iter 回傳命令列字串清單。"""
     lines = list(process_iter())
-    return {label: any(module in line for line in lines) for label, module in PROCESSES}
+    return {label: any(m in line for line in lines for m in modules) for label, modules in PROCESSES}
 
 
 def _psutil_command_lines():
@@ -152,6 +152,46 @@ def collect_checks():
     return results
 
 
+QA_QUESTIONS = (("talk", "Smart_Chat 一般對話", "請用一句話介紹你自己"),
+                ("chat", "Smart_RAG 知識庫問答", "公司員工繼續工作滿一年，每年有幾天特別休假？"))
+QA_TIMEOUT_SECONDS = 240.0          # 每一題最久等多久（第一題後台要載入模型）
+
+
+def qa_probe(controllers=None, clock=time.time, sleep=time.sleep, timeout=QA_TIMEOUT_SECONDS):
+    """問答連線測試：用前台真正的問答控制器各問一題，回報通過與否、花幾秒、回答長度（不印回答內容）。
+    後台兩個開關預設關閉，沒開放就回報「未開放」；前台代理要在跑（它負責同步開關）。回傳報告用的文字行。"""
+    from access import front_chat
+    from access.front_store import FrontStore
+
+    if controllers is None:
+        store = FrontStore(os.path.join(paths.RUNTIME_DIR, "front_agent.db"))
+        controllers = {"talk": front_chat.FrontTalk(store), "chat": front_chat.FrontChat(store)}
+    lines = []
+    for key, label, question in QA_QUESTIONS:
+        controller = controllers[key]
+        gate = controller.availability()
+        if gate != front_chat.IDLE:
+            why = "後台沒開放（或前台代理還沒同步到）" if gate == front_chat.CLOSED else "後台離線"
+            lines.append(f"{label}：略過，{why}")
+            continue
+        started = clock()
+        if not controller.submit(question):
+            lines.append(f"{label}：失敗，送不出問題")
+            continue
+        view = controller.view()
+        while view["state"] in (front_chat.ASKING, front_chat.PREPARING) and clock() - started < timeout:
+            sleep(0.5)
+            view = controller.view()
+        seconds = clock() - started
+        if view["state"] == front_chat.ANSWER and view["answer"]:
+            extra = f"，來源 {len(view['sources'])} 份" if key == "chat" else ""
+            lines.append(f"{label}：通過，{seconds:.1f} 秒，回答 {len(view['answer'])} 字{extra}")
+        else:
+            lines.append(f"{label}：失敗（{view['state']}：{view['message']}），{seconds:.1f} 秒")
+        controller.clear()                                       # 前台不留任何對話
+    return lines
+
+
 def _play_voice():
     """試聽打卡語音一次（系統呼叫）。"""
     from access import audio_player
@@ -178,7 +218,7 @@ def render(started, sections):
 
 def run(console, now=datetime.datetime.now, ask_sounds=True, collect=collect_checks, monitors_fn=None,
         process_fn=_psutil_command_lines, read_heartbeat=None, read_offset=_read_clock_offset, logs_dir=None,
-        play_voice=_play_voice, play_alert=_play_alert, camera_fn=None, out_dir=None):
+        play_voice=_play_voice, play_alert=_play_alert, camera_fn=None, out_dir=None, qa_fn=None):
     """收集並寫報告；回傳報告路徑。各系統相依都可傳入測試用的假函式。"""
     from access import front_agent
     started = now()
@@ -211,6 +251,14 @@ def run(console, now=datetime.datetime.now, ask_sounds=True, collect=collect_che
         log_lines += [f"　{hit}" for hit in hits]
     sections.append(("記錄檔（runtime\\logs）", log_lines or ["沒有記錄檔"]))
     save()
+    if qa_fn is not None:                                        # 問答連線測試：命令列入口才會帶（測試預設不跑）
+        console.say("\n== 問答連線測試：Smart_Chat 與 Smart_RAG 各問一題（第一題後台要載入模型，最久約 4 分鐘）==")
+        try:
+            qa_lines = qa_fn()
+        except Exception as e:  # noqa: BLE001  單項出意外不中斷
+            qa_lines = [f"問答連線測試出錯（{type(e).__name__}）"]
+        sections.append(("問答連線測試（Smart_Chat、Smart_RAG）", qa_lines))
+        save()
     if ask_sounds:
         human = []
         try:
@@ -252,7 +300,7 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print("前台驗證中，請稍候（自我檢查要載入模型，約 20 到 60 秒）…")
     start = time.time()
-    path = run(Console())
+    path = run(Console(), qa_fn=qa_probe)
     print(f"\n完成（{time.time() - start:.0f} 秒）。報告：{path}")
     print("前台不上網：請把這個檔案用隨身碟複製到後台電腦的 runtime\\verification\\ 資料夾，")
     print("或把內容貼給 Claude，一起對照後台的驗證報告。")

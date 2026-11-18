@@ -244,3 +244,21 @@ def test_a_search_waits_while_the_documents_are_being_rescanned(docs, make_store
     syncing.join(5)
     searching.join(5)
     assert done and done[0]
+
+
+def test_the_top_vector_hit_is_kept_even_when_keywords_only_match_common_words(docs, make_store):
+    """問句裡的常用詞（如「有」）讓很多無關區塊拿到關鍵字名次時，向量第一名的正確條文仍要留在候選裡。"""
+    for i in range(30):
+        put(docs, f"n{i}.txt", f"第{i}號公告：有人有事有東西，有空就有答案，有{i}件。")
+    put(docs, "target.txt", "特別休假依年資給予七日。")
+
+    def embed(texts):
+        out = np.zeros((len(texts), DIM), dtype=np.float32)
+        for row, text in enumerate(texts):
+            out[row, 0 if ("特" in text or "休" in text) else 1 + (hash(text) % (DIM - 1))] = 1.0
+        return out
+
+    store = make_store(embed)
+    store.sync()
+    sources = [h.chunk["source"] for h in store.search("特休有幾天？", 20)]
+    assert "target.txt" in sources

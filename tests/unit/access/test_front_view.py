@@ -155,6 +155,10 @@ def test_module_tiles_preview_the_news_the_last_punch_and_the_worst_status():
     ok_status = [("後台連線", "後台連線中", "success"), ("鏡頭", "正常", "success")]
     tiles = fv.module_tiles(news, [("08:03", "陳大華", "早安"), ("08:01", "王小明", "早安")], ok_status)
     assert [t["key"] for t in tiles] == ["news", "greetings", "status"]          # 沒給 chat_state 就沒有問答卡片
+    both = fv.module_tiles(news, [], ok_status, chat_state="idle", talk_state="closed")
+    assert [t["key"] for t in both] == ["talk", "chat", "news", "greetings", "status"]     # Smart_Chat、Smart_RAG 在前
+    assert [t["title"] for t in both[:2]] == ["Smart_Chat", "Smart_RAG"]
+    assert both[0]["summary"] == "目前未開放" and both[0]["accent"] == "warning" and both[1]["accent"] == "info"
     assert tiles[0]["summary"] == "某則新聞標題" and tiles[1]["summary"] == "陳大華 早安"
     assert tiles[2]["summary"] == "全部正常" and tiles[2]["accent"] == "success"
 
@@ -181,3 +185,12 @@ def test_news_cards_carry_only_safe_https_links_and_none_in_local_only_mode():
     cards = fv.news_view(brief, today, 0, per_page=4)["cards"]
     assert [c["link"] for c in cards] == ["https://example.com/a", "", "", ""]
     assert all(c["link"] == "" for c in fv.news_view(brief, today, 0, per_page=4, local_only=True)["cards"])
+
+
+def test_the_offline_reason_shows_in_the_status_row_but_not_in_the_short_header_badge():
+    tone, text = fv.link_view(False, 2, "通行碼不被後台接受")
+    assert tone == "warning" and "通行碼不被後台接受" in text and "已暫存 2 筆" in text
+    assert fv.link_view(False, 0)[1] == "後台離線，打卡先暫存"
+    rows = fv.status_rows(False, 0, 10, {}, "憑證指紋不符")
+    assert "憑證指紋不符" in rows[0][1]
+    assert fv.status_rows(True, 0, 10, {}, "舊原因")[0][1] == "後台連線中"      # 連上了就不顯示原因

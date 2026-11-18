@@ -1,4 +1,5 @@
 """後台連線服務：通行碼驗證、人臉快照與版本、晨報、事件收件（打卡用前台時間、去重、尾隨證據照、各種錯誤輸入）。"""
+import time
 import base64
 import datetime as dt
 import sqlite3
@@ -108,7 +109,8 @@ def test_morning_carries_the_backs_local_only_switch_as_a_plain_boolean(client, 
     monkeypatch.delenv(network_policy.ENV_NAME, raising=False)
     body = client.get("/v1/morning", headers=AUTH).get_json()
     assert body["local_only"] is False
-    assert set(body) == {"ok", "brief", "local_only", "recognition_enabled", "chat_enabled", "server_time"}
+    assert set(body) == {"ok", "brief", "local_only", "recognition_enabled", "chat_enabled", "talk_enabled",
+                       "verify_request", "server_time"}
     network_policy.set_local_only(True)
     assert client.get("/v1/morning", headers=AUTH).get_json()["local_only"] is True
     digest_store.save_brief({"date": "2026-11-10", "generated_at": "x", "news": [], "news_problem": ""})
@@ -289,3 +291,51 @@ def test_morning_carries_the_backs_recognition_switch_as_a_plain_boolean(client,
     assert client.get("/v1/morning", headers=AUTH).get_json()["recognition_enabled"] is False      # 有晨報時也帶
     front_control.set_recognition_enabled(True)
     assert client.get("/v1/morning", headers=AUTH).get_json()["recognition_enabled"] is True
+
+
+# --- 前台自動驗證報告 ---
+
+def test_the_back_asks_for_a_verification_and_only_accepts_the_report_for_that_request(client, monkeypatch, tmp_path):
+    from admin import front_verify_report
+    from shared import front_control
+    monkeypatch.setattr(paths, "FRONT_CONTROL_PATH", str(tmp_path / "control.json"))
+    monkeypatch.setattr(paths, "RUNTIME_DIR", str(tmp_path))
+    assert client.get("/v1/morning", headers=AUTH).get_json()["verify_request"] == 0
+    stale = client.post("/v1/verify-report", headers=AUTH, json={"request": 5, "lines": ["x"]})
+    assert stale.status_code == 409                                       # 後台沒下達過請求：不收
+    stamp = front_control.request_verify()
+    assert client.get("/v1/morning", headers=AUTH).get_json()["verify_request"] == stamp
+    secret = "Z" * 50
+    ok = client.post("/v1/verify-report", headers=AUTH,
+                     json={"request": stamp, "lines": ["Smart_Chat 一般對話：通過", f"通行碼 {secret}"], "x": 1})
+    assert ok.status_code == 200
+    text = front_verify_report.read(stamp)
+    assert "Smart_Chat 一般對話：通過" in text and secret not in text
+    assert client.post("/v1/verify-report", headers=AUTH, json={"request": stamp, "lines": []}).status_code == 400
+    old = client.post("/v1/verify-report", headers=AUTH, json={"request": stamp - 1, "lines": ["x"]})
+    assert old.status_code == 409
+
+
+def test_the_discovery_keeper_retries_until_the_port_is_free_and_stops_cleanly():
+    attempts, made = [], []
+
+    class Responder:
+        port = 8772
+
+        def stop(self):
+            made.append("stopped")
+
+    def factory(*args):
+        attempts.append(args)
+        if len(attempts) < 3:
+            raise OSError("port busy")
+        return Responder()
+
+    keeper = link_server.DiscoveryKeeper("169.254.1.2", 8770, "ab" * 32, factory=factory, retry=0.01).start()
+    end = time.time() + 3
+    while time.time() < end and len(attempts) < 3:
+        time.sleep(0.01)
+    keeper._thread.join(2)
+    assert len(attempts) == 3 and attempts[0] == ("169.254.1.2", 8770, "ab" * 32)
+    keeper.stop()
+    assert made == ["stopped"]

@@ -73,11 +73,19 @@ def screenshot():
         top = widget.winfo_toplevel()
         top.deiconify()
         top.lift()
+        try:
+            top.attributes("-topmost", True)      # 截的是螢幕畫面：視窗被別的視窗（編輯器）蓋住就會截到別人的畫面
+        except Exception:  # noqa: BLE001, S110
+            pass
         for _ in range(15):                       # 等淡入淡出動畫與重繪結束再截圖
             top.update()
             time.sleep(0.04)
         x, y, w, h = top.winfo_rootx(), top.winfo_rooty(), top.winfo_width(), top.winfo_height()
         img = ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
+        try:
+            top.attributes("-topmost", False)
+        except Exception:  # noqa: BLE001, S110
+            pass
         path = os.path.join(out_dir, f"{name}.png")
         img.save(path)
         assert sum(ImageStat.Stat(img.convert("L")).stddev) > 1, f"{name} 畫面是空白的"
@@ -160,3 +168,12 @@ def click_button():
         raise AssertionError(f"找不到按鈕：{label}")
 
     return click
+
+
+@pytest.fixture(autouse=True)
+def no_real_news_fetch(monkeypatch):
+    """整合測試的視窗不連真的新聞網站（連線慢或被擋時背景執行緒會拖到測試結束後行程還退不出去）。"""
+    from admin import morning_brief
+
+    monkeypatch.setattr(morning_brief, "build_brief", lambda today, **kw: {
+        "date": today.isoformat(), "generated_at": "", "news": [], "news_problem": "測試不連網", "news_tries": 1})

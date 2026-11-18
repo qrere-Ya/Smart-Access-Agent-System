@@ -86,12 +86,12 @@ def test_the_card_opens_the_digest_and_the_footer_button_opens_the_schedule(root
     app = BackendManagerApp(root)
     pump(root)
     texts = texts_of(root)
-    assert "出勤日報" in texts and "⚙ 排程設定" in texts
+    assert "Smart_Digest 出勤日報" in texts and "⚙ 排程設定" in texts
     assert "出勤日報與科技早報" not in texts and "📋 出勤日報" not in texts       # 舊的卡片名稱與底部按鈕不見了
     assert not {"🌅 科技早報", "⚙ 排程"} & set(texts)
     app.open_report("digest")                                    # 卡片的點擊目標：直接看出勤日報
     pump(root)
-    assert app.page_key == "report" and "📋 出勤日報" in texts_of(root)
+    assert app.page_key == "report" and "Smart_Digest 出勤日報" in texts_of(root)
     first = app.report_view
     app.open_report("morning")                                   # 舊呼叫端傳 morning 也只顯示日報，且不重複建
     assert app.report_view is first and app.report_view.tabs.get() == "📋 出勤日報" and "morning" not in first.bubbles
@@ -127,7 +127,7 @@ def test_the_real_card_and_footer_button_navigate_between_the_two_pages(root, db
     root.deiconify()
     app = BackendManagerApp(root)
     pump(root)
-    card_title = _find(root, "出勤日報")
+    card_title = _find(root, "Smart_Digest 出勤日報")
     assert card_title is not None
     getattr(card_title, "_label", card_title).event_generate("<Button-1>", x=4, y=4)      # CTk 的點擊綁在內部標籤上
     pump(root, 0.5)

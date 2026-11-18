@@ -135,3 +135,61 @@ def test_report_is_written_before_the_sound_questions(tmp_path):
            play_voice=lambda: None, play_alert=lambda k: None, camera_fn=lambda: True,
            out_dir=str(tmp_path / "verification"))
     assert seen["files"] == ["前台_2026-11-13_0900.md"] and "前台自我檢查" in seen["body"]
+
+
+class QAController:
+    def __init__(self, availability="idle", states=None, answer="好", sources=()):
+        self._availability, self.states = availability, list(states or [("answer", "")])
+        self.answer, self.sources, self.asked, self.cleared = answer, list(sources), [], 0
+
+    def availability(self):
+        return self._availability
+
+    def submit(self, question):
+        self.asked.append(question)
+        return True
+
+    def view(self):
+        state, message = self.states[0] if len(self.states) == 1 else self.states.pop(0)
+        return {"state": state, "message": message, "answer": self.answer if state == "answer" else "",
+                "sources": self.sources, "can_ask": True}
+
+    def clear(self):
+        self.cleared += 1
+
+
+def test_the_qa_probe_reports_pass_closed_and_failure_without_printing_the_answer():
+    ok_talk = QAController(answer="我是助理。")
+    rag = QAController(availability="closed")
+    lines = fv.qa_probe({"talk": ok_talk, "chat": rag}, clock=iter(range(0, 100)).__next__, sleep=lambda s: None)
+    assert "Smart_Chat 一般對話：通過" in lines[0] and "回答 5 字" in lines[0] and "我是助理" not in lines[0]
+    assert "Smart_RAG 知識庫問答：略過，後台沒開放" in lines[1] and rag.asked == [] and ok_talk.cleared == 1
+    bad = QAController(states=[("error", "這一題沒有成功")])
+    sourced = QAController(answer="七日", sources=["勞動基準法", "請假辦法"])
+    lines = fv.qa_probe({"talk": bad, "chat": sourced}, clock=iter(range(0, 100)).__next__, sleep=lambda s: None)
+    assert "失敗（error：這一題沒有成功）" in lines[0] and "來源 2 份" in lines[1]
+    offline = fv.qa_probe({"talk": QAController(availability="offline"), "chat": QAController(availability="offline")})
+    assert all("後台離線" in line for line in offline)
+
+
+def test_the_qa_probe_gives_up_after_the_timeout():
+    stuck = QAController(states=[("asking", "查詢中…")])
+    ticks = iter(range(0, 1000, 100))
+    lines = fv.qa_probe({"talk": stuck, "chat": QAController(availability="closed")}, clock=lambda: next(ticks),
+                        sleep=lambda s: None, timeout=240)
+    assert "失敗（asking：查詢中…）" in lines[0]
+
+
+def test_the_report_has_a_qa_section_only_when_a_probe_is_given(tmp_path):
+    _path, plain, _played, _said, _t = run_report(tmp_path / "a", ask_sounds=False)
+    assert "問答連線測試" not in plain                                    # 測試與一般呼叫預設不跑，不會碰真的資料庫
+    _path, text, _played, said, _t = run_report(tmp_path / "b", ask_sounds=False,
+                                                qa_fn=lambda: ["Smart_Chat 一般對話：通過，3.2 秒，回答 20 字"])
+    assert "問答連線測試（Smart_Chat、Smart_RAG）" in text and "通過，3.2 秒" in text
+    assert any("問答連線測試" in line for line in said)
+
+    def boom():
+        raise OSError("連不上")
+
+    _path, text, _played, _said, _t = run_report(tmp_path / "c", ask_sounds=False, qa_fn=boom)
+    assert "問答連線測試出錯（OSError）" in text and "連不上" not in text           # 出錯不中斷也不洩漏內容

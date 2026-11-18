@@ -5,6 +5,8 @@ web_server.py：手機 QR Code 遠端註冊伺服器（Flask，port 5000）。
   - 後台產生 8 碼一次性 Token（60 秒有效，僅限本機呼叫）
   - 手機掃 QR Code 帶 Token 開啟註冊頁，驗證通過才顯示表單
   - 接收姓名、員工編號、性別與照片，萃取人臉特徵後寫入資料庫，成功後 Token 立即作廢
+  - 網路卡頓時手機重送同一筆（同一個 Token、同一個員工編號）：10 分鐘內當作「已完成」回成功，不會再寫一筆；
+    同一張臉已經註冊在別的姓名或編號下也會拒絕（避免卡頓後改打字再註冊一次，多出同一個人的第二筆）
   - 開啟時所有網卡位址都是註冊通道（shared.phone_address）：啟動時印出每個可連的網址，
     Wi-Fi Direct 熱點與區網優先、VPN 排最後
 
@@ -49,6 +51,9 @@ def print_channels(port=5000, addresses=None):
 
 # --- Token 管理 ---
 valid_tokens = {} # { "token_string": expiry_timestamp }
+_done_tokens = {}  # 已用來註冊成功的 Token → (員工編號, 姓名, 時間)；手機網路卡頓重送時要回成功而不是失敗
+DONE_KEEP_SECONDS = 600
+FACE_DUPLICATE_DISTANCE = 0.9      # 比登入門檻（1.0）嚴一點：同一個人再註冊的距離通常遠小於這個數字
 
 def verify_token(token):
     """驗證 Token 是否存在且未過期，過期的順便刪除"""
@@ -91,6 +96,15 @@ def index():
 _register_lock = threading.Lock()   # 同一時間只處理一個註冊：重複送出的請求排隊，等前一個做完才看到 Token 已作廢
 
 
+def _already_registered(token, emp_id):
+    """這個 Token 在 DONE_KEEP_SECONDS 內剛成功註冊過、而且員工編號相同，回傳那位的姓名；否則回傳 None。"""
+    now = time.time()
+    for key in [k for k, (_e, _n, ts) in _done_tokens.items() if now - ts > DONE_KEEP_SECONDS]:
+        del _done_tokens[key]
+    done = _done_tokens.get(token) if token else None
+    return done[1] if done and emp_id and done[0] == emp_id else None
+
+
 @app.route('/api/register', methods=['POST'])
 def api_register():
     with _register_lock:
@@ -100,8 +114,11 @@ def api_register():
 def _handle_register():
     """處理手機端註冊請求：驗證 Token、萃取人臉特徵、寫入資料庫，成功後作廢 Token"""
     try:
-        # 1. 驗證 Token
+        # 1. 驗證 Token（同一個 Token 剛成功註冊過、員工編號相同：手機重送，當作已完成）
         token = request.form.get('token')
+        again = _already_registered(token, request.form.get('emp_id'))
+        if again:
+            return jsonify({"status": "success", "message": f"註冊已經完成，歡迎加入，{again}。您可以關閉此頁面了。"})
         if not verify_token(token):
             return jsonify({"status": "fail", "message": "安全驗證失敗：授權碼已失效，請重新掃描 QR Code"}), 403
 
@@ -130,15 +147,23 @@ def _handle_register():
             aligned_face = vc.face_align(rgb_img, landmarks)
             face_dna = vc.feature_extract(aligned_face)
 
-        # 4. 寫入資料庫（姓名或員工編號重複會被拒絕）
+        # 4. 同一張臉已經註冊在別的姓名或編號下就拒絕（卡頓後改打字再註冊一次會多出同一個人的第二筆）
+        existing = db.registered_name_for_face(face_dna, FACE_DUPLICATE_DISTANCE)
+        if existing:
+            print("[Web Server] 拒絕重複註冊：這張臉已經註冊過")
+            message = f"註冊失敗：這張臉已經註冊為「{existing}」，如需更新請聯絡管理員。"
+            return jsonify({"status": "fail", "message": message}), 409
+
+        # 5. 寫入資料庫（姓名或員工編號重複會被拒絕）
         success, db_message = db.register_user(name, gender, emp_id, face_dna)
 
         if not success:
             print(f"[Web Server] 拒絕重複註冊: {db_message}")
             return jsonify({"status": "fail", "message": db_message}), 409
 
-        # 5. 註冊成功，Token 立即作廢
+        # 6. 註冊成功，Token 立即作廢，並記下它剛完成了誰的註冊（重送時回成功）
         valid_tokens.pop(token, None)
+        _done_tokens[token] = (emp_id, name, time.time())
 
         print(f"[Web Server] 新員工註冊成功: {name} ({emp_id}) - Token 已核銷")
         return jsonify({"status": "success", "message": f"註冊成功! 歡迎加入，{name}。您可以關閉此頁面了。"})

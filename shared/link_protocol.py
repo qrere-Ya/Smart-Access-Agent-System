@@ -200,7 +200,8 @@ def validate_heartbeat(data):
 
 MAX_CHAT_QUESTION = 300                    # 前台問題的字數上限（只收純文字）
 MAX_CHAT_ANSWER = 4000                     # 回答的字數上限
-CHAT_PATH = "/chat"
+CHAT_PATH = "/chat"                         # 前台知識庫問答（Smart_RAG）
+TALK_PATH = "/talk"                         # 前台一般對話（Smart_Chat），形式相同、只有語言模型
 _JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -224,3 +225,28 @@ def validate_chat_question(data):
 def valid_job_id(job_id):
     """工作編號是 32 位小寫十六進位（secrets.token_hex(16)）。"""
     return isinstance(job_id, str) and bool(_JOB_ID.match(job_id))
+
+
+# --- 前台自動驗證報告（後台下達請求、前台跑完主動回傳；只有短文字行，沒有檔案）---
+
+VERIFY_REPORT_PATH = "/verify-report"
+MAX_REPORT_LINES = 60
+MAX_REPORT_LINE = 300
+
+
+def validate_verify_report(data):
+    """後台：驗證前台回傳的自動驗證報告，回傳 (請求編號, 整理過的文字行)；不合格丟 ProtocolError。
+    只收 request（正整數）與 lines（短字串清單）；去掉控制字元，超長的行截短，其他欄位一律丟棄。"""
+    if not isinstance(data, dict):
+        raise ProtocolError("報告要是 JSON 物件")
+    request, lines = data.get("request"), data.get("lines")
+    if not isinstance(request, int) or isinstance(request, bool) or request <= 0:
+        raise ProtocolError("request 要是正整數")
+    if not isinstance(lines, list) or not lines or len(lines) > MAX_REPORT_LINES:
+        raise ProtocolError("lines 要是 1 到 60 行的清單")
+    clean = []
+    for line in lines:
+        if not isinstance(line, str):
+            raise ProtocolError("每一行都要是文字")
+        clean.append("".join(c for c in line if c.isprintable())[:MAX_REPORT_LINE])
+    return request, clean

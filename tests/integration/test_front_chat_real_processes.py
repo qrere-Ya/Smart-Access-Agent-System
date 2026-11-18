@@ -114,7 +114,8 @@ def wait_for(chat, states, seconds=420):
 def test_1_it_is_closed_by_default_on_the_back(back, front):
     """後台預設不開放：前台就算以為開放（同步沒到），送出也只會得到未開放。"""
     chat = front["chat"]
-    assert back["front_control"].chat_enabled() is False
+    assert back["front_control"].chat_enabled() is True              # 預設開放
+    back["front_control"].set_chat_enabled(False)                    # 這一項測的是後台關閉時前台被擋
     assert chat.submit(QUESTION) is True
     view = wait_for(chat, ("closed", "answer", "error"))
     assert view["state"] == "closed" and view["message"] == "知識庫問答目前未開放" and view["can_ask"] is False

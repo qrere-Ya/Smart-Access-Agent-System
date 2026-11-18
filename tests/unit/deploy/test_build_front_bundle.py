@@ -193,3 +193,18 @@ def test_repo_verify_batches_use_crlf_and_call_the_right_modules():
     assert b"admin.verify_day" in back and b"access.front_verify" in front
     guide = open(os.path.join(folder, "deploy", "front_template", "前台使用說明.txt"), encoding="utf-8").read()
     assert "前台驗證.bat" in guide
+
+
+def test_the_bundle_includes_the_svg_icons_the_front_dashboard_uses(fake):
+    """用假專案（不需要 models/）：assets/icons 裡的每個 SVG 都會進打包；真專案要有前台儀表板用到的那幾個。"""
+    root, _out = fake
+    names = ("smart_access", "smart_news", "smart_greet", "smart_status", "smart_chat", "smart_modules")
+    real_icons = os.path.join(paths.PROJECT_ROOT, "assets", "icons")
+    for name in names:
+        assert os.path.isfile(os.path.join(real_icons, f"{name}.svg")), name
+        target = root / "assets" / "icons" / f"{name}.svg"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("<svg/>", encoding="utf-8")
+    chosen = bb.collect(str(root))
+    for name in names:
+        assert f"assets/icons/{name}.svg" in chosen

@@ -138,6 +138,20 @@ def create_attendance_runtime(progress: Progress = print, settings: Optional[dic
     return Runtime(assistant, None, note, None, [])
 
 
+def create_talk_runtime(progress: Progress = print, settings: Optional[dict] = None, llm_builder=None) -> Runtime:
+    """前台 Smart_Chat 一般對話用：只有語言模型（沒有文件、資料庫、員工名單）。失敗丟出例外。"""
+    from rag.talk import Talker
+
+    progress("連接語言模型…")
+    model, note = (llm_builder or llm_mod.build_llm)(settings)
+    if model is None:
+        raise RuntimeError(note)
+    progress("準備完成")
+    from rag import mcp_client
+
+    return Runtime(Talker(model, tools=mcp_client.default_toolbox()), None, note, None, [])
+
+
 def refresh_documents(runtime: Runtime):
     """重新掃描文件資料夾，回傳這次的新增、修改、刪除與失敗清單。"""
     runtime.sync = runtime.store.sync()

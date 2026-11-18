@@ -99,3 +99,13 @@ def test_recent_events_return_none_when_the_database_cannot_be_read(monkeypatch,
     from admin import dashboard_stats
     monkeypatch.setattr(dashboard_stats.database_mgr, "DB_PATH", str(tmp_path / "missing" / "no.db"))
     assert dashboard_stats.get_recent_events() is None
+
+
+def test_the_link_check_text_lists_only_what_needs_attention_and_the_last_heartbeat_age():
+    from admin.backend_main import link_check_lines
+    ok = link_check_lines([("OK", "a"), ("OK", "b")], {"seen": True, "age": 12.7})
+    assert ok == ["檢查 2 項：全部正常", "前台最後一次心跳：12 秒前"]
+    bad = link_check_lines([("OK", "a"), ("FAIL", "UDP 8772 沒有人在聽"), ("WARN", "網路類別是公用")],
+                           {"seen": False, "age": None})
+    assert bad[0] == "檢查 3 項：2 項要處理" and "❌ UDP 8772 沒有人在聽" in bad and "還沒收到過前台的心跳" in bad[-1]
+    assert not any("a" == line for line in bad)

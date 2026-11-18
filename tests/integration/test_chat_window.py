@@ -128,7 +128,7 @@ def test_sample_question_buttons_send_their_text(window):
 def test_the_sample_questions_and_texts_are_about_attendance_only():
     from rag.chat_view import APP_TITLE, SAMPLE_QUESTIONS
 
-    assert APP_TITLE == "出缺勤查詢" and len(SAMPLE_QUESTIONS) == 6
+    assert APP_TITLE == "Smart_Query 出缺勤查詢" and len(SAMPLE_QUESTIONS) == 6
     for question in SAMPLE_QUESTIONS:
         assert not any(w in question for w in ("特別休假", "加班費", "颱風", "規定", "法規", "辦法", "文件"))
 
@@ -142,7 +142,7 @@ def test_the_fallback_reason_is_shown_as_a_note_and_document_scanning_is_gone(wi
 def test_the_window_has_no_document_button_and_says_documents_are_in_the_front(window):
     from rag.chat_status_bar import build_footer_hint
 
-    assert not hasattr(window, "docs_btn") and window.title() == "出缺勤查詢"
+    assert not hasattr(window, "docs_btn") and window.title() == "Smart_Query 出缺勤查詢"
     texts = []
 
     def walk(widget):
@@ -260,3 +260,30 @@ def test_closing_the_settings_dialog_cancels_its_pending_timers(window, settings
     assert pending, "開窗時應該排了兩個輪詢計時器"
     settings_dialog.destroy()
     assert not pending & set(window.tk.splitlist(window.tk.call("after", "info")))
+
+
+def test_the_sidebar_lists_this_sessions_questions_and_new_chat_clears_it(window, screenshot):
+    assert pump(window, lambda: window._controller is not None)
+    assert window.sidebar.count() == 0 and window.sidebar.empty is not None
+    assert screenshot(window, "後台_Smart_Query_歡迎")
+    window.send("王小明這個月遲到幾次？")
+    assert pump(window, lambda: window.sidebar.count() == 1)
+    assert window.sidebar.empty is None
+    assert pump(window, lambda: window.send_btn.cget("state") == "normal")
+    assert screenshot(window, "後台_Smart_Query_對話")
+    window.new_btn.invoke()
+    assert pump(window, lambda: window.sidebar.count() == 0 and window.sidebar.empty is not None)
+
+
+def test_the_font_size_switch_resizes_existing_and_new_bubbles(window):
+    assert pump(window, lambda: window._controller is not None)
+    window.send("問題一")
+    assert pump(window, lambda: len(window._bubbles) == 2)
+    window._header.font_switch.set("大")
+    window._header.font_switch._command("大")
+    assert window._font_size == 18
+    assert all(abs(b.box.cget("font")[1]) == 18 for b in window._bubbles)
+    assert pump(window, lambda: window.send_btn.cget("state") == "normal")
+    window.send("問題二")
+    assert pump(window, lambda: len(window._bubbles) == 4)
+    assert abs(window._bubbles[-1].box.cget("font")[1]) == 18

@@ -134,7 +134,7 @@ def _log_punch(recognition, current_time):
         audio_player.speak(outcome.calendar, "calendar")
     v_key = f"{name}_{outcome.voice_key or outcome.text}"
     if outcome.audio and (current_time - voice_history.get(v_key, 0)) > VOICE_RESET_TIME:
-        audio_player.speak(outcome.audio, f"user_{name}")
+        audio_player.speak(outcome.audio, f"user_{name}", pause=True)
         voice_history[v_key] = current_time
 
     last_seen_dict[name] = current_time

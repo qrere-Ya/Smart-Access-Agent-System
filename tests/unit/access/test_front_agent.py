@@ -45,6 +45,10 @@ class FakeClient:
         self.heartbeats.append(status)
         return {"ok": True}
 
+    def verify_report(self, request_id, lines):
+        self.reports = getattr(self, "reports", []) + [(request_id, lines)]
+        return {"ok": True}
+
     def send_event(self, event):
         outcome = self.script.pop(0) if self.script else None
         if isinstance(outcome, Exception):
@@ -367,3 +371,74 @@ def test_the_last_recognition_switch_is_kept_while_the_back_is_offline(store, tm
     agent.sync_once()
     client.fail_ping = fa.BackOffline("連不上")
     assert agent.sync_once() is False and store.get_meta(fa.BACK_RECOGNITION_KEY) is False
+
+
+# --- 後台下達的自動驗證 ---
+
+def wait_until(check, seconds=3):
+    import time
+    end = time.time() + seconds
+    while time.time() < end and not check():
+        time.sleep(0.02)
+    return check()
+
+
+def test_a_bigger_verify_request_runs_once_and_reports_back(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    calls = []
+    agent.verify_fn = lambda a: calls.append(1) or ["Smart_Chat 一般對話：通過"]
+    client.morning_body = {"ok": True, "brief": None, "verify_request": 100}
+    agent.sync_once()
+    assert wait_until(lambda: getattr(client, "reports", None))
+    assert client.reports == [(100, ["Smart_Chat 一般對話：通過"])] and store.get_meta(fa.VERIFY_DONE_KEY) == 100
+    agent.sync_once()                                                       # 同一個編號不再跑
+    agent.sync_once()
+    assert len(calls) == 1
+    client.morning_body = {"ok": True, "brief": None, "verify_request": 101}
+    agent.sync_once()
+    assert wait_until(lambda: len(client.reports) == 2) and len(calls) == 2
+
+
+def test_junk_or_zero_verify_requests_are_ignored_and_a_crash_is_reported_not_raised(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    agent.verify_fn = lambda a: (_ for _ in ()).throw(RuntimeError("boom"))
+    for junk in (0, -3, True, "9", None):
+        client.morning_body = {"ok": True, "brief": None, "verify_request": junk}
+        agent.sync_once()
+    assert getattr(client, "reports", None) is None
+    client.morning_body = {"ok": True, "brief": None, "verify_request": 7}
+    assert agent.sync_once() is True
+    assert wait_until(lambda: getattr(client, "reports", None))
+    first_line = client.reports[0][1][0]
+    assert client.reports[0][0] == 7 and "RuntimeError" in first_line and "boom" not in first_line
+
+
+def test_the_agent_records_why_it_is_offline_and_clears_it_when_back(store, tmp_path):
+    client = FakeClient()
+    agent = make_agent(store, client, tmp_path)
+    client.fail_ping = fa.BackOffline("x")
+    agent.sync_once()
+    assert "連不上後台" in store.get_meta(fa.REASON_KEY)
+    client.fail_ping = fa.BackAuthError("no")
+    agent.sync_once()
+    assert "通行碼" in store.get_meta(fa.REASON_KEY)
+    client.fail_ping = fa.BackCertError("pin")
+    agent.sync_once()
+    assert "憑證指紋" in store.get_meta(fa.REASON_KEY)
+    client.fail_ping = None
+    agent.sync_once()
+    assert store.get_meta(fa.REASON_KEY) == ""
+
+
+def test_auto_mode_falls_back_to_the_remembered_address_when_discovery_finds_nothing(store):
+    stop = fa.threading.Event()
+    assert fa._find_back(stop, store, "t" * 40, discover=lambda token: ("169.254.1.2", 8770, "ab" * 32)) == (
+        "169.254.1.2", 8770, "ab" * 32)
+    store.set_meta(fa.BACK_TARGET_KEY, {"host": "169.254.9.9", "port": 8770, "fingerprint": "cd" * 32})
+    assert fa._find_back(stop, store, "t" * 40, discover=lambda token: None) == ("169.254.9.9", 8770, "cd" * 32)
+    fresh = FrontStore(store.path + ".2")
+    stop.set()                                                     # 沒有記住的位址：寫下原因後等待（這裡立刻被停止）
+    assert fa._find_back(stop, fresh, "t" * 40, discover=lambda token: None) is None
+    assert fresh.get_meta(fa.REASON_KEY) == fa.REASON_NOT_FOUND

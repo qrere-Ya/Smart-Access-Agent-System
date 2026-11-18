@@ -68,15 +68,19 @@
             submitBtn.disabled = true;
             submitBtn.textContent = "處理中，請稍候…";
             try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 90000);   // 網路卡住最多等 90 秒，不要一直轉
                 const response = await fetch('/api/register', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: controller.signal
                 });
+                clearTimeout(timer);
                 const result = await response.json();
                 alert(result.message);
                 if(result.status === "success") { location.reload(); }
             } catch (e) {
-                alert("連線失敗，請確認手機與電腦在同一個網路後再試一次。");
+                alert("連線不穩，不確定有沒有送出。請直接再按一次「確認註冊」（不用重新掃 QR Code）：如果剛剛已經成功，會顯示「註冊已經完成」，不會重複註冊。");
             } finally {
                 uploading = false;
                 submitBtn.disabled = false;

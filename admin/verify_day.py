@@ -4,7 +4,7 @@ verify_day.py：驗證當天的引導流程（後台）——一步一步帶著�
 主要功能：
   - 階段 0 自動檢查（不需要人）：呼叫展示前健檢（admin.preflight，含前台區段與網路檢查），
     並記錄 git 版本、時間、Python 版本
-  - 引導項目 1 到 12：印出要做什麼 → 等人按 Enter → 自動擷取證據（前台心跳、異常事件、出勤紀錄、防火牆檢查結果）→ 判定；
+  - 引導項目 1 到 13：印出要做什麼 → 等人按 Enter → 自動擷取證據（前台心跳、異常事件、出勤紀錄、防火牆檢查結果）→ 判定；
     需要人聽或看的（聲音、橫幅、QR、語音、螢幕位置、學校光線下登入）用 y/n 加備註記錄
   - 「停止前台辨識」會真的寫後台設定並輪詢前台心跳，量出前台花了幾秒收掉；不論成功失敗、Ctrl+C，最後一定恢復允許
   - 「拔網路線補送」記下離線與接回的時間，接回後輪詢出勤資料庫，看那一筆有沒有補送進來
@@ -528,8 +528,50 @@ def step_voice(ctx):
     return _manual_step(12, "打卡語音清楚度與音量", "語音清楚、速度剛好、音量夠大嗎？")(ctx)
 
 
+QA_SOURCES = (("front_talk", "Smart_Chat 一般對話"), ("front_knowledge", "Smart_RAG 知識庫問答"))
+QA_WINDOW_HOURS = 6
+
+
+def query_front_qa(db_path, since):
+    """前台問答（兩種來源）在 since 之後的紀錄數與最近一題（只讀）：{來源: (筆數, 最近時間)}。"""
+    conn = _connect_ro(db_path)
+    try:
+        out = {}
+        for source, _label in QA_SOURCES:
+            row = conn.execute("SELECT COUNT(*), MAX(ts) FROM ChatLogs WHERE source = ? AND ts >= ?",
+                               (source, since)).fetchone()
+            out[source] = (row[0], row[1])
+        return out
+    finally:
+        conn.close()
+
+
+def step_front_qa(ctx):
+    """13 前台 Smart_Chat 與 Smart_RAG 的問答連線：前台用 前台驗證.bat 的「問答連線測試」（或手動）各問一題後，
+    後台的對話紀錄裡要有這兩種來源的紀錄（只讀資料庫，不需要等人）。"""
+    result = Result(13, "前台問答連線（Smart_Chat、Smart_RAG）")
+    since = (ctx.now() - datetime.timedelta(hours=QA_WINDOW_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        found = query_front_qa(ctx.db(), since)
+    except sqlite3.Error as e:
+        return _db_error(result, e)
+    result.evidence = [f"{label}：最近 {QA_WINDOW_HOURS} 小時 {found[source][0]} 題"
+                       + (f"（最近一題 {found[source][1]}）" if found[source][0] else "")
+                       for source, label in QA_SOURCES]
+    got = [source for source, _label in QA_SOURCES if found[source][0] > 0]
+    if len(got) == len(QA_SOURCES):
+        result.status, result.note = PASS, "兩種前台問答都有送到後台並被記錄"
+    elif got:
+        result.status, result.note = MANUAL, "只有一種有紀錄；另一種要先在後台「前台連線」卡片開放，再到前台問一題"
+    else:
+        result.status = MANUAL
+        result.note = ("沒有前台問答紀錄：兩個開關可能被關閉，請先在後台「前台連線」卡片開放，"
+                       "再在前台執行「前台驗證.bat」的問答連線測試")
+    return result
+
+
 def build_steps(checks_holder):
-    """所有引導項目（編號 1 到 12）；項目 9 要用階段 0 的健檢結果。"""
+    """所有引導項目（編號 1 到 13）；項目 9 要用階段 0 的健檢結果。"""
     return [
         Step(1, "前台啟動人臉辨識", "前台要在線，並已按「▶ 啟動人臉辨識」。", step_front_running, auto_ok=True),
         Step(2, "多人同框", "一人站近鏡頭打卡，另一人站遠處走動約 30 秒。", step_multi_person),
@@ -544,6 +586,7 @@ def build_steps(checks_holder):
         Step(10, "第二螢幕與 F11", "看儀表板與辨識視窗的位置、F11。", step_second_screen),
         Step(11, "GPU 實測速度", "看前台驗證報告的 GPU 那一行。", step_gpu_line),
         Step(12, "語音清楚度與音量", "前台打卡聽語音。", step_voice),
+        Step(13, "前台問答連線", "自動判定（讀對話紀錄）；前台先做問答連線測試。", step_front_qa, auto_ok=True),
     ]
 
 
@@ -591,7 +634,7 @@ def run_session(ctx, commit="未知"):
     holder = {"checks": checks}
     ctx.console.say(f"　{ICON[result.status]} {result.title}：{result.note}")
     steps = build_steps(holder)
-    for number in range(1, 13):                                   # 先把全部項目列成「未做」，中途結束報告也完整
+    for number in range(1, 14):                                   # 先把全部項目列成「未做」，中途結束報告也完整
         step = next(s for s in steps if s.number == number)
         session.record(Result(number, step.title, TODO, [], "尚未進行"))
     quitting = False

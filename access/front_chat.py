@@ -76,6 +76,13 @@ def _plain(text, limit):
 
 
 class FrontChat:
+    """前台知識庫問答（Smart_RAG）的對話控制；FrontTalk 是同一套機制的一般對話（Smart_Chat）。"""
+    KEY = front_agent.BACK_CHAT_KEY
+    PATH = lp.CHAT_PATH
+    MESSAGES = MESSAGES
+    BACK_MESSAGES = BACK_MESSAGES
+    LOG = "front_chat"
+
     def __init__(self, store, make_client=None, clock=time.time, poll_seconds=POLL_SECONDS, give_up=GIVE_UP_SECONDS,
                  sleep=time.sleep):
         self.store = store
@@ -89,7 +96,7 @@ class FrontChat:
 
     def enabled(self):
         """後台有沒有開放（同步得到的布林；沒同步過或舊後台沒有這個欄位一律當作未開放）。"""
-        return self.store.get_meta(front_agent.BACK_CHAT_KEY, False) is True
+        return self.store.get_meta(self.KEY, False) is True
 
     def availability(self):
         """CLOSED（未開放）、OFFLINE（後台離線）或 IDLE（可以問）。"""
@@ -111,8 +118,8 @@ class FrontChat:
                 return False
             self._generation += 1
             generation = self._generation
-            self._state, self._answer, self._sources, self._message = ASKING, "", [], MESSAGES[ASKING]
-        threading.Thread(target=self._run, args=(question, generation), daemon=True, name="front-chat").start()
+            self._state, self._answer, self._sources, self._message = ASKING, "", [], self.MESSAGES[ASKING]
+        threading.Thread(target=self._run, args=(question, generation), daemon=True, name=self.LOG).start()
         return True
 
     def _set(self, generation, state, answer="", sources=(), message=""):
@@ -126,12 +133,12 @@ class FrontChat:
         try:
             client = self._make_client()
             if client is None:
-                self._set(generation, OFFLINE, message=MESSAGES[OFFLINE])
+                self._set(generation, OFFLINE, message=self.MESSAGES[OFFLINE])
                 return
-            job_id = client.chat_submit(question).get("job_id")
+            job_id = client.chat_submit(question, self.PATH).get("job_id")
             deadline = self._clock() + self._give_up
             while self._clock() < deadline:
-                body = client.chat_result(job_id)
+                body = client.chat_result(job_id, self.PATH)
                 status = body.get("status")
                 if status == "done":
                     answer = _plain(body.get("answer", ""), MAX_ANSWER_CHARS)
@@ -140,29 +147,30 @@ class FrontChat:
                     self._set(generation, ANSWER, answer, [x for x in sources if x])
                     return
                 if status == "failed":
-                    self._set(generation, ERROR, message=BACK_MESSAGES.get(body.get("error"), MESSAGES[ERROR]))
+                    message = self.BACK_MESSAGES.get(body.get("error"), self.MESSAGES[ERROR])
+                    self._set(generation, ERROR, message=message)
                     return
                 if status == "preparing":
-                    self._set(generation, PREPARING, message=MESSAGES[PREPARING])
+                    self._set(generation, PREPARING, message=self.MESSAGES[PREPARING])
                 else:
-                    self._set(generation, ASKING, message=MESSAGES[ASKING])
+                    self._set(generation, ASKING, message=self.MESSAGES[ASKING])
                 self._sleep(self._poll)
                 with self._lock:
                     if generation != self._generation:
                         return
-            self._set(generation, ERROR, message=BACK_MESSAGES["timeout"])
+            self._set(generation, ERROR, message=self.BACK_MESSAGES["timeout"])
         except ChatClosed:
-            self._set(generation, CLOSED, message=MESSAGES[CLOSED])
+            self._set(generation, CLOSED, message=self.MESSAGES[CLOSED])
         except ChatBusy:
-            self._set(generation, BUSY, message=MESSAGES[BUSY])
+            self._set(generation, BUSY, message=self.MESSAGES[BUSY])
         except (BackOffline, BackAuthError):
-            self._set(generation, OFFLINE, message=MESSAGES[OFFLINE])
+            self._set(generation, OFFLINE, message=self.MESSAGES[OFFLINE])
         except (BackRejected, ValueError, AttributeError, TypeError) as e:
-            print(f"[front_chat] 這一題沒有成功：{type(e).__name__}")        # 日誌只有例外型別，沒有問題與回答
-            self._set(generation, ERROR, message=MESSAGES[ERROR])
+            print(f"[{self.LOG}] 這一題沒有成功：{type(e).__name__}")        # 日誌只有例外型別，沒有問題與回答
+            self._set(generation, ERROR, message=self.MESSAGES[ERROR])
         except Exception as e:  # noqa: BLE001  背景執行緒不能讓例外往外丟
-            print(f"[front_chat] 意外的錯誤：{type(e).__name__}")
-            self._set(generation, ERROR, message=MESSAGES[ERROR])
+            print(f"[{self.LOG}] 意外的錯誤：{type(e).__name__}")
+            self._set(generation, ERROR, message=self.MESSAGES[ERROR])
 
     # --- 畫面用 ---
 
@@ -173,7 +181,7 @@ class FrontChat:
         if state in (IDLE, ANSWER, ERROR, BUSY, OFFLINE, CLOSED):
             gate = self.availability()
             if gate != IDLE:                          # 後台沒開放或離線：優先顯示，並隱藏輸入
-                return {"state": gate, "message": MESSAGES[gate], "answer": "", "sources": [], "can_ask": False}
+                return {"state": gate, "message": self.MESSAGES[gate], "answer": "", "sources": [], "can_ask": False}
         return {"state": state, "message": message, "answer": answer, "sources": sources,
                 "can_ask": state not in (ASKING, PREPARING, CLOSED, OFFLINE)}
 
@@ -182,3 +190,18 @@ class FrontChat:
         with self._lock:
             self._generation += 1
             self._state, self._answer, self._sources, self._message = IDLE, "", [], ""
+
+
+TALK_MESSAGES = {**MESSAGES, ASKING: "思考中…", PREPARING: "準備中，第一次提問會久一點…",
+                 OFFLINE: "後台未連線，無法使用 Smart_Chat", CLOSED: "Smart_Chat 目前未開放"}
+TALK_BACK_MESSAGES = {**BACK_MESSAGES, "unavailable": "對話目前無法使用，請稍後再試"}
+
+
+class FrontTalk(FrontChat):
+    """前台 Smart_Chat 一般對話：和知識庫問答同一套行為（主動連後台、輪詢、不保存對話），只是走 /v1/talk、
+    看 talk_enabled 開關；回答沒有來源文件。"""
+    KEY = front_agent.BACK_TALK_KEY
+    PATH = lp.TALK_PATH
+    MESSAGES = TALK_MESSAGES
+    BACK_MESSAGES = TALK_BACK_MESSAGES
+    LOG = "front_talk"

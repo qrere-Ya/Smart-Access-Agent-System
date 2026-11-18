@@ -18,6 +18,9 @@ faiss-cpu==1.15.0
 pypdf==6.21.4
 docx2txt==0.9
 customtkinter==6.0.0
+PySide6-Essentials==6.12.0      # 前台儀表板（QML 版）；後台之後也會用
+mcp==1.30.0                     # 後台 Smart_Chat 的 MCP 用戶端（官方 SDK，免費；內建天氣與搜尋 MCP 伺服器也用它）；前台不需要
+shiboken6==6.12.0
 darkdetect==0.8.0
 rapidfuzz==3.14.5
 numpy==2.2.6

@@ -16,6 +16,7 @@ import os
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+ICONS_DIR = os.path.join(PROJECT_ROOT, "assets", "icons")      # 自己畫的 SVG 圖示（shared/svg_icon 轉成畫面圖片）
 DOCS_DIR = os.environ.get("SMART_ACCESS_DOCS_DIR") or os.path.join(PROJECT_ROOT, "data", "docs")
 
 RUNTIME_DIR = os.environ.get("SMART_ACCESS_RUNTIME_DIR") or os.path.join(PROJECT_ROOT, "runtime")

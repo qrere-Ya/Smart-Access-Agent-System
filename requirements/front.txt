@@ -18,5 +18,7 @@ sounddevice==0.5.5
 requests==2.34.2
 psutil==7.2.2
 customtkinter==6.0.0
+PySide6-Essentials==6.12.0      # 前台儀表板（QML 版）；後台之後也會用
+shiboken6==6.12.0
 pyqrcode==1.2.1
 darkdetect==0.8.0
