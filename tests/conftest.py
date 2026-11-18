@@ -212,3 +212,11 @@ def require_models():
     missing = [name for name in needed if not os.path.exists(os.path.join(paths.MODELS_DIR, name))]
     if missing:
         pytest.skip(f"缺少模型檔：{missing}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """整合測試結束後如果行程 60 秒還沒結束，印出每個執行緒卡在哪裡（排查 CI 視窗測試結束後不退出）。"""
+    import faulthandler
+    import sys
+
+    faulthandler.dump_traceback_later(60, exit=False, file=sys.__stderr__)
