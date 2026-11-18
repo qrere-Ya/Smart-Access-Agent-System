@@ -138,7 +138,8 @@ def toolbox():
 
 def test_the_builtin_servers_speak_real_mcp_over_stdio_and_list_their_tools(toolbox):
     assert toolbox.available() is True
-    assert set(toolbox.tool_names()) == {"get_weather", "search_news", "search_wikipedia"}
+    assert set(toolbox.tool_names()) == {"get_weather", "search_news", "search_wikipedia", "fetch_page",
+                                         "get_stock_price"}
     description = toolbox.describe()
     assert "get_weather（參數：city）" in description and "search_news（參數：query）" in description
     assert toolbox.label_of("get_weather") == "天氣查詢"
@@ -201,3 +202,63 @@ def test_a_dtd_in_the_news_feed_is_refused(monkeypatch):
     monkeypatch.setattr(talk_tools, "_get", lambda url, **k: b'<!DOCTYPE x [<!ENTITY a "b">]><rss/>')
     with pytest.raises(talk_tools.ToolError):
         talk_tools.news("x")
+
+
+def test_url_arguments_must_be_public_https_for_every_tool(toolbox):
+    assert toolbox.available()
+    assert toolbox.clean_arguments("fetch_page", {"url": "https://example.com/a"}) == {"url": "https://example.com/a"}
+    for bad in ("http://example.com", "https://169.254.1.1/x", "https://localhost/x", "file:///c:/x", "ftp://a.com",
+                "https://printer.local/x", "https://user:pw@example.com/x"):
+        assert toolbox.clean_arguments("fetch_page", {"url": bad}) is None, bad
+
+
+def test_page_text_is_extracted_without_scripts_and_private_addresses_are_refused(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+        encoding = "utf-8"
+        raw = SimpleNamespace(read=lambda n, decode_content=True:
+                              "<html><head><title>t</title><script>evil()</script></head><body><h1>標題</h1>"
+                              "<style>p{}</style><p>內文</p></body></html>".encode())
+
+    class Session:
+        trust_env = True
+
+        def get(self, url, **kwargs):
+            return Response()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(talk_tools.requests, "Session", Session)
+    monkeypatch.setattr(talk_tools, "_public_host_problem", lambda url: "")
+    text = talk_tools.page("https://example.com/")
+    assert "標題" in text and "內文" in text and "evil" not in text and "p{}" not in text
+    monkeypatch.undo()
+    monkeypatch.setattr(talk_tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("10.0.0.5", 443))])
+    assert "內部位址" in talk_tools._public_host_problem("https://example.com/")
+    with pytest.raises(talk_tools.ToolError):
+        talk_tools.page("https://169.254.1.1/x")
+
+
+def test_stock_price_by_code_or_listed_name_and_clear_errors(monkeypatch):
+    row = {"n": "台積電", "z": "2175.0000", "y": "2170.0000", "o": "2200.0000", "h": "2210.0000", "l": "2150.0000",
+           "v": "42269", "d": "20261118", "t": "13:30:00"}
+
+    def fake_json(url, **kwargs):
+        if "STOCK_DAY_ALL" in url:
+            return [{"Code": "2330", "Name": "台積電"}, {"Code": "2317", "Name": "鴻海"}]
+        assert kwargs["params"]["ex_ch"] == "tse_2330.tw|otc_2330.tw"
+        return {"msgArray": [row]}
+
+    monkeypatch.setattr(talk_tools, "_json", fake_json)
+    for query in ("2330", "台積電"):
+        text = talk_tools.stock(query)
+        assert "台積電（2330）成交價 2175 元" in text and "+5.00" in text and "高 2210" in text
+    with pytest.raises(talk_tools.ToolError):
+        talk_tools.stock("火星公司")
+    with pytest.raises(talk_tools.ToolError):
+        talk_tools.stock("  ")
+    monkeypatch.setattr(talk_tools, "_json", lambda url, **k: {"msgArray": [{"n": "", "z": "-"}]})
+    with pytest.raises(talk_tools.ToolError):
+        talk_tools.stock("9999")

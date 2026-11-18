@@ -15,6 +15,7 @@ mcp_client.py：Smart_Chat 的 MCP 用戶端——用官方 MCP SDK（stdio）�
 """
 import asyncio
 import atexit
+import importlib
 import json
 import os
 import sys
@@ -22,14 +23,15 @@ import threading
 from contextlib import AsyncExitStack
 
 from rag.talk_tools import ToolError
-from shared import network_policy, paths
+from shared import link_check, network_policy, paths
 
 START_TIMEOUT = 40.0
 CALL_TIMEOUT = 30.0
-MAX_RESULT_CHARS = 1800
+MAX_RESULT_CHARS = 3000
 MAX_ARGUMENT_CHARS = 200
 CONFIG_NAME = "mcp_servers.json"
-LABELS = {"get_weather": "天氣查詢", "search_news": "新聞搜尋", "search_wikipedia": "維基百科"}
+LABELS = {"get_weather": "天氣查詢", "search_news": "新聞搜尋", "search_wikipedia": "維基百科",
+          "fetch_page": "網頁內容", "get_stock_price": "股價查詢"}
 
 
 def default_config():
@@ -126,11 +128,13 @@ class McpToolbox:
                 started.set()
                 await self._stop.wait()
         except Exception as e:  # noqa: BLE001
-            print(f"[mcp] MCP 連線結束：{type(e).__name__}")
+            missing = f"（缺套件 {e.name}）" if isinstance(e, ModuleNotFoundError) and e.name else ""
+            print(f"[mcp] MCP 連線結束：{type(e).__name__}{missing}")
         finally:
             started.set()
 
     async def _connect_all(self, stack):
+        importlib.invalidate_caches()               # 服務跑著的時候才裝了套件，不清快取會找不到
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -210,6 +214,8 @@ class McpToolbox:
             if key not in tool.properties or isinstance(value, bool) or not isinstance(value, (str, int, float)):
                 continue
             clean[key] = " ".join(value.split())[:MAX_ARGUMENT_CHARS] if isinstance(value, str) else value
+            if key == "url" and link_check.link_problem(clean[key]):
+                return None                      # 網址參數一律只收 https 公開網域（第三方 MCP 伺服器也一樣）
         required = tool.schema.get("required") or []
         if any(key not in clean or clean[key] == "" for key in required) or not clean:
             return None

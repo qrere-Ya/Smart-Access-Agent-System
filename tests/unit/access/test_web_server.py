@@ -99,7 +99,7 @@ def test_registration_succeeds_stores_the_face_and_burns_the_token(client, fake_
     assert reply.status_code == 200 and reply.get_json()["status"] == "success"
     assert ws.db.recognize_face(np.ones(4, dtype=np.float32))[0] == "王小明"
     assert token not in ws.valid_tokens
-    assert post_form(client, token).status_code == 403
+    assert post_form(client, token, emp_id="E777").status_code == 403      # 同一個 Token 換了別的員工編號：不算重送
 
 
 def test_registration_needs_a_valid_token(client, fake_face):
@@ -126,7 +126,7 @@ def test_duplicate_registration_is_rejected_and_keeps_the_token(client, fake_fac
     add_user("王小明", "E999")
     token = issue_token(client)
     reply = post_form(client, token)
-    assert reply.status_code == 409 and "姓名" in reply.get_json()["message"]
+    assert reply.status_code == 409 and "已經註冊" in reply.get_json()["message"]
     assert token in ws.valid_tokens
 
 
@@ -154,8 +154,40 @@ def test_simultaneous_submissions_with_one_token_register_exactly_one_user(clien
         t.start()
     for t in threads:
         t.join()
-    assert statuses.count(200) == 1 and len(statuses) == 6
+    assert len(statuses) == 6 and set(statuses) <= {200, 403, 409}      # 只寫一筆；其餘是「已完成」或「已失效」
     con = sqlite3.connect(db)
     assert con.execute("SELECT COUNT(*) FROM Users").fetchone()[0] == 1
     con.close()
     assert token not in ws.valid_tokens
+
+
+def test_a_retry_after_a_lag_gets_the_already_done_answer_and_never_a_second_row(client, fake_face, db):
+    """手機網路卡頓：第一次其實成功了但回應沒收到，使用者再按一次——同一個 Token、同一個編號回成功，資料庫仍只有一筆。"""
+    import sqlite3
+    token = issue_token(client)
+    first = post_form(client, token)
+    again = post_form(client, token)
+    assert first.status_code == 200 and again.status_code == 200
+    assert "已經完成" in again.get_json()["message"]
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM Users").fetchone()[0] == 1
+    con.close()
+
+
+def test_the_same_face_cannot_be_registered_again_under_another_name_or_number(client, fake_face, db):
+    """卡頓後重新掃 QR、改打了不同的姓名或編號：同一張臉不會多出第二筆。"""
+    import sqlite3
+    assert post_form(client, issue_token(client)).status_code == 200
+    reply = post_form(client, issue_token(client), name="王小名", emp_id="E002")
+    assert reply.status_code == 409 and "王小明" in reply.get_json()["message"]
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM Users").fetchone()[0] == 1
+    con.close()
+
+
+def test_done_tokens_expire_and_are_swept(client):
+    ws._done_tokens["old"] = ("E1", "甲", time.time() - ws.DONE_KEEP_SECONDS - 1)
+    assert ws._already_registered("old", "E1") is None and "old" not in ws._done_tokens
+    ws._done_tokens["new"] = ("E1", "甲", time.time())
+    assert ws._already_registered("new", "E1") == "甲" and ws._already_registered("new", "E2") is None
+    ws._done_tokens.clear()

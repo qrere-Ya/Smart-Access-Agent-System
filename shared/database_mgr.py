@@ -222,6 +222,12 @@ def register_user(name, gender, emp_id, face_embedding):
     insert_mock_calendar(emp_id)
     return True, f"註冊成功: {name} (ID: {emp_id})"
 
+def registered_name_for_face(face_embedding, threshold=0.9):
+    """這張臉已經註冊在哪個姓名下（啟用中的帳號、距離小於門檻）；沒有就回傳 None。註冊時用來擋同一個人的第二筆。"""
+    name, _dist = recognize_face(face_embedding, threshold)
+    return None if name in ("Unknown", "Empty DB") else name
+
+
 def get_employee_id(name):
     """根據員工姓名查詢對應的員工編號"""
     conn_db = sqlite3.connect(DB_PATH)

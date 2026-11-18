@@ -4,7 +4,8 @@ doc_store.py：文件知識庫（逐份文件追蹤的向量庫）。
 主要功能：
   - 掃描文件資料夾（含子資料夾），每份文件各自記錄內容指紋：新增、修改、刪除的文件各自處理，沒變的不重算
   - 切塊後用 embed_fn 向量化，存入 FAISS（內積＝餘弦相似度）；索引、區塊、文件清單都存在 runtime/rag/
-  - 混合檢索：向量相似度加 jieba 斷詞的 BM25 關鍵字，用名次融合（RRF）排序；每筆結果附上向量相似度，
+  - 混合檢索：向量相似度加 jieba 斷詞的 BM25 關鍵字，用名次融合（RRF）排序；
+    向量檢索的前 2 名一定保留（關鍵字只命中常用詞時不會把正確條文擠出去）；每筆結果附上向量相似度，
     讓回答層判斷「找不到依據」
   - 某份文件讀不出來時保留它上一次的內容並回報失敗，不會因為暫時讀不到就把知識弄丟
 
@@ -28,6 +29,7 @@ from rag import ingest
 _EMBED_BATCH = 32
 _RRF_K = 60
 _CANDIDATE_FACTOR = 4
+_DENSE_KEEP = 2                 # 向量檢索的前幾名一定留在結果裡，不會被只靠「有」「的」這類常用詞的關鍵字命中擠掉
 
 EmbedFn = Callable[[List[str]], np.ndarray]
 
@@ -239,6 +241,10 @@ class DocStore:
                     chunk_id = self._bm25_ids[int(pos)]
                     fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (_RRF_K + kw_rank)
         top = sorted(fused, key=lambda i: -fused[i])[:k]
+        for chunk_id in list(dense)[:min(_DENSE_KEEP, k // 4)]:
+            if chunk_id not in top:
+                top[-1] = chunk_id
+                fused.setdefault(chunk_id, 0.0)
         for i in top:  # 只被關鍵字找到的，補算向量相似度
             if i not in dense:
                 dense[i] = float(np.dot(qvec[0], self._index.reconstruct(i)))
