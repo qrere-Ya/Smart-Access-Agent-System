@@ -200,7 +200,8 @@ def validate_heartbeat(data):
 
 MAX_CHAT_QUESTION = 300                    # 前台問題的字數上限（只收純文字）
 MAX_CHAT_ANSWER = 4000                     # 回答的字數上限
-CHAT_PATH = "/chat"
+CHAT_PATH = "/chat"                         # 前台知識庫問答（Smart_RAG）
+TALK_PATH = "/talk"                         # 前台一般對話（Smart_Chat），形式相同、只有語言模型
 _JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
 

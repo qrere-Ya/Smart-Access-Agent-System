@@ -63,7 +63,7 @@ def answer_text(app):
 def test_the_card_says_not_open_until_the_back_opens_it_and_opens_the_panel(root, seeded):
     store, _screen = seeded
     app = build(root, store)
-    assert app.tiles["chat"]["title"].cget("text") == "知識庫問答"
+    assert app.tiles["chat"]["title"].cget("text") == "Smart_RAG" + chr(10) + "知識庫問答"
     app.tiles["chat"]["title"]._label.event_generate("<Button-1>")
     root.update()
     root.update()
@@ -248,3 +248,56 @@ def test_screenshots_in_both_themes(root, seeded, screenshot, theme, name, chat)
     root.update()
     app.refresh()
     assert screenshot(root, f"前台知識庫問答_{theme}_{name}")
+
+
+def test_smart_chat_is_the_first_card_and_smart_rag_the_second_and_each_has_its_own_panel(root, seeded):
+    store, _screen = seeded
+    app = build(root, store)
+    from access.front_dashboard import MODULE_KEYS
+
+    assert MODULE_KEYS[:2] == ("talk", "chat")
+    cards = sorted(app.tiles.items(), key=lambda kv: kv[1]["card"].grid_info()["column"])
+    assert [k for k, _ in cards][:2] == ["talk", "chat"]
+    root.update()
+    app.refresh()
+    assert app.tiles["talk"]["title"].cget("text") == "Smart_Chat" + chr(10) + "一般對話"
+    assert app.qa["talk"].panel is not app.qa["chat"].panel and app.qa["talk"].entry is not app.qa["chat"].entry
+
+
+def test_smart_chat_panel_asks_through_its_own_controller_and_leaving_clears_it(root, seeded, screenshot):
+    store, _screen = seeded
+    app = build(root, store)
+    talk, rag = FakeChat(), FakeChat()
+    app.qa["talk"].controller, app.qa["chat"].controller = talk, rag
+    app.open_module("talk")
+    root.update()
+    app.refresh()
+    root.update()
+    panel = app.qa["talk"]
+    assert panel.welcome.winfo_ismapped()
+    assert "想聊什麼" in panel.welcome.winfo_children()[0].winfo_children()[1].cget("text")
+    assert screenshot(root, "前台_Smart_Chat_歡迎")
+    panel.entry.insert(0, "幫我把這句話翻成英文")
+    panel.send()
+    assert talk.submitted == ["幫我把這句話翻成英文"] and rag.submitted == []        # 只送到自己的控制器
+    talk.state, talk.answer, talk.can_ask = "answer", "Please translate this sentence.", True
+    panel.render()
+    root.update()
+    text = panel.answer.get("1.0", "end").strip()
+    assert "你問：幫我把這句話翻成英文" in text and "Please translate" in text and "來源文件" not in text
+    assert screenshot(root, "前台_Smart_Chat_回答")
+    app.go_home()
+    assert talk.cleared == 1 and rag.cleared == 0 and panel.question == ""
+
+
+def test_each_panel_idle_timer_clears_only_that_panel(root, seeded):
+    store, _screen = seeded
+    clock = [1000.0]
+    app = build(root, store)
+    app._clock = lambda: clock[0]
+    app.qa["talk"].controller, app.qa["chat"].controller = FakeChat(), FakeChat()
+    app.open_module("talk")
+    app.qa["talk"].touched = clock[0]
+    clock[0] += 61
+    app.refresh()
+    assert app.qa["talk"].controller.cleared == 1 and app.qa["chat"].controller.cleared == 0

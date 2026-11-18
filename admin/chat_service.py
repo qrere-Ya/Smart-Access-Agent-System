@@ -91,6 +91,9 @@ class _Job:
 
 
 class ChatService:
+    ASK_METHOD = "ask_documents"          # 呼叫助理的哪個方法（一般對話服務換成 ask）
+    ERROR_TEXT = ERROR_TEXT
+
     def __init__(self, runtime_factory=None, clock=time.monotonic, min_interval=MIN_INTERVAL_SECONDS,
                  timeout=JOB_TIMEOUT_SECONDS, keep=RESULT_KEEP_SECONDS, idle_release=IDLE_RELEASE_SECONDS):
         self._factory = runtime_factory
@@ -134,7 +137,7 @@ class ChatService:
             if job.status == DONE:
                 out.update(answer=job.answer, sources=list(job.sources))
             elif job.status == FAILED:
-                out.update(error=job.error, message=ERROR_TEXT.get(job.error, ERROR_TEXT["unavailable"]))
+                out.update(error=job.error, message=self.ERROR_TEXT.get(job.error, self.ERROR_TEXT["unavailable"]))
             return out
 
     def close(self):
@@ -230,7 +233,7 @@ class ChatService:
 
         def consume():
             try:
-                for piece in assistant.ask_documents(job.question):
+                for piece in getattr(assistant, self.ASK_METHOD)(job.question):
                     box["pieces"].append(piece)
             except Exception as e:  # noqa: BLE001
                 box["error"] = e
@@ -310,3 +313,40 @@ class ChatService:
     def _log_failure(job):
         """載入失敗的題目也記進對話紀錄（回答欄寫失敗原因的固定說明）。"""
         chat_log.try_record(chat_log.SOURCE_FRONT, job.question, "（知識庫無法使用，沒有產生回答）", [])
+
+
+TALK_ERROR_TEXT = {
+    "unavailable": "對話目前無法使用，請稍後再試。",
+    "llm_unavailable": "語言模型目前連不上，請稍後再試。",
+    "timeout": "這一題花太久，已經取消，請稍後再試。",
+    "local_only": "後台是全本地模式，目前沒有可用的語言模型。",
+}
+
+
+class TalkService(ChatService):
+    """前台 Smart_Chat 一般對話服務：和知識庫問答同一套佇列、頻率、逾時與固定錯誤說明，
+    差別是只載入語言模型（rag.talk.Talker，沒有文件、資料庫、員工名單），對話紀錄來源是 front_talk，
+    也不處理文件重新掃描。"""
+
+    ASK_METHOD = "ask"
+    ERROR_TEXT = TALK_ERROR_TEXT
+
+    def _handle_docs_request(self):
+        """一般對話沒有文件，不處理重新掃描請求。"""
+
+    def _load(self):
+        factory = self._factory
+        if factory is None:
+            from rag import bootstrap
+
+            factory = bootstrap.create_talk_runtime
+        runtime = factory(progress=lambda text: None)
+        assistant = getattr(runtime, "assistant", None)
+        if assistant is not None:
+            cap_llm_timeouts(assistant, LLM_READ_TIMEOUT_SECONDS)
+            assistant.on_finished = chat_logging.recorder(chat_log.SOURCE_TALK)
+        return runtime
+
+    @staticmethod
+    def _log_failure(job):
+        chat_log.try_record(chat_log.SOURCE_TALK, job.question, "（語言模型無法使用，沒有產生回答）", [])

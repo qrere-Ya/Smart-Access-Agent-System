@@ -108,7 +108,8 @@ def test_morning_carries_the_backs_local_only_switch_as_a_plain_boolean(client, 
     monkeypatch.delenv(network_policy.ENV_NAME, raising=False)
     body = client.get("/v1/morning", headers=AUTH).get_json()
     assert body["local_only"] is False
-    assert set(body) == {"ok", "brief", "local_only", "recognition_enabled", "chat_enabled", "server_time"}
+    assert set(body) == {"ok", "brief", "local_only", "recognition_enabled", "chat_enabled", "talk_enabled",
+                       "server_time"}
     network_policy.set_local_only(True)
     assert client.get("/v1/morning", headers=AUTH).get_json()["local_only"] is True
     digest_store.save_brief({"date": "2026-11-10", "generated_at": "x", "news": [], "news_problem": ""})

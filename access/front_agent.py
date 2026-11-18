@@ -36,6 +36,7 @@ from shared import lan_discovery, link_protocol as lp, link_tls, paths, role_con
 SYNC_SECONDS = 10
 BACK_RECOGNITION_KEY = "back_recognition_enabled"   # 後台是否允許人臉辨識（同步時取得，離線沿用最後一次的值；預設允許）
 BACK_LOCAL_ONLY_KEY = "back_local_only"      # 後台的全本地開關（同步時取得，離線沿用最後一次的值）
+BACK_TALK_KEY = "back_talk_enabled"          # 後台是否開放前台 Smart_Chat 一般對話（同上，預設未開放）
 BACK_CHAT_KEY = "back_chat_enabled"          # 後台是否開放前台知識庫問答（同步取得，離線沿用最後的值；預設未開放）
 BACK_TARGET_KEY = "back_target"              # 目前連線的後台位址與憑證指紋（代理寫，儀表板的問答讀；都不是祕密）
 MAX_BACKOFF_SECONDS = 60
@@ -167,15 +168,22 @@ class BackClient:
     def heartbeat(self, status):
         return self._call("POST", lp.API_PREFIX + "/heartbeat", json=status)
 
-    def chat_submit(self, question):
-        """送出知識庫問題（只有這一個欄位）；回傳後台的回應（含 job_id）。"""
-        return self._call("POST", lp.API_PREFIX + lp.CHAT_PATH, accept=(202,), chat=True, json={"question": question})
+    def chat_submit(self, question, path=lp.CHAT_PATH):
+        """送出問題（只有這一個欄位）；path 預設是知識庫問答，一般對話傳 lp.TALK_PATH；回傳後台的回應（含 job_id）。"""
+        return self._call("POST", lp.API_PREFIX + self._qa_path(path), accept=(202,), chat=True,
+                          json={"question": question})
 
-    def chat_result(self, job_id):
-        """取知識庫問答的結果；編號不合格直接拒絕，不送出請求。"""
+    def chat_result(self, job_id, path=lp.CHAT_PATH):
+        """取問答的結果；編號不合格直接拒絕，不送出請求。"""
         if not lp.valid_job_id(job_id):
             raise BackRejected("工作編號不合格")
-        return self._call("GET", lp.API_PREFIX + lp.CHAT_PATH + "/" + job_id, chat=True)
+        return self._call("GET", lp.API_PREFIX + self._qa_path(path) + "/" + job_id, chat=True)
+
+    @staticmethod
+    def _qa_path(path):
+        if path not in (lp.CHAT_PATH, lp.TALK_PATH):
+            raise BackRejected("不認得的問答路徑")
+        return path
 
 
 class FrontAgent:
@@ -267,6 +275,8 @@ class FrontAgent:
             self.store.set_meta(BACK_RECOGNITION_KEY, body["recognition_enabled"])
         if isinstance(body.get("chat_enabled"), bool):         # 同上：只收布林；舊後台沒有這欄位就維持上次的值
             self.store.set_meta(BACK_CHAT_KEY, body["chat_enabled"])
+        if isinstance(body.get("talk_enabled"), bool):         # 一般對話開關，同上
+            self.store.set_meta(BACK_TALK_KEY, body["talk_enabled"])
         target = {"host": self.client.host, "port": self.client.port, "fingerprint": self.client.fingerprint}
         if self.store.get_meta(BACK_TARGET_KEY) != target:     # 位址沒變就不重寫；儀表板的問答用它找到後台
             self.store.set_meta(BACK_TARGET_KEY, target)

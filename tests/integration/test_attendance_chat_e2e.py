@@ -106,7 +106,7 @@ def test_the_real_window_opens_with_the_attendance_runtime_and_answers_a_questio
             time.sleep(0.05)
         if window._controller is None:
             pytest.skip("本機 Ollama 沒有在執行")
-        assert "出缺勤查詢" in window.status.cget("text") and window.title() == "出缺勤查詢"
+        assert "出缺勤查詢" in window.status.cget("text") and window.title() == "Smart_Query 出缺勤查詢"
         assert window.send("今天誰遲到？") is True
         end = time.time() + 120
         while time.time() < end and not any("李大華" in b.get_text() for b in window._bubbles if b.role != "user"):

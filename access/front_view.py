@@ -107,11 +107,13 @@ _TONE_RANK = {"success": 0, "warning": 1, "danger": 2}
 
 
 CHAT_TILE_SUMMARY = {"closed": "目前未開放", "offline": "後台未連線", "idle": "用鍵盤問公司文件的內容"}
+TALK_TILE_SUMMARY = {"closed": "目前未開放", "offline": "後台未連線", "idle": "用鍵盤跟 AI 聊天"}
 
 
-def module_tiles(news, greetings, status, chat_state=None):
+def module_tiles(news, greetings, status, chat_state=None, talk_state=None):
     """主畫面的功能模組卡片 → [{key, icon, title, desc, accent, summary}]；summary 是即時預覽。
-    chat_state 是知識庫問答目前能不能問（closed、offline、idle）；沒給就不放這張卡片。"""
+    chat_state 是知識庫問答（Smart_RAG）、talk_state 是一般對話（Smart_Chat）目前能不能問（closed、offline、idle）；
+    沒給就不放那張卡片。"""
     if news["state"] == "ok":
         news_summary = _cut(news["cards"][0]["title"], TILE_SUMMARY_MAX)
     else:
@@ -126,17 +128,28 @@ def module_tiles(news, greetings, status, chat_state=None):
     status_summary = "全部正常" if healthy else f"{worst[0]}：{worst[1]}"
     status_accent = worst[2] if worst[2] in _TONE_RANK else "success"
     tiles = [
-        {"key": "news", "icon": "📰", "title": "今日科技早報", "desc": "後台每天整理的科技新聞，自動換頁",
+        {"key": "news", "icon": "smart_news", "title": "Smart_News",
+         "name": "今日科技早報", "desc": "後台每天整理的科技新聞，自動換頁",
          "accent": "info", "summary": news_summary},
-        {"key": "greetings", "icon": "👋", "title": "剛剛打卡", "desc": "最近 10 分鐘辨識成功的人與問候",
+        {"key": "greetings", "icon": "smart_greet", "title": "Smart_Greet",
+         "name": "剛剛打卡", "desc": "最近 10 分鐘辨識成功的人與問候",
          "accent": "success", "summary": greet_summary},
-        {"key": "status", "icon": "📡", "title": "系統狀態", "desc": "後台連線、鏡頭、人臉辨識與人臉資料",
+        {"key": "status", "icon": "smart_status", "title": "Smart_Status",
+         "name": "系統狀態", "desc": "後台連線、鏡頭、人臉辨識與人臉資料",
          "accent": status_accent, "summary": _cut(status_summary, TILE_SUMMARY_MAX)},
     ]
+    qa = []
+    if talk_state is not None:
+        qa.append({"key": "talk", "icon": "smart_chat", "title": "Smart_Chat", "name": "一般對話",
+                   "desc": "用鍵盤跟語言模型聊天，不查公司文件與資料",
+                   "accent": "primary" if talk_state == "idle" else "warning",
+                   "summary": TALK_TILE_SUMMARY.get(talk_state, "目前未開放")})
     if chat_state is not None:
-        tiles.append({"key": "chat", "icon": "💬", "title": "知識庫問答", "desc": "用鍵盤問公司文件，後台回答",
-                      "accent": "info" if chat_state == "idle" else "warning",
-                      "summary": CHAT_TILE_SUMMARY.get(chat_state, "目前未開放")})
+        qa.append({"key": "chat", "icon": "smart_rag", "title": "Smart_RAG", "name": "知識庫問答",
+                   "desc": "用鍵盤問公司文件，後台回答",
+                   "accent": "info" if chat_state == "idle" else "warning",
+                   "summary": CHAT_TILE_SUMMARY.get(chat_state, "目前未開放")})
+    tiles = qa + tiles          # 順序：Smart_Chat、Smart_RAG，後面接新聞、打卡、狀態
     return tiles
 
 
@@ -152,7 +165,8 @@ def speed_text(arrow, kbps):
     return f"{arrow} {kbps / 1024:.1f} MB/s" if kbps >= 1024 else f"{arrow} {kbps:.1f} KB/s"
 
 
-def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_only=False, chat_state=None):
+def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_only=False, chat_state=None,
+             talk_state=None):
     """整理一份畫面內容。store 是 FrontStore，screen 是 ScreenState，read_heartbeat() 回傳辨識心跳；
     chat_state 是知識庫問答能不能問（closed、offline、idle），沒給就沒有那張模組卡片。"""
     time_text, date_text = clock_texts(now)
@@ -167,7 +181,7 @@ def snapshot(store, screen, read_heartbeat, now, now_ts, pending=None, local_onl
         "link": link_view(link_online, pending),
         "alert": alert_view(screen.current_alert(ALERT_SECONDS, now=lambda: now_ts)),
         "greetings": greetings, "news": news, "status": status,
-        "tiles": module_tiles(news, greetings, status, chat_state),
+        "tiles": module_tiles(news, greetings, status, chat_state, talk_state),
         "theme": screen.theme(),
     }
 

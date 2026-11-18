@@ -9,6 +9,9 @@ link_server.py：後台的雙機連線服務（Flask，只給前台使用，只�
     並附後台的全本地開關（布林，前台據此決定是否顯示 QR）
   - POST /v1/chat    ：前台知識庫問答——送出問題，得到工作編號（202）；只准文件檢索（見 admin.chat_service），
                        後台設定頁沒開放（chat_enabled 預設關閉）回 403，排隊已滿或送太快回 429
+  - POST /v1/talk、GET /v1/talk/<編號>：前台 Smart_Chat 一般對話，形式與 /v1/chat 相同，
+                       但只有語言模型（見 admin.chat_service.TalkService）；開關 talk_enabled 預設關閉，
+                       沒開放回 403 talk_disabled
   - GET  /v1/chat/<編號>：取結果（queued／preparing／running／done／failed；完成時有回答與來源文件名稱，
                        失敗只有固定說明）
   - POST /v1/heartbeat：前台每個同步週期回報的狀態（鏡頭、辨識、待補送數、時鐘差）；只留最新一份給後台視窗顯示，
@@ -47,7 +50,8 @@ from shared import (digest_store, front_control, lan_discovery, link_protocol as
 _EVIDENCE_PREFIX = {"tailgate": "tailgate", pass_through.EVENT_TYPE: pass_through.EVENT_TYPE}
 
 
-def create_app(now=datetime.datetime.now, token_matches=role_config.token_matches, chat_service=None):
+def create_app(now=datetime.datetime.now, token_matches=role_config.token_matches, chat_service=None,
+               talk_service=None):
     """建立 Flask 應用；now 與 token_matches 可以換成假的方便測試；chat_service 是前台知識庫問答服務，None 就不提供"""
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = lp.MAX_BODY_BYTES
@@ -94,7 +98,8 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
     def morning():
         local = network_policy.local_only() is True          # 後台的全本地開關，前台同步時一起取得（只有布林）
         control = {"local_only": local, "recognition_enabled": front_control.recognition_enabled() is True,
-                   "chat_enabled": front_control.chat_enabled() is True and chat_service is not None}
+                   "chat_enabled": front_control.chat_enabled() is True and chat_service is not None,
+                   "talk_enabled": front_control.talk_enabled() is True and talk_service is not None}
         brief = digest_store.load_brief()
         if not brief:
             return reply({"ok": True, "brief": None, **control})
@@ -120,6 +125,29 @@ def create_app(now=datetime.datetime.now, token_matches=role_config.token_matche
         if chat_service is None or not front_control.chat_enabled():
             return reply({"ok": False, "error": "chat_disabled"}, 403)
         result = chat_service.get(job_id) if lp.valid_job_id(job_id) else None
+        if result is None:
+            return reply({"ok": False, "error": "not_found"}, 404)
+        return reply({"ok": True, **result})
+
+    @app.post(lp.API_PREFIX + "/talk")
+    def talk_submit():
+        if talk_service is None or not front_control.talk_enabled():
+            return reply({"ok": False, "error": "talk_disabled"}, 403)
+        try:
+            question = lp.validate_chat_question(request.get_json(silent=True))
+        except lp.ProtocolError as e:
+            return reply({"ok": False, "error": "invalid", "message": str(e)}, 400)
+        try:
+            job_id = talk_service.submit(question)
+        except chat_service_mod.ChatError as e:
+            return reply({"ok": False, "error": e.code}, 429)
+        return reply({"ok": True, "job_id": job_id, "status": "queued"}, 202)
+
+    @app.get(lp.API_PREFIX + "/talk/<job_id>")
+    def talk_result(job_id):
+        if talk_service is None or not front_control.talk_enabled():
+            return reply({"ok": False, "error": "talk_disabled"}, 403)
+        result = talk_service.get(job_id) if lp.valid_job_id(job_id) else None
         if result is None:
             return reply({"ok": False, "error": "not_found"}, 404)
         return reply({"ok": True, **result})
@@ -186,7 +214,7 @@ def _apply(event, user):
     return "merged" if merged else "recorded"
 
 
-def make_server(settings=None, chat_service=None):
+def make_server(settings=None, chat_service=None, talk_service=None):
     """依角色設定建立 werkzeug 伺服器（只綁設定的內網位址）；不是後台角色或沒有通行碼就丟 ConfigError。"""
     from werkzeug.serving import make_server as werkzeug_make_server
     settings = settings or role_config.load()
@@ -197,9 +225,12 @@ def make_server(settings=None, chat_service=None):
     host = lan_discovery.resolve(settings.bind_host)     # 填 auto 就用網路線那張網卡的 169.254.x.x
     cert_path, key_path = link_cert.ensure_certificate()
     chat_service = chat_service or chat_service_mod.ChatService()      # 第一次有前台問題才載入知識庫模型
-    server = werkzeug_make_server(host, settings.back_port, create_app(chat_service=chat_service), threaded=True,
+    talk_service = talk_service or chat_service_mod.TalkService()      # 一般對話：第一題才連語言模型
+    app = create_app(chat_service=chat_service, talk_service=talk_service)
+    server = werkzeug_make_server(host, settings.back_port, app, threaded=True,
                                   ssl_context=link_tls.server_context(cert_path, key_path))
     server.chat_service = chat_service
+    server.talk_service = talk_service
     server.fingerprint = link_tls.fingerprint_of_pem(cert_path)    # 前台信任的憑證指紋（自動尋找時一併回報）
     return server
 
@@ -230,6 +261,7 @@ def main():
         if responder:
             responder.stop()
         server.chat_service.close()
+        server.talk_service.close()
         server.server_close()
     return 0
 

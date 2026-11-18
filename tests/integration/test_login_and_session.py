@@ -224,7 +224,7 @@ class FakeRuntime:
         pass
 
 
-def test_the_assistant_window_closes_when_the_session_ends(root, clean_session):
+def test_the_assistant_window_closes_when_the_session_ends(clean_session, monkeypatch):
     import tkinter
 
     from rag import chat_window
@@ -232,8 +232,12 @@ def test_the_assistant_window_closes_when_the_session_ends(root, clean_session):
 
     session = auth.Session("管理者甲")
     auth.save_session(session)
-    win = chat_window.AssistantWindow(runtime_factory=lambda progress: FakeRuntime(), auto_start_ollama=False,
-                                      session_token=session.token)
+    monkeypatch.setattr(tkinter, "_default_root", None)      # 前面的測試留下的預設視窗已銷毀，圖片要綁在這個新視窗上
+    try:        # 不用 root 夾具：圖示的圖片綁在第一個 Tk 視窗上，同時開兩個視窗（只有測試會）圖片會對不到
+        win = chat_window.AssistantWindow(runtime_factory=lambda progress: FakeRuntime(), auto_start_ollama=False,
+                                          session_token=session.token)
+    except tkinter.TclError as exc:
+        pytest.skip(f"沒有可用的顯示器：{exc}")
     win.update()
     auth.clear_session()                                      # 後台登出
     win._check_session()

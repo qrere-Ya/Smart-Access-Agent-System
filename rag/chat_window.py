@@ -25,8 +25,9 @@ import customtkinter as ctk
 
 from rag import bootstrap, chat_worker
 from rag.chat_session import ChatController, plain_text
+from rag.chat_sidebar import Sidebar
 from rag.chat_settings_dialog import SettingsDialog
-from rag.chat_status_bar import StatusBar, build_footer_hint
+from rag.chat_status_bar import FONT_SIZES, StatusBar, build_footer_hint
 from rag.chat_view import (APP_TITLE, FONT_FAMILY, META_BLOCK_PREFIXES, META_COLOR, META_PREFIXES, SAMPLE_QUESTIONS,
                            Bubble, bubble_width, build_input_row, build_welcome, make_note)
 from shared import auth, digest_store, ui_theme
@@ -47,8 +48,8 @@ class AssistantWindow(ctk.CTk):
         super().__init__(fg_color=ui_theme.pair("bg"))
         self._session_token = session_token
         self.title(APP_TITLE)
-        self.geometry("920x760")
-        self.minsize(640, 520)
+        self.geometry("1120x760")
+        self.minsize(820, 520)
         self._runtime_factory = runtime_factory or bootstrap.create_attendance_runtime
         self._auto_start_ollama = auto_start_ollama
         self._runtime = None
@@ -57,6 +58,7 @@ class AssistantWindow(ctk.CTk):
         self._current = None
         self._events = queue.Queue()
         self._notes_widgets = []
+        self._font_size = dict(FONT_SIZES)["中"]
         self._first_chunk = True
         self.welcome = None
         self._build()
@@ -94,23 +96,25 @@ class AssistantWindow(ctk.CTk):
 
     def _build(self):
         """組裝標題列、對話區、輸入列與底部提示。"""
-        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        header = StatusBar(self, self._new_chat, self._open_settings)
-        header.grid(row=0, column=0, sticky="ew")
+        self.sidebar = Sidebar(self, self._new_chat)
+        self.sidebar.grid(row=0, column=0, rowspan=4, sticky="ns")
+        header = StatusBar(self, self._open_settings, self._set_font_size)
+        header.grid(row=0, column=1, sticky="ew")
         self._header = header
-        self.settings_btn, self.new_btn, self.status = header.settings_btn, header.new_btn, header.status
+        self.settings_btn, self.new_btn, self.status = header.settings_btn, self.sidebar.new_btn, header.status
 
         self.chat = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
-        self.chat.grid(row=1, column=0, sticky="nsew", padx=6)
+        self.chat.grid(row=1, column=1, sticky="nsew", padx=6)
         # 注意：不能綁在 self.chat 上，會蓋掉 CTkScrollableFrame 自己更新捲動範圍的綁定
         self.chat._parent_canvas.bind("<Configure>", ui_theme.event_only(lambda _e: self._relayout()), add="+")
         self._build_welcome()
 
         bottom, self.input, self.send_btn = build_input_row(self, self._on_enter, self.send_current)
-        bottom.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 4))
-        build_footer_hint(self).grid(row=3, column=0, pady=(0, 8))
+        bottom.grid(row=2, column=1, sticky="ew", padx=28, pady=(6, 4))
+        build_footer_hint(self).grid(row=3, column=1, pady=(0, 8))
 
     def _build_welcome(self):
         """顯示歡迎畫面與範例問題。"""
@@ -131,11 +135,17 @@ class AssistantWindow(ctk.CTk):
         if self.welcome is not None:
             self.welcome.destroy()
             self.welcome = None
-        bubble = Bubble(self.chat, role, text, width=self._bubble_width())
+        bubble = Bubble(self.chat, role, text, width=self._bubble_width(), size=self._font_size)
         bubble.pack(anchor="e" if role == "user" else "w", padx=(80, 14) if role == "user" else (14, 80), pady=6)
         self._bubbles.append(bubble)
         self._scroll_to_bottom()
         return bubble
+
+    def _set_font_size(self, size):
+        """字級切換：現有與之後的氣泡都用新的文字大小。"""
+        self._font_size = size
+        for bubble in self._bubbles:
+            bubble.set_font_size(size)
 
     def _add_note(self, text):
         """在對話區新增一則灰色提示。"""
@@ -203,6 +213,7 @@ class AssistantWindow(ctk.CTk):
         """處理一個串流事件：開始、逐字內容、完成或錯誤。"""
         if event.kind == "start":
             self._add_bubble("user", event.text)
+            self.sidebar.add_question(event.text)
             self._current = self._add_bubble("assistant", "思考中…")
             self._first_chunk = True
             self.send_btn.configure(state="disabled")
@@ -265,6 +276,7 @@ class AssistantWindow(ctk.CTk):
         for widget in self._notes_widgets:
             widget.destroy()
         self._bubbles, self._notes_widgets, self._current = [], [], None
+        self.sidebar.clear()
         if self.welcome is None:
             self._build_welcome()
             for chip in self.chips:

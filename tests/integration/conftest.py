@@ -73,11 +73,19 @@ def screenshot():
         top = widget.winfo_toplevel()
         top.deiconify()
         top.lift()
+        try:
+            top.attributes("-topmost", True)      # 截的是螢幕畫面：視窗被別的視窗（編輯器）蓋住就會截到別人的畫面
+        except Exception:  # noqa: BLE001, S110
+            pass
         for _ in range(15):                       # 等淡入淡出動畫與重繪結束再截圖
             top.update()
             time.sleep(0.04)
         x, y, w, h = top.winfo_rootx(), top.winfo_rooty(), top.winfo_width(), top.winfo_height()
         img = ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
+        try:
+            top.attributes("-topmost", False)
+        except Exception:  # noqa: BLE001, S110
+            pass
         path = os.path.join(out_dir, f"{name}.png")
         img.save(path)
         assert sum(ImageStat.Stat(img.convert("L")).stddev) > 1, f"{name} 畫面是空白的"

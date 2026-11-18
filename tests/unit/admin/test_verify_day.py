@@ -20,9 +20,19 @@ def make_db(tmp_path):
     con.execute("CREATE TABLE Attendance (id INTEGER PRIMARY KEY, name TEXT, timestamp DATETIME, status TEXT)")
     con.execute("CREATE TABLE AnomalyEvents (id INTEGER PRIMARY KEY, timestamp DATETIME, event_type TEXT, "
                 "detail TEXT, evidence_path TEXT, end_timestamp DATETIME, event_count INTEGER)")
+    con.execute("CREATE TABLE ChatLogs (id INTEGER PRIMARY KEY, ts TEXT, source TEXT, question TEXT, answer TEXT, "
+                "citations TEXT, review TEXT, reviewed_at TEXT, reviewer TEXT)")
     con.commit()
     con.close()
     return path
+
+
+def add_qa(path, when, source):
+    con = sqlite3.connect(path)
+    con.execute("INSERT INTO ChatLogs (ts, source, question, answer) VALUES (?, ?, 'q', 'a')",
+                (when.strftime(vd.STAMP), source))
+    con.commit()
+    con.close()
 
 
 def add_punch(path, when, name="王小明", status="上班"):
@@ -293,7 +303,8 @@ def test_interactive_run_skip_and_quit_keep_every_item_in_the_report(tmp_path):
     assert by[1].status == vd.PASS and by[2].status == vd.PASS
     assert by[3].status == vd.TODO and by[3].note == "使用者略過"
     assert by[4].status == vd.TODO and by[4].note == "使用者結束"
-    assert sorted(by) == list(range(0, 13)) and all(by[n].status == vd.TODO for n in range(5, 13))
+    assert sorted(by) == list(range(0, 14)) and all(by[n].status == vd.TODO for n in range(5, 13))
+    assert by[13].status != vd.TODO or by[13].note                  # 13 是自動項目（讀對話紀錄）
     assert open(ctx.session.report_path, encoding="utf-8").read().count("| 12 |") == 1
 
 
@@ -378,3 +389,30 @@ def test_quit_during_finish_prompt_is_harmless(tmp_path):
     assert vd.finish(ctx) is None
     with pytest.raises(QuitSession):
         make_ctx(tmp_path, answers=[])[0].console.ask("?")
+
+
+def test_front_qa_step_passes_only_when_both_sources_were_logged_recently(tmp_path):
+    db = make_db(tmp_path)
+    ctx, _ = make_ctx(tmp_path, answers=[], db=db, auto=True)
+    first = vd.step_front_qa(ctx)
+    assert first.status == vd.MANUAL and "開關預設關閉" in first.note                  # 完全沒有紀錄
+    add_qa(db, T0 - dt.timedelta(hours=1), "front_talk")
+    partial = vd.step_front_qa(ctx)
+    assert partial.status == vd.MANUAL and "只有一種" in partial.note
+    assert any("Smart_Chat" in line and "1 題" in line for line in partial.evidence)
+    add_qa(db, T0 - dt.timedelta(minutes=5), "front_knowledge")
+    done = vd.step_front_qa(ctx)
+    assert done.status == vd.PASS and len(done.evidence) == 2
+    old = make_db(tmp_path / "old")
+    add_qa(old, T0 - dt.timedelta(hours=9), "front_talk")                               # 超過時間窗的不算
+    add_qa(old, T0 - dt.timedelta(hours=9), "front_knowledge")
+    ctx_old, _ = make_ctx(tmp_path / "old", answers=[], db=old, auto=True)
+    assert vd.step_front_qa(ctx_old).status == vd.MANUAL
+
+
+def test_front_qa_step_reads_the_database_read_only_and_reports_a_missing_table(tmp_path):
+    path = str(tmp_path / "empty.db")
+    sqlite3.connect(path).close()                                                       # 沒有 ChatLogs 表
+    ctx, _ = make_ctx(tmp_path, answers=[], db=path, auto=True)
+    result = vd.step_front_qa(ctx)
+    assert result.number == 13 and result.status != vd.PASS

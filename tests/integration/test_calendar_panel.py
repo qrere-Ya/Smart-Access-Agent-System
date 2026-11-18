@@ -76,7 +76,7 @@ def test_main_menu_card_switches_to_the_report_page(root, db):
     def find(widget):
         for child in widget.winfo_children():
             try:
-                if child.cget("text") == "出勤報告":
+                if child.cget("text") == "Smart_Report 出勤報告":
                     return child
             except Exception:  # noqa: BLE001, S110  不是每種元件都有 text
                 pass

@@ -5,6 +5,7 @@ build_front_bundle.py：把前台（門禁現場電腦）要用的東西打包�
   - 程式：從前台入口（terminal_app、front_agent、front_check、role_config）用 AST 追出所有用到的專案模組，
     只打包這些（之後前台程式多引用一個模組也會自動帶上，不用手動維護清單）
   - 模型：只打包前台用的（ArcFace、兩個活體模型、YOLO、語音）；不含知識庫的向量與重排模型
+  - 圖示：assets/icons 的 SVG（前台儀表板的功能圖示）
   - 依賴：requirements/front.txt 與 lock.txt；安裝腳本與啟動腳本（deploy/front_template）
   - MANIFEST.json：每個檔案的 SHA-256，安裝第一步用來確認複製過程沒有缺檔或損壞
   - 絕不打包：data/、runtime/（資料庫與人臉特徵）、.env、測試、後台與知識庫程式
@@ -26,7 +27,8 @@ import zipfile
 from shared import paths
 
 BUNDLE_NAME = "SmartAccessFront"
-ENTRY_MODULES = ("access.terminal_app", "access.front_agent", "access.front_dashboard", "access.front_check",
+ENTRY_MODULES = ("access.terminal_app", "access.front_agent", "access.front_qt.app", "access.front_dashboard",
+                 "access.front_check",
                  "access.front_verify", "shared.role_config")
 PROJECT_PACKAGES = ("access", "shared")           # 前台允許打包的專案套件（不含 admin、rag）
 MODEL_FILES = ("arcface_r100_v1.onnx", "MiniFASNetV2.onnx",
@@ -78,7 +80,11 @@ def project_modules(entries=ENTRY_MODULES, root=None):
         if not os.path.isfile(os.path.join(root, rel)):
             continue
         files.add(rel)
-        files.add(name.split(".")[0] + "/__init__.py")
+        parts = name.split(".")
+        for depth in range(1, len(parts)):                   # 每一層套件的 __init__.py 都要帶（例如 access/front_qt/）
+            init = "/".join(parts[:depth]) + "/__init__.py"
+            if os.path.isfile(os.path.join(root, init)):
+                files.add(init)
         with open(os.path.join(root, rel), encoding="utf-8") as f:
             tree = ast.parse(f.read())
         for node in ast.walk(tree):
@@ -106,6 +112,14 @@ def collect(root=None):
             for name in names:
                 full = os.path.join(here, name)
                 chosen["models/" + os.path.relpath(full, os.path.join(root, "models")).replace(os.sep, "/")] = full
+    qml = os.path.join(root, "access", "front_qt", "qml")              # 儀表板（QML 版）的畫面檔
+    for name in sorted(os.listdir(qml)) if os.path.isdir(qml) else ():
+        if name.endswith(".qml"):
+            chosen["access/front_qt/qml/" + name] = os.path.join(qml, name)
+    icons = os.path.join(root, "assets", "icons")                  # 畫面圖示（SVG），前台儀表板用
+    for name in sorted(os.listdir(icons)) if os.path.isdir(icons) else ():
+        if name.endswith(".svg"):
+            chosen["assets/icons/" + name] = os.path.join(icons, name)
     for name in REQUIREMENT_FILES:
         chosen["requirements/" + name] = os.path.join(root, "requirements", name)
     template = os.path.join(root, "deploy", "front_template")

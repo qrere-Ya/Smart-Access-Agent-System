@@ -13,4 +13,4 @@ if "%SMART_ACCESS_LINK_TOKEN%"=="" (
   exit /b 1
 )
 rem 只開儀表板（用 pythonw，沒有黑色視窗）；連線代理由儀表板在背景啟動，人臉辨識用儀表板右上角的開關啟動。記錄在 runtime\logs。
-start "" ".venv\Scripts\pythonw.exe" -m access.front_dashboard
+start "" ".venv\Scripts\pythonw.exe" -m access.front_qt.app

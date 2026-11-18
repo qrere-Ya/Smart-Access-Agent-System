@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+<path d="M12 12 L5 6 M12 12 L19 6 M12 12 L5 18 M12 12 L19 18" stroke-opacity="0.7"/>
+<circle cx="12" cy="12" r="3.6" fill="accent" fill-opacity="0.3" stroke="accent"/>
+<circle cx="5" cy="6" r="2" fill="currentColor" fill-opacity="0.3"/><circle cx="19" cy="6" r="2" fill="currentColor" fill-opacity="0.3"/>
+<circle cx="5" cy="18" r="2" fill="currentColor" fill-opacity="0.3"/><circle cx="19" cy="18" r="2" fill="accent" fill-opacity="0.8" stroke="accent"/>
+<circle cx="12" cy="12" r="1" fill="accent" stroke="accent"/>
+</svg>

@@ -18,6 +18,8 @@ faiss-cpu==1.15.0
 pypdf==6.21.4
 docx2txt==0.9
 customtkinter==6.0.0
+PySide6-Essentials==6.12.0      # 前台儀表板（QML 版）；後台之後也會用
+shiboken6==6.12.0
 darkdetect==0.8.0
 rapidfuzz==3.14.5
 numpy==2.2.6

@@ -4,8 +4,9 @@ front_control.py：後台對前台的遙控開關——「前台人臉辨識要�
 主要功能：
   - recognition_enabled()：後台是否允許前台跑人臉辨識；缺檔、壞檔、格式不對一律當作允許（維持原本行為）
   - set_recognition_enabled(value)：寫入 runtime/front_control.json（先寫暫存檔再取代，讀的人不會讀到一半）
-  - chat_enabled()／set_chat_enabled(value)：前台知識庫問答；**預設關閉**（公開的螢幕與鍵盤，
-    管理者看過警告後才主動開啟），
+  - talk_enabled()／set_talk_enabled(value)：前台 Smart_Chat 一般對話（獨立開關，預設關閉）
+  - chat_enabled()／set_chat_enabled(value)：前台知識庫問答（Smart_RAG，內部沿用 chat 舊名）；**預設關閉**
+    （公開的螢幕與鍵盤，管理者看過警告後才主動開啟），
     缺檔、壞檔、格式不對一律當作關閉；與辨識開關存在同一個檔案，互不影響
   - 方向不變：後台只是把狀態放在檔案裡，前台每次同步（約 10 秒）從 /v1/morning 取得；後台從不連前台
 
@@ -61,3 +62,13 @@ def chat_enabled(path=None):
 def set_chat_enabled(value, path=None):
     """寫入設定檔（保留其他開關的值）。"""
     _save({**_load(path), "chat_enabled": bool(value)}, path)
+
+
+def talk_enabled(path=None):
+    """後台是否開放前台 Smart_Chat 一般對話（只有語言模型，沒有文件與資料）；預設關閉，和知識庫問答是兩個獨立開關。"""
+    return _load(path).get("talk_enabled") is True
+
+
+def set_talk_enabled(value, path=None):
+    """寫入設定檔（保留其他開關的值）。"""
+    _save({**_load(path), "talk_enabled": bool(value)}, path)
