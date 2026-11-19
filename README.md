@@ -9,7 +9,6 @@
 ![UI](https://img.shields.io/badge/前台-PySide6%20%2B%20QML-41CD52?logo=qt&logoColor=white)
 ![UI](https://img.shields.io/badge/後台-CustomTkinter-1f6feb)
 ![MCP](https://img.shields.io/badge/Smart__Chat-MCP%20工具-8a63d2)
-![CI](https://img.shields.io/badge/CI-Ruff%20%7C%20Bandit%20%7C%20Semgrep%20%7C%20CodeQL-555)
 
 <img src="docs/images/front-home.png" alt="前台儀表板" width="860">
 
@@ -29,10 +28,7 @@
 - [兩台電腦怎麼部署](#兩台電腦怎麼部署)
 - [專案結構](#專案結構)
 - [常見問題](#常見問題)
-- [測試與品質把關](#測試與品質把關)
 - [安全現況與已知限制](#安全現況與已知限制)
-- [文件導覽](#文件導覽)
-- [參與開發](#參與開發)
 
 ## 重點特色
 
@@ -40,7 +36,7 @@
 - **回答有依據**：文件問答只查 `data/docs`，找不到就說找不到；回答裡的數字會對照原文，對不上會警告。
 - **真的 MCP 工具、不花錢**：Smart_Chat 用官方 MCP SDK 連天氣、新聞、維基、台股報價與讀網頁，全部免費、免金鑰；全本地模式整組停用。
 - **運算集中在後台**：向量模型、重排、語言模型都在後台，前台只送問題、取回答。
-- **可驗證**：單元測試不需模型與 GPU；前後台各有驗證腳本，前台能自動回傳驗證報告給後台。
+- **可驗證**：前台能自動回傳一輪問答的驗證報告給後台，連線出問題時畫面會顯示原因。
 - **誠實的限制清單**：活體偵測的誤判率、沒有登入的元件都寫在 [安全現況](#安全現況與已知限制)，不宣稱已經安全。
 
 ## 這個專案做什麼
@@ -49,7 +45,6 @@
 |---|---|
 | 員工 | 到前台刷臉打卡（活體偵測、尾隨偵測），打卡成功有語音問候；在前台螢幕問公司文件、問一般問題、看科技早報 |
 | 管理者 | 後台人臉登入，管理帳號與員工註冊（手機掃 QR Code 註冊）、看出缺勤報表與異常事件、查詢出缺勤、每天自動產生出勤日報 |
-| 開發者 | 前台、後台、知識庫各自獨立的模組；單元測試不需要模型、GPU、攝影機或任何服務 |
 
 設計上的取捨：
 
@@ -71,7 +66,7 @@
 
 - 連線是 **前台發起的 HTTPS**：自簽憑證用指紋比對、通行碼放環境變數；前台用 UDP 自動尋找後台位址。
 - 後台離線時前台用本機快取繼續辨識，打卡事件先排進持久佇列，恢復連線後補送。
-- 詳細的協定與威脅對策見 [docs/adr/0001-front-knowledge-chat.md](docs/adr/0001-front-knowledge-chat.md)。
+- 前台知識庫問答的設計與威脅對策寫在 `docs/adr/0001-front-knowledge-chat.md`。
 
 ## 功能模組
 
@@ -124,16 +119,11 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements/main.txt -c requirements/lock.txt
 .venv\Scripts\pip install retinaface==1.1.1 --no-deps
 
-# 2) 單元測試（不需要模型、GPU、攝影機）
-.venv\Scripts\python -m pytest tests -q
-
-# 3) 啟動：一律在專案根目錄用 python -m，不要直接執行檔案
+# 2) 啟動：一律在專案根目錄用 python -m，不要直接執行檔案
 .venv\Scripts\python -m admin.backend_main      # 後台（先人臉登入）
 .venv\Scripts\python -m access.terminal_app     # 門禁現場主程式
 .venv\Scripts\python -m access.front_preview    # 前台畫面預覽（假資料，不需後台與模型）
 ```
-
-只改前台畫面的人：不需要模型、攝影機、後台或網路，看 [前台開發指南.md](前台開發指南.md)。
 
 金鑰一律走環境變數（例如 `NVIDIA_API_KEY`、`SMART_ACCESS_LINK_TOKEN`），不寫進檔案。
 
@@ -143,7 +133,7 @@ python -m venv .venv
 2. **打包前台**：`python -m deploy.build_front_bundle` 產生 `dist\SmartAccessFront.zip`（只含前台程式與模型，不含資料與後台程式）。
 3. **前台**：解壓後雙擊「安裝前台.bat」（輸入與後台相同的通行碼）、「前台檢查.bat」確認各項沒有失敗。
 4. **啟動**：後台雙擊「展示啟動.bat」；前台雙擊「啟動前台.bat」，人臉辨識由儀表板右上角按「啟動」。
-5. **驗證**：後台用 `python -m admin.front_verify_report` 讓前台自動跑一輪問答並回傳報告；完整的三層測試見 [雙機測試.md](雙機測試.md)。
+5. **確認連線**：後台用 `python -m admin.front_verify_report` 讓前台自動跑一輪問答並回傳報告。
 
 前台連不上後台時，後台「檢查連線」按鈕與前台儀表板狀態列會顯示原因（找不到後台、憑證指紋不符、被拒絕等）。
 
@@ -160,24 +150,10 @@ admin/    管理後台 backend_main、連線服務 link_server、日報與科技
 rag/      知識庫（doc_store、檢索、重排、問答 answer）、Smart_Chat（talk、MCP 用戶端與內建伺服器）
 deploy/   前台打包與安裝腳本、網路設定腳本
 assets/   自己畫的 SVG 圖示
-tests/    unit（不需外部資源）、integration（真模型與真行程）、regression（對照基準）
-docs/     架構決策紀錄 adr/、README 用圖
+docs/     設計說明與 README 用圖
 ```
 
 </details>
-
-## 測試與品質把關
-
-```powershell
-python -m pytest tests                      # 單元測試（2026-11-19 本機實跑：1979 個通過）
-python -m pytest -m integration             # 整合測試：真模型、真法規、真行程（只在本機）
-python -m pytest -m regression              # 回歸測試，對照 tests/regression/baseline.json
-python -m rag.evaluation.retrieval_eval     # 知識庫檢索評估（hit@k、MRR）
-```
-
-- CI：Ruff、Bandit、Semgrep、CodeQL、Dependabot，以 diff 範圍把關；PR 必須通過單元測試與視窗測試（xvfb 虛擬螢幕）。
-- CI 環境沒有 PySide6、MCP 套件與模型檔，相關測試會自動跳過，只在本機整合測試實際執行。
-- 前後台真機驗證：後台雙擊「驗證當天.bat」（13 項引導驗證，報告寫在 `runtime/verification/`），前台雙擊「前台驗證.bat」。
 
 ## 安全現況與已知限制
 
@@ -199,7 +175,7 @@ python -m rag.evaluation.retrieval_eval     # 知識庫檢索評估（hit@k、MR
 <details>
 <summary>Smart_RAG 說「資料中沒有提到」，但文件明明有</summary>
 
-多半是檢索沒撈到那一條。先用 `python -m rag.evaluation.retrieval_eval` 看檢索評估，再用同一題確認正確條文有沒有進候選；口語詞與正式用語不同（例如「特休」與「特別休假」）時最常發生。
+多半是檢索沒撈到那一條。口語詞與正式用語不同（例如「特休」與「特別休假」）時最常發生。
 </details>
 
 <details>
@@ -207,22 +183,3 @@ python -m rag.evaluation.retrieval_eval     # 知識庫檢索評估（hit@k、MR
 
 天氣與新聞來自第三方免費服務，可能暫時連不上或限流；工具失敗時它會照實說查不到，不會編造。後台開了全本地模式時工具會整組停用。
 </details>
-
-## 文件導覽
-
-| 文件 | 內容 |
-|---|---|
-| [CLAUDE.md](CLAUDE.md) | 專案要點與開發規則（結構、啟動方式、資安現況、修改流程） |
-| [前台開發指南.md](前台開發指南.md) | 只改前台畫面的工程師入口 |
-| [雙機測試.md](雙機測試.md) | 三層測試：單機真行程、前台包安裝、跨機實測 |
-| [明天驗證流程.md](明天驗證流程.md) | 前後台真機驗證的步驟 |
-| [GitHub新手指南.md](GitHub新手指南.md) | 第一次用 GitHub 的組員：分支、PR |
-| [docs/adr/](docs/adr/) | 架構決策紀錄 |
-
-## 參與開發
-
-1. 從 `main` 開自己的分支，不要直接改 `main`。
-2. 改完先跑 Ruff 與單元測試，再開 PR；涉及認證、SQL、檔案、網路或模型輸入的變更要另做資安審查。
-3. 風格：檔案開頭用 docstring 寫用途、功能、串接模組；函式一行註解；不寫「某日修了某事」這類歷史註解。
-
-授權：尚未指定授權條款（公開供檢視，保留所有權利；要使用或轉用請先聯絡作者）。
